@@ -1,0 +1,18 @@
+app:
+  name: bash
+  description: Bash shell configuration with ~/.bashrc.d/ drop-in support
+
+files:
+  - src: .bashrc
+    dest: ~/.bashrc
+    mode: '0644'
+
+backup:
+  dir: ~/.bak/bash
+  max_backups: 3
+
+requirements:
+  - bash
+
+post_install:
+  - mkdir -p ~/.bashrc.d

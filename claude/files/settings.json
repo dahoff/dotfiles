@@ -1,0 +1,8 @@
+{
+  "model": "opus[1m]",
+  "skipDangerousModePermissionPrompt": true,
+  "statusLine": {
+    "type": "command",
+    "command": "sh $HOME/.claude/statusline-command.sh"
+  }
+}

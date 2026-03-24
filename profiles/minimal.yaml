@@ -1,0 +1,6 @@
+# profiles/minimal.yaml - Minimal profile
+# Extends complete but excludes heavy/optional apps.
+
+extends: complete
+exclude:
+  - claude

@@ -1,0 +1,14 @@
+# profiles/complete.yaml - Full application manifest
+# All apps are included. This is the default profile.
+# Order matters: apps are installed in the order listed.
+
+apps:
+  - name: bash
+    dir: bash
+    flags: --append
+
+  - name: tmux
+    dir: tmux
+
+  - name: claude
+    dir: claude

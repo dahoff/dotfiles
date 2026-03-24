@@ -1,0 +1,21 @@
+app:
+  name: claude
+  description: Claude Code CLI configuration (settings, statusline)
+
+files:
+  - src: settings.json
+    dest: ~/.claude/settings.json
+    mode: '0644'
+  - src: settings.local.json
+    dest: ~/.claude/settings.local.json
+    mode: '0644'
+  - src: statusline-command.sh
+    dest: ~/.claude/statusline-command.sh
+    mode: '0644'
+
+backup:
+  dir: ~/.bak/claude
+  max_backups: 3
+
+post_install:
+  - mkdir -p ~/.claude

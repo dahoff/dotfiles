@@ -1,0 +1,47 @@
+app:
+  name: tmux
+  description: Modern tmux configuration with popups, vim keys, and status bar
+
+# Files to install (relative to files/ directory)
+files:
+  - src: .tmux.conf
+    dest: ~/.tmux.conf
+    mode: '0644'
+  - src: .tmux-cheatsheet.sh
+    dest: ~/.tmux/.tmux-cheatsheet.sh
+    mode: '0755'
+  - src: .tmux-cheatsheet.txt
+    dest: ~/.tmux/.tmux-cheatsheet.txt
+    mode: '0644'
+  - src: .tmux-popup.sh
+    dest: ~/.tmux/.tmux-popup.sh
+    mode: '0755'
+  - src: .tmux-yank.sh
+    dest: ~/.tmux/.tmux-yank.sh
+    mode: '0755'
+  - src: .tmux-lazygit.sh
+    dest: ~/.tmux/.tmux-lazygit.sh
+    mode: '0755'
+  - src: .tmux-top.sh
+    dest: ~/.tmux/.tmux-top.sh
+    mode: '0755'
+  - src: .tmux-split.sh
+    dest: ~/.tmux/.tmux-split.sh
+    mode: '0755'
+  - src: 50-tmux.sh
+    dest: ${SHELL_SCRIPTS_DIR}/50-tmux.sh
+    mode: '0644'
+
+# Backup settings
+backup:
+  dir: ~/.bak/tmux
+  max_backups: 3
+
+# Requirements (commands that must exist)
+requirements:
+  - tmux
+
+# Post-install commands (run after installation)
+post_install:
+  - chmod +x ~/.tmux/.tmux-cheatsheet.sh
+  - tmux source-file ~/.tmux.conf || true

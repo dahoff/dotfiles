@@ -1,0 +1,56 @@
+
+\033[1;36m╔══════════════════════════════════════════════════════════════════════════════╗
+║                            TMUX CHEATSHEET                                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝\033[0m
+
+\033[1;33m► BASICS\033[0m
+  \033[1;32mPrefix:\033[0m ` (backtick)   \033[1;32mLiteral `:\033[0m `` or Alt+`   \033[1;32mMouse:\033[0m ON
+  \033[1;32mCopy-mode:\033[0m vi   \033[1;32mClipboard:\033[0m OSC 52
+
+\033[1;33m► SESSIONS & WINDOWS\033[0m
+  \033[1;34mnew session\033[0m      tmux new -s name       \033[1;34mattach\033[0m           tmux a -t name
+  \033[1;34mdetach\033[0m           ` d                    \033[1;34mlist sessions\033[0m    tmux ls
+  \033[1;34mswitch session\033[0m   ` s                    \033[1;90m(interactive list)\033[0m
+  \033[1;34mnew window\033[0m       ` c                    \033[1;34mnext/prev\033[0m        ` n / ` p
+  \033[1;34mrename window\033[0m    ` ,                    \033[1;34mlist windows\033[0m     ` w
+  \033[1;34mswitch window\033[0m    Alt+1 to Alt+9         \033[1;90m(direct, no prefix!)\033[0m
+  \033[1;34mlast window\033[0m      Alt+0                  \033[1;90m(toggle between 2 windows)\033[0m
+
+\033[1;33m► PANES\033[0m
+  \033[1;34msplit vertical\033[0m   ` %                    \033[1;34msplit horizontal\033[0m ` "
+  \033[1;34mrotate layout\033[0m    ` Space                \033[1;34mzoom pane\033[0m        ` z
+  \033[1;34mkill pane\033[0m        ` x
+  \033[1;34mswitch panes\033[0m     Alt+h/j/k/l  \033[1;90mor\033[0m  Alt+arrows  \033[1;90mor\033[0m  mouse click
+
+\033[1;33m► COPY MODE (vi)\033[0m
+  \033[1;34menter copy-mode\033[0m  scroll wheel up        \033[1;34mor\033[0m               ` [
+  \033[1;34mquit\033[0m             q                      \033[1;34msearch\033[0m           / then n/N
+  \033[1;34mnavigate\033[0m         h j k l                \033[1;34mhalf page\033[0m        Ctrl+u / Ctrl+d
+  \033[1;34mtop/bottom\033[0m       g / G
+
+  \033[1;32m● Keyboard selection:\033[0m
+  \033[1;34mvisual select\033[0m    v (begin)  V (line)
+  \033[1;34mcopy (stay)\033[0m      y                      \033[1;34mcopy + exit\033[0m      Enter
+
+  \033[1;32m● Mouse selection:\033[0m
+  \033[1;34mdrag to copy\033[0m     click & drag, release to copy & exit
+  \033[1;34mdouble-click\033[0m     select word, copy & exit
+  \033[1;34mtriple-click\033[0m     select line, copy & exit
+
+  \033[1;32m● Paste:\033[0m
+  \033[1;34mpaste tmux\033[0m       p/P (in copy) or ` ]
+  \033[1;34mpaste Windows\033[0m    Ctrl+V (works over SSH via OSC 52)
+
+\033[1;33m► QUICK ACCESS\033[0m
+  \033[1;35mF1\033[0m               This cheatsheet popup  \033[1;90m(close: any key)\033[0m
+  \033[1;35mCtrl+p\033[0m           Persistent popup shell \033[1;90m(toggle: Ctrl+p, destroy: exit)\033[0m
+  \033[1;35mCtrl+l\033[0m           Lazygit popup          \033[1;90m(toggle: Ctrl+l, destroy: q)\033[0m
+  \033[1;35mCtrl+t\033[0m           Top popup (monitor)    \033[1;90m(toggle: Ctrl+t, destroy: q)\033[0m
+  \033[1;35mCtrl+s\033[0m           Split pane shell       \033[1;90m(toggle: Ctrl+s, destroy: exit)\033[0m
+
+\033[1;33m► POPUP COPY-MODE\033[0m
+  \033[1;34menter copy-mode\033[0m  scroll wheel up        \033[1;34mor\033[0m               Ctrl+[
+  \033[1;34mnavigate/select\033[0m  same as regular copy-mode (h j k l, v, y, etc.)
+
+\033[1;90m──────────────────────────────────────────────────────────────────────────────\033[0m
+\033[1;36mPress any key to close\033[0m

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  test-server:
+    build: .
+    image: dotfiles-test-server:latest
+    container_name: dotfiles-test-server
+    ports:
+      - "2222:22"  # Map container port 22 to host port 2222
+    volumes:
+      # Mount SSH key (will be created by setup script)
+      - ../ssh-key.pub:/tmp/ssh-key.pub:ro
+    command: >
+      bash -c "
+        cat /tmp/ssh-key.pub > /home/testuser/.ssh/authorized_keys &&
+        chmod 600 /home/testuser/.ssh/authorized_keys &&
+        chown testuser:testuser /home/testuser/.ssh/authorized_keys &&
+        /usr/sbin/sshd -D
+      "
+    networks:
+      - test-net
+
+networks:
+  test-net:
+    driver: bridge
