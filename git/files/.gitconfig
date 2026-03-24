@@ -1,8 +1,5 @@
 # Managed by dotfiles - git module
-# Local overrides: ~/.gitconfig.local (not managed, survives upgrades)
-
-[include]
-    path = ~/.gitconfig.local
+# Local overrides go in ~/.gitconfig.local (included at bottom, takes precedence)
 
 [core]
     editor = vim
@@ -40,3 +37,7 @@
     last = log -1 HEAD
     unstage = reset HEAD --
     amend = commit --amend --no-edit
+
+# Local overrides (not managed by dotfiles, survives upgrades)
+[include]
+    path = ~/.gitconfig.local

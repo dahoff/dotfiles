@@ -42,6 +42,40 @@ REMOTE_MODE=false
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
 
+# Preserve existing ~/.gitconfig by renaming it to ~/.gitconfig.local
+# This ensures all user settings (identity, signing, credentials, etc.) survive
+# the install. The managed .gitconfig includes .gitconfig.local via [include].
+_preserve_existing_gitconfig() {
+    local existing="$HOME/.gitconfig"
+    local local_config="$HOME/.gitconfig.local"
+
+    if is_dry_run; then
+        if [[ -f "$existing" ]] && [[ ! -f "$local_config" ]]; then
+            log_info "[DRY-RUN] Would rename ~/.gitconfig -> ~/.gitconfig.local to preserve existing settings"
+        fi
+        return 0
+    fi
+
+    # If .gitconfig.local already exists, the user has already been through this
+    if [[ -f "$local_config" ]]; then
+        log_info "~/.gitconfig.local already exists, existing settings are preserved"
+        return 0
+    fi
+
+    # No existing .gitconfig to preserve (fresh machine)
+    if [[ ! -f "$existing" ]]; then
+        log_info "No existing ~/.gitconfig found (fresh machine)"
+        log_info "Run 'git-setup' after install to configure your identity"
+        return 0
+    fi
+
+    # Rename existing .gitconfig -> .gitconfig.local
+    log_info "Preserving existing ~/.gitconfig as ~/.gitconfig.local"
+    mv "$existing" "$local_config"
+    log_success "Renamed ~/.gitconfig -> ~/.gitconfig.local (all existing settings preserved)"
+    log_info "The managed .gitconfig will include ~/.gitconfig.local automatically"
+}
+
 # Load configuration from config.yaml
 load_config() {
     log_debug "Loading configuration from: $CONFIG_FILE"
@@ -171,6 +205,9 @@ cmd_install() {
 
     # Check requirements
     check_requirements || return 1
+
+    # Preserve existing .gitconfig before overwriting
+    _preserve_existing_gitconfig
 
     # Initialize backup
     if [[ "$NO_BACKUP" != true ]]; then

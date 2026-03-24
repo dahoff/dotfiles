@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# git-setup - Interactive setup for local git configuration
+# Writes to ~/.gitconfig.local (not managed by dotfiles)
+#
+# Usage: git-setup
+#
+# Currently configures:
+#   - user.name
+#   - user.email
+#
+# Future: SSH keys, signing, credential helpers, etc.
+
+set -euo pipefail
+
+LOCAL_CONFIG="$HOME/.gitconfig.local"
+
+echo "Git Setup"
+echo "========="
+echo "This will configure your local git identity in ~/.gitconfig.local"
+echo
+
+# Read current values if they exist
+current_name=$(git config --file "$LOCAL_CONFIG" user.name 2>/dev/null || true)
+current_email=$(git config --file "$LOCAL_CONFIG" user.email 2>/dev/null || true)
+
+# Prompt for name
+if [[ -n "$current_name" ]]; then
+    read -rp "User name [$current_name]: " input_name
+    input_name="${input_name:-$current_name}"
+else
+    read -rp "User name: " input_name
+fi
+
+if [[ -z "$input_name" ]]; then
+    echo "Error: user name is required" >&2
+    exit 1
+fi
+
+# Prompt for email
+if [[ -n "$current_email" ]]; then
+    read -rp "Email [$current_email]: " input_email
+    input_email="${input_email:-$current_email}"
+else
+    read -rp "Email: " input_email
+fi
+
+if [[ -z "$input_email" ]]; then
+    echo "Error: email is required" >&2
+    exit 1
+fi
+
+# Write to .gitconfig.local
+git config --file "$LOCAL_CONFIG" user.name "$input_name"
+git config --file "$LOCAL_CONFIG" user.email "$input_email"
+
+echo
+echo "Saved to ~/.gitconfig.local:"
+echo "  user.name  = $input_name"
+echo "  user.email = $input_email"

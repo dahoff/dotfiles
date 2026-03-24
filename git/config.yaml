@@ -10,6 +10,9 @@ files:
   - src: .gitignore_global
     dest: ~/.gitignore_global
     mode: '0644'
+  - src: git-setup
+    dest: ~/.local/bin/git-setup
+    mode: '0755'
 
 # Backup settings
 backup:
