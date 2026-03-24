@@ -1,0 +1,25 @@
+app:
+  name: git
+  description: Global git configuration
+
+# Files to install (relative to files/ directory)
+files:
+  - src: .gitconfig
+    dest: ~/.gitconfig
+    mode: '0644'
+  - src: .gitignore_global
+    dest: ~/.gitignore_global
+    mode: '0644'
+
+# Backup settings
+backup:
+  dir: ~/.bak/git
+  max_backups: 3
+
+# Requirements (commands that must exist)
+requirements:
+  - git
+
+# Post-install commands
+post_install:
+  - git config --global core.excludesfile ~/.gitignore_global

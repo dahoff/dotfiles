@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# git-branch-clean - Delete local branches that have been merged into main
+set -euo pipefail
+
+main_branch="${1:-main}"
+
+# Get list of merged branches (excluding main and current)
+merged=$(git branch --merged "$main_branch" | grep -v "^\*" | grep -v "^[[:space:]]*${main_branch}$" || true)
+
+if [[ -z "$merged" ]]; then
+    echo "No merged branches to clean up."
+    exit 0
+fi
+
+echo "Branches merged into $main_branch:"
+echo "$merged"
+echo
+
+read -rp "Delete these branches? [y/N] " confirm
+if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    echo "$merged" | xargs git branch -d
+    echo "Done."
+else
+    echo "Cancelled."
+fi

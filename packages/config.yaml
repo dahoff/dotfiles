@@ -1,0 +1,44 @@
+app:
+  name: packages
+  description: OS package installation
+
+backup:
+  dir: ~/.bak/packages
+  max_backups: 3
+
+# Package lists per package manager
+packages:
+  apt:
+    - curl
+    - git
+    - tmux
+    - ripgrep
+    - fzf
+    - jq
+    - tree
+    - unzip
+  dnf:
+    - curl
+    - git
+    - tmux
+    - ripgrep
+    - fzf
+    - jq
+    - tree
+    - unzip
+  brew:
+    - ripgrep
+    - fzf
+    - jq
+    - tree
+
+# Custom installs (not available via package manager)
+# Each custom install lives in its own subdirectory under custom/
+# check: command to test if already installed (exit 0 = installed)
+# script: install script relative to this module directory
+# dropin: shell drop-in file to deploy to ~/.bashrc.d/
+custom:
+  - name: lazygit
+    check: command -v lazygit
+    script: custom/lazygit/install.sh
+    dropin: custom/lazygit/files/50-lazygit.sh

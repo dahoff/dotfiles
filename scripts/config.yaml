@@ -1,0 +1,17 @@
+app:
+  name: scripts
+  description: Utility scripts deployed to ~/.local/bin/
+
+# Files to install (relative to files/ directory)
+files:
+  - src: git-branch-clean
+    dest: ~/.local/bin/git-branch-clean
+    mode: '0755'
+  - src: extract
+    dest: ~/.local/bin/extract
+    mode: '0755'
+
+# Backup settings
+backup:
+  dir: ~/.bak/scripts
+  max_backups: 3

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# extract - Extract common archive formats
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+    echo "Usage: extract <file> [file ...]"
+    exit 1
+fi
+
+for file in "$@"; do
+    if [[ ! -f "$file" ]]; then
+        echo "Error: '$file' is not a file" >&2
+        continue
+    fi
+
+    case "$file" in
+        *.tar.bz2) tar xjf "$file"    ;;
+        *.tar.gz)  tar xzf "$file"    ;;
+        *.tar.xz)  tar xJf "$file"    ;;
+        *.bz2)     bunzip2 "$file"    ;;
+        *.gz)      gunzip "$file"     ;;
+        *.tar)     tar xf "$file"     ;;
+        *.tbz2)    tar xjf "$file"    ;;
+        *.tgz)     tar xzf "$file"    ;;
+        *.zip)     unzip "$file"      ;;
+        *.Z)       uncompress "$file" ;;
+        *.7z)      7z x "$file"       ;;
+        *.rar)     unrar x "$file"    ;;
+        *)
+            echo "Error: Cannot extract '$file' — unknown format" >&2
+            ;;
+    esac
+done

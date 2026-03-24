@@ -4,3 +4,4 @@
 extends: complete
 exclude:
   - claude
+  - packages

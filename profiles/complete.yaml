@@ -3,9 +3,18 @@
 # Order matters: apps are installed in the order listed.
 
 apps:
+  - name: packages
+    dir: packages
+
+  - name: git
+    dir: git
+
   - name: bash
     dir: bash
     flags: --append
+
+  - name: scripts
+    dir: scripts
 
   - name: tmux
     dir: tmux
