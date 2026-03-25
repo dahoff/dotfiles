@@ -378,6 +378,9 @@ cmd_rollback() {
         backup_restore "$backup_dir" "$target_ts" "$file" || log_warn "Failed to restore: $file"
     done
 
+    # Update version to reflect rollback state so upgrade detects a change
+    state_set_version "$APP_NAME" "rollback_${target_ts}"
+
     log_success "Rollback complete!"
     return 0
 }

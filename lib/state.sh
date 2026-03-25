@@ -288,6 +288,17 @@ state_update_files() {
     } > "$tmp_file" && mv "$tmp_file" "$state_file"
 }
 
+# Set version in state file
+# Usage: state_set_version app_name version
+state_set_version() {
+    local app_name="$1"
+    local version="$2"
+    local state_file
+    state_file=$(state_get_file "$app_name")
+    [[ -f "$state_file" ]] || return 1
+    sed -i "s/^  version: .*/  version: $version/" "$state_file"
+}
+
 # Get version from state file
 # Usage: state_get_version app_name
 state_get_version() {
@@ -302,6 +313,7 @@ state_get_version() {
 export -f state_init
 export -f state_get_file
 export -f state_is_installed
+export -f state_set_version
 export -f state_get_version
 export -f state_update_files
 export -f state_create

@@ -211,6 +211,42 @@ else
     fail "Rollback to original failed"
 fi
 
+# Test 15b: Rollback sets version to rollback_original
+info "Test 15b: Rollback to original sets version to rollback_original"
+ROLLBACK_VER=$(grep "^  version:" "$STATE_DIR/apps/tmux.yaml" | awk '{print $2}')
+if [[ "$ROLLBACK_VER" == "rollback_original" ]]; then
+    pass "Version set to rollback_original after rollback"
+else
+    fail "Expected version 'rollback_original' but got '$ROLLBACK_VER'"
+fi
+
+# Test 15c: Upgrade works after rollback to original
+info "Test 15c: Upgrade succeeds after rollback (version mismatch detected)"
+if ./install.sh upgrade &>/dev/null; then
+    pass "Upgrade works after rollback to original"
+else
+    fail "Upgrade should succeed after rollback"
+fi
+
+# Test 15d: Rollback to snapshot sets version to rollback_<timestamp>
+info "Test 15d: Rollback to snapshot sets version to rollback_<timestamp>"
+./install.sh upgrade --force &>/dev/null || true
+./install.sh rollback &>/dev/null || true
+ROLLBACK_VER=$(grep "^  version:" "$STATE_DIR/apps/tmux.yaml" | awk '{print $2}')
+if [[ "$ROLLBACK_VER" == rollback_* ]] && [[ "$ROLLBACK_VER" != "rollback_original" ]]; then
+    pass "Version set to rollback_<timestamp> after snapshot rollback"
+else
+    fail "Expected version 'rollback_<timestamp>' but got '$ROLLBACK_VER'"
+fi
+
+# Test 15e: Upgrade works after snapshot rollback
+info "Test 15e: Upgrade succeeds after snapshot rollback"
+if ./install.sh upgrade &>/dev/null; then
+    pass "Upgrade works after snapshot rollback"
+else
+    fail "Upgrade should succeed after snapshot rollback"
+fi
+
 # Test 16: Multiple upgrades (backup pruning)
 info "Test 16: Multiple upgrades (pruning test)"
 ./install.sh install &>/dev/null || true
