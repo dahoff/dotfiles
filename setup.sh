@@ -465,13 +465,27 @@ load_hosts() {
     return 0
 }
 
-# Detect package manager
+# Run a command locally or on a remote host
+# Usage: run_on_target host command
+# If host is empty, runs locally; otherwise runs via SSH
+run_on_target() {
+    local host="$1"
+    shift
+    if [[ -n "$host" ]]; then
+        remote_exec "$*"
+    else
+        eval "$@"
+    fi
+}
+
+# Detect package manager (local or remote)
 detect_pkg_manager() {
-    if command_exists apt-get; then
+    local host="${1:-}"
+    if run_on_target "$host" "command -v apt-get" &>/dev/null; then
         echo "apt"
-    elif command_exists dnf; then
+    elif run_on_target "$host" "command -v dnf" &>/dev/null; then
         echo "dnf"
-    elif command_exists brew; then
+    elif run_on_target "$host" "command -v brew" &>/dev/null; then
         echo "brew"
     else
         log_error "No supported package manager found (tried: apt-get, dnf, brew)"
@@ -479,23 +493,24 @@ detect_pkg_manager() {
     fi
 }
 
-# Check if a package is installed
+# Check if a package is installed (local or remote)
 is_pkg_installed() {
     local pkg="$1"
     local manager="$2"
+    local host="${3:-}"
     case "$manager" in
         apt)
-            dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && return 0
-            command_exists "$pkg" && return 0
+            run_on_target "$host" "dpkg -l '$pkg' 2>/dev/null | grep -q '^ii'" && return 0
+            run_on_target "$host" "command -v '$pkg'" &>/dev/null && return 0
             return 1
             ;;
         dnf)
-            rpm -q "$pkg" &>/dev/null && return 0
-            command_exists "$pkg" && return 0
+            run_on_target "$host" "rpm -q '$pkg'" &>/dev/null && return 0
+            run_on_target "$host" "command -v '$pkg'" &>/dev/null && return 0
             return 1
             ;;
         brew)
-            brew list "$pkg" &>/dev/null
+            run_on_target "$host" "brew list '$pkg'" &>/dev/null
             ;;
     esac
 }
@@ -509,9 +524,9 @@ run_phase_os_packages() {
         [[ "$flag" == "--dry-run" ]] && dry_run=true
     done
 
-    # Detect package manager
+    # Detect package manager (on target)
     local pkg_manager
-    pkg_manager=$(detect_pkg_manager) || return 1
+    pkg_manager=$(detect_pkg_manager "$host") || return 1
     log_info "[$target] Detected package manager: $pkg_manager"
 
     # Collect all OS packages for this manager
@@ -533,10 +548,10 @@ run_phase_os_packages() {
         return 0
     fi
 
-    # Filter to only missing packages
+    # Filter to only missing packages (check on target)
     local -a missing=()
     for pkg in "${pkg_list[@]}"; do
-        if ! is_pkg_installed "$pkg" "$pkg_manager"; then
+        if ! is_pkg_installed "$pkg" "$pkg_manager" "$host"; then
             missing+=("$pkg")
         else
             log_debug "Already installed: $pkg"
@@ -559,14 +574,13 @@ run_phase_os_packages() {
 
     case "$pkg_manager" in
         apt)
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq "${missing[@]}"
+            run_on_target "$host" "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
             ;;
         dnf)
-            sudo dnf install -y -q "${missing[@]}"
+            run_on_target "$host" "sudo dnf install -y -q ${missing[*]}"
             ;;
         brew)
-            brew install "${missing[@]}"
+            run_on_target "$host" "brew install ${missing[*]}"
             ;;
     esac
 
@@ -594,8 +608,8 @@ run_phase_custom_installs() {
         [[ -z "$script" ]] && continue
         has_custom=true
 
-        # Run install script if tool not already installed
-        if [[ -n "$check" ]] && eval "$check" &>/dev/null; then
+        # Run install script if tool not already installed (check on target)
+        if [[ -n "$check" ]] && run_on_target "$host" "$check" &>/dev/null; then
             log_info "[$target] $name: already installed"
         elif [[ "$dry_run" == true ]]; then
             log_info "[$target] [DRY-RUN] Would run: $SCRIPT_DIR/packages/$script"
@@ -610,13 +624,27 @@ run_phase_custom_installs() {
                 continue
             fi
 
-            if bash "$script_path"; then
-                log_success "[$target] Custom install complete: $name"
+            if [[ -n "$host" ]]; then
+                # Copy script to remote and execute there
+                remote_exec "mkdir -p /tmp/dotfiles-custom"
+                remote_copy_to "$script_path" "/tmp/dotfiles-custom/"
+                if remote_exec "bash /tmp/dotfiles-custom/$(basename "$script_path")"; then
+                    log_success "[$target] Custom install complete: $name"
+                else
+                    log_error "[$target] Custom install failed: $name"
+                    RESULTS+=("$target|$name|FAIL")
+                    EXIT_CODE=1
+                    continue
+                fi
             else
-                log_error "[$target] Custom install failed: $name"
-                RESULTS+=("$target|$name|FAIL")
-                EXIT_CODE=1
-                continue
+                if bash "$script_path"; then
+                    log_success "[$target] Custom install complete: $name"
+                else
+                    log_error "[$target] Custom install failed: $name"
+                    RESULTS+=("$target|$name|FAIL")
+                    EXIT_CODE=1
+                    continue
+                fi
             fi
         fi
 
@@ -627,6 +655,11 @@ run_phase_custom_installs() {
             if [[ -f "$dropin_src" ]]; then
                 if [[ "$dry_run" == true ]]; then
                     log_info "[$target] [DRY-RUN] Would install dropin: $dropin_dest"
+                elif [[ -n "$host" ]]; then
+                    remote_exec "mkdir -p '$SHELL_SCRIPTS_DIR'"
+                    remote_copy_to "$dropin_src" "$dropin_dest"
+                    remote_exec "chmod 0644 '$dropin_dest'"
+                    log_debug "Installed dropin on remote: $dropin_dest"
                 else
                     mkdir -p "$SHELL_SCRIPTS_DIR"
                     cp "$dropin_src" "$dropin_dest"
@@ -636,6 +669,11 @@ run_phase_custom_installs() {
             fi
         fi
     done
+
+    # Clean up remote temp directory for custom scripts
+    if [[ -n "$host" && "$has_custom" == true ]]; then
+        remote_exec "rm -rf /tmp/dotfiles-custom" 2>/dev/null || true
+    fi
 
     if [[ "$has_custom" == true ]]; then
         RESULTS+=("$target|custom-installs|ok")
