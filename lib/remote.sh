@@ -39,13 +39,21 @@ remote_check_connection() {
 }
 
 # Execute command on remote host
-# Usage: remote_exec "command"
+# Usage: remote_exec [--tty] "command"
+# Use --tty for commands that need interactive input (e.g. sudo password prompt)
 remote_exec() {
+    local ssh_opts=(-o "ConnectTimeout=$REMOTE_TIMEOUT")
+
+    if [[ "$1" == "--tty" ]]; then
+        ssh_opts+=(-t)
+        shift
+    fi
+
     local cmd="$1"
 
     log_debug "Remote exec: $cmd"
 
-    ssh -o ConnectTimeout=$REMOTE_TIMEOUT "$REMOTE_USER@$REMOTE_HOST" "$cmd"
+    ssh "${ssh_opts[@]}" "$REMOTE_USER@$REMOTE_HOST" "$cmd"
 }
 
 # Copy file/directory to remote host

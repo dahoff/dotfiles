@@ -466,13 +466,20 @@ load_hosts() {
 }
 
 # Run a command locally or on a remote host
-# Usage: run_on_target host command
+# Usage: run_on_target [--tty] host command
 # If host is empty, runs locally; otherwise runs via SSH
+# Use --tty for commands that need interactive input (e.g. sudo)
 run_on_target() {
+    local tty_flag=""
+    if [[ "$1" == "--tty" ]]; then
+        tty_flag="--tty"
+        shift
+    fi
+
     local host="$1"
     shift
     if [[ -n "$host" ]]; then
-        remote_exec "$*"
+        remote_exec $tty_flag "$*"
     else
         eval "$@"
     fi
@@ -574,10 +581,10 @@ run_phase_os_packages() {
 
     case "$pkg_manager" in
         apt)
-            run_on_target "$host" "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
+            run_on_target --tty "$host" "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
             ;;
         dnf)
-            run_on_target "$host" "sudo dnf install -y -q ${missing[*]}"
+            run_on_target --tty "$host" "sudo dnf install -y -q ${missing[*]}"
             ;;
         brew)
             run_on_target "$host" "brew install ${missing[*]}"
@@ -628,7 +635,7 @@ run_phase_custom_installs() {
                 # Copy script to remote and execute there
                 remote_exec "mkdir -p /tmp/dotfiles-custom"
                 remote_copy_to "$script_path" "/tmp/dotfiles-custom/"
-                if remote_exec "bash /tmp/dotfiles-custom/$(basename "$script_path")"; then
+                if remote_exec --tty "bash /tmp/dotfiles-custom/$(basename "$script_path")"; then
                     log_success "[$target] Custom install complete: $name"
                 else
                     log_error "[$target] Custom install failed: $name"
