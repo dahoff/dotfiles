@@ -125,14 +125,24 @@ remote_package_installer() {
     local root_dir
     root_dir=$(dirname "$app_dir")
 
+    # Write version file so remote installs know the current version
+    # (remote has no .git directory, so git rev-parse would fail)
+    local version
+    version=$(cd "$root_dir" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "$version" > "$app_dir/.version"
+
     tar -czf "$package_file" \
         -C "$root_dir" \
         "$(basename "$app_dir")" \
         lib/ \
         2>/dev/null || {
+        rm -f "$app_dir/.version"
         log_error "Failed to create package"
         return 1
     }
+
+    # Clean up version file from local tree
+    rm -f "$app_dir/.version"
 
     log_debug "Package created: $package_file"
     echo "$package_file"

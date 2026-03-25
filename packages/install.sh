@@ -810,7 +810,12 @@ main() {
 
     load_config || exit 1
 
-    APP_VERSION=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    # Use .version file if present (remote deploys), otherwise git hash
+    if [[ -f "$APP_DIR/.version" ]]; then
+        APP_VERSION=$(< "$APP_DIR/.version")
+    else
+        APP_VERSION=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    fi
 
     state_init || exit 1
 
