@@ -6,6 +6,9 @@ files:
   - src: .bashrc
     dest: ~/.bashrc
     mode: '0644'
+  - src: 10-ssh-agent.sh
+    dest: ~/.bashrc.d/10-ssh-agent.sh
+    mode: '0644'
 
 backup:
   dir: ~/.bak/bash
