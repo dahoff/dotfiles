@@ -16,8 +16,16 @@ if ! command -v fzf &>/dev/null; then
     exit 1
 fi
 
+# Set up passwordless sudo for kill if not already configured
+if [[ ! -f /etc/sudoers.d/kill-nopasswd ]]; then
+    echo "Setting up passwordless sudo for kill (one-time)..."
+    echo "$USER ALL=(ALL) NOPASSWD: /bin/kill, /usr/bin/kill" | sudo tee /etc/sudoers.d/kill-nopasswd >/dev/null
+    sudo chmod 0440 /etc/sudoers.d/kill-nopasswd
+    echo "Done."
+fi
+
 SORT_FILE=$(mktemp)
-echo "mem" > "$SORT_FILE"
+echo "cpu" > "$SORT_FILE"
 trap 'rm -f "$SORT_FILE"' EXIT
 
 # Helper script for reload - fzf calls this to get the process list
@@ -25,7 +33,7 @@ RELOAD_CMD="sort=\$(cat $SORT_FILE); if [ \"\$sort\" = mem ]; then echo cpu > $S
 
 HEADER="Enter=kill | Ctrl-x=kill -9 | Ctrl-s=toggle sort (mem/cpu) | ESC=cancel"
 
-result=$(ps aux --sort=-%mem | \
+result=$(ps aux --sort=-%cpu | \
     fzf --header="$HEADER" \
         --header-lines=1 \
         --layout=reverse \
@@ -45,11 +53,13 @@ if [[ -z "$pid" ]]; then
     exit 0
 fi
 
+cmd_name=$(awk '{print $11}' <<< "$line")
+
 if [[ "$key" == "ctrl-x" ]]; then
-    echo "Force killing (SIGKILL) PID $pid..."
-    kill -9 "$pid" 2>/dev/null || echo "Failed to kill $pid"
+    echo "Force killing (SIGKILL) PID $pid ($cmd_name)..."
+    sudo kill -9 "$pid" 2>&1 || echo "Failed to kill $pid"
 else
-    echo "Killing (SIGTERM) PID $pid..."
-    kill "$pid" 2>/dev/null || echo "Failed to kill $pid"
+    echo "Killing (SIGTERM) PID $pid ($cmd_name)..."
+    sudo kill "$pid" 2>&1 || echo "Failed to kill $pid"
 fi
-sleep 0.5
+sleep 1
