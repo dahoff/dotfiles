@@ -28,6 +28,9 @@ files:
   - src: .tmux-split.sh
     dest: ~/.tmux/.tmux-split.sh
     mode: '0755'
+  - src: .tmux-kill.sh
+    dest: ~/.tmux/.tmux-kill.sh
+    mode: '0755'
   - src: 50-tmux.sh
     dest: ${SHELL_SCRIPTS_DIR}/50-tmux.sh
     mode: '0644'
