@@ -761,6 +761,9 @@ execute_remote() {
 
     remote_check_connection || exit 1
 
+    # Skip if remote is already at current version
+    remote_skip_if_current "$APP_DIR" "$COMMAND" "$FORCE" && exit 0
+
     local package_file
     package_file=$(remote_package_installer "$APP_DIR") || exit 1
 

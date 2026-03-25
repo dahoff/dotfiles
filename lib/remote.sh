@@ -218,6 +218,46 @@ remote_cleanup() {
     }
 }
 
+# Get installed version from remote host's state file
+# Usage: remote_get_version app_name
+# Returns: version string on stdout, or empty if not installed
+remote_get_version() {
+    local app_name="$1"
+    local state_file="\$HOME/.config/dotfiles/apps/${app_name}.yaml"
+
+    remote_exec "grep '^  version:' '$state_file' 2>/dev/null | head -1 | awk '{print \$2}'" 2>/dev/null
+}
+
+# Check if remote is already up to date, skip packaging if so
+# Usage: remote_skip_if_current app_dir command force
+# Exits 0 if remote is current and should be skipped, returns 1 otherwise
+remote_skip_if_current() {
+    local app_dir="$1"
+    local command="$2"
+    local force="$3"
+    local app_name
+    app_name=$(basename "$app_dir")
+    local root_dir
+    root_dir=$(dirname "$app_dir")
+
+    if [[ "$command" != "deploy" && "$command" != "upgrade" ]] || [[ "$force" == true ]]; then
+        return 1
+    fi
+
+    local local_version
+    local_version=$(cd "$root_dir" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+    local remote_version
+    remote_version=$(remote_get_version "$app_name")
+
+    if [[ -n "$remote_version" && "$remote_version" == "$local_version" ]]; then
+        log_info "$app_name is already up to date on remote ($local_version)"
+        return 0
+    fi
+
+    return 1
+}
+
 # Check if we're running in remote mode
 is_remote_mode() {
     [[ -n "$REMOTE_HOST" ]]
@@ -236,4 +276,6 @@ export -f remote_package_installer
 export -f remote_deploy_installer
 export -f remote_run_installer
 export -f remote_cleanup
+export -f remote_get_version
+export -f remote_skip_if_current
 export -f is_remote_mode
