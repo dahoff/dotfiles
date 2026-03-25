@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # packages/install.sh - Custom tool installer and drop-in manager
-# OS package installation is handled by setup.sh (phase 1).
+# OS package installation is handled by setup.sh.
 # This installer manages custom tool scripts and their shell drop-ins.
 # Usage: ./install.sh <command> [options]
 

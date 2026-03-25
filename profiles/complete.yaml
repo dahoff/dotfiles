@@ -4,10 +4,6 @@
 # Processing order: 1) batch OS packages, 2) custom installs, 3) config deployments.
 
 packages:
-  - name: curl
-    apt: curl
-    dnf: curl
-
   - name: git
     apt: git
     dnf: git
@@ -26,11 +22,6 @@ packages:
     config:
       dir: tmux
 
-  - name: ripgrep
-    apt: ripgrep
-    dnf: ripgrep
-    brew: ripgrep
-
   - name: fzf
     apt: fzf
     dnf: fzf
@@ -45,10 +36,6 @@ packages:
     apt: tree
     dnf: tree
     brew: tree
-
-  - name: unzip
-    apt: unzip
-    dnf: unzip
 
   - name: lazygit
     custom:
