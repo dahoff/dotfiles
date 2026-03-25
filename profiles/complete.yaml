@@ -1,23 +1,71 @@
-# profiles/complete.yaml - Full application manifest
-# All apps are included. This is the default profile.
-# Order matters: apps are installed in the order listed.
+# profiles/complete.yaml - Full package manifest
+# All packages are included. This is the default profile.
+# Each entry can have OS packages (apt/dnf/brew), custom installs, and/or config (dotfiles).
+# Processing order: 1) batch OS packages, 2) custom installs, 3) config deployments.
 
-apps:
-  - name: packages
-    dir: packages
+packages:
+  - name: curl
+    apt: curl
+    dnf: curl
 
   - name: git
-    dir: git
+    apt: git
+    dnf: git
+    config:
+      dir: git
 
   - name: bash
-    dir: bash
-    flags: --append
-
-  - name: scripts
-    dir: scripts
+    config:
+      dir: bash
+      flags: --append
 
   - name: tmux
-    dir: tmux
+    apt: tmux
+    dnf: tmux
+    brew: tmux
+    config:
+      dir: tmux
+
+  - name: ripgrep
+    apt: ripgrep
+    dnf: ripgrep
+    brew: ripgrep
+
+  - name: fzf
+    apt: fzf
+    dnf: fzf
+    brew: fzf
+
+  - name: jq
+    apt: jq
+    dnf: jq
+    brew: jq
+
+  - name: tree
+    apt: tree
+    dnf: tree
+    brew: tree
+
+  - name: unzip
+    apt: unzip
+    dnf: unzip
+
+  - name: lazygit
+    custom:
+      check: command -v lazygit
+      script: custom/lazygit/install.sh
+      dropin: custom/lazygit/files/50-lazygit.sh
+
+  - name: lazyssh
+    custom:
+      check: command -v lazyssh
+      script: custom/lazyssh/install.sh
+      dropin: custom/lazyssh/files/50-lazyssh.sh
+
+  - name: scripts
+    config:
+      dir: scripts
 
   - name: claude
-    dir: claude
+    config:
+      dir: claude

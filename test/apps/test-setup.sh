@@ -48,20 +48,20 @@ else
     fail "setup.sh missing or not executable"
 fi
 
-# Test 2: setup.yaml structure
-info "Test 2: setup.yaml has apps section with bash and tmux"
-if grep -q "^apps:" "$ROOT_DIR/setup.yaml" && \
-   grep -q "name: bash" "$ROOT_DIR/setup.yaml" && \
-   grep -q "name: tmux" "$ROOT_DIR/setup.yaml"; then
-    pass "setup.yaml has correct structure"
+# Test 2: complete.yaml has packages section with bash and tmux
+info "Test 2: complete.yaml has packages section with bash and tmux"
+if grep -q "^packages:" "$ROOT_DIR/profiles/complete.yaml" && \
+   grep -q "name: bash" "$ROOT_DIR/profiles/complete.yaml" && \
+   grep -q "name: tmux" "$ROOT_DIR/profiles/complete.yaml"; then
+    pass "complete.yaml has correct structure"
 else
-    fail "setup.yaml structure incorrect"
+    fail "complete.yaml structure incorrect"
 fi
 
-# Test 3: App ordering (bash before tmux)
-info "Test 3: bash listed before tmux in setup.yaml"
-bash_line=$(grep -n "name: bash" "$ROOT_DIR/setup.yaml" | head -1 | cut -d: -f1)
-tmux_line=$(grep -n "name: tmux" "$ROOT_DIR/setup.yaml" | head -1 | cut -d: -f1)
+# Test 3: bash listed before tmux in complete.yaml
+info "Test 3: bash listed before tmux in complete.yaml"
+bash_line=$(grep -n "name: bash" "$ROOT_DIR/profiles/complete.yaml" | head -1 | cut -d: -f1)
+tmux_line=$(grep -n "name: tmux" "$ROOT_DIR/profiles/complete.yaml" | head -1 | cut -d: -f1)
 if [[ "$bash_line" -lt "$tmux_line" ]]; then
     pass "bash listed before tmux"
 else
@@ -124,11 +124,47 @@ else
     fail "cmd_deploy missing from tmux/install.sh"
 fi
 
+# Test 11: Profile has unified packages format (no separate apps: section)
+info "Test 11: Profile uses unified packages format"
+if grep -q "^packages:" "$ROOT_DIR/profiles/complete.yaml" && \
+   ! grep -q "^apps:" "$ROOT_DIR/profiles/complete.yaml"; then
+    pass "Profile uses unified packages format"
+else
+    fail "Profile should use packages: not apps:"
+fi
+
+# Test 12: Profile entries can have config.dir
+info "Test 12: Profile entries support config.dir"
+if grep -q "dir: git" "$ROOT_DIR/profiles/complete.yaml" && \
+   grep -q "dir: bash" "$ROOT_DIR/profiles/complete.yaml"; then
+    pass "Profile entries have config.dir"
+else
+    fail "Profile entries missing config.dir"
+fi
+
+# Test 13: Profile entries can have OS package fields
+info "Test 13: Profile entries support apt/dnf/brew fields"
+if grep -q "apt: git" "$ROOT_DIR/profiles/complete.yaml" && \
+   grep -q "dnf: git" "$ROOT_DIR/profiles/complete.yaml"; then
+    pass "Profile entries have OS package fields"
+else
+    fail "Profile entries missing OS package fields"
+fi
+
+# Test 14: Minimal profile excludes packages by name
+info "Test 14: Minimal profile uses exclude by package name"
+if grep -q "extends: complete" "$ROOT_DIR/profiles/minimal.yaml" && \
+   grep -q "claude" "$ROOT_DIR/profiles/minimal.yaml"; then
+    pass "Minimal profile excludes by package name"
+else
+    fail "Minimal profile exclude format incorrect"
+fi
+
 # Integration tests require test environment
 setup_test
 
-# Test 11: bash deploy on clean system (installs)
-info "Test 11: bash deploy on clean system"
+# Test 15: bash deploy on clean system (installs)
+info "Test 15: bash deploy on clean system"
 cd "$ROOT_DIR/bash"
 if ./install.sh deploy --no-backup &>/dev/null && [[ -f "$HOME/.bashrc" ]]; then
     pass "bash deploy installs on clean system"
@@ -136,8 +172,8 @@ else
     fail "bash deploy failed on clean system"
 fi
 
-# Test 12: bash deploy is idempotent (upgrades when already installed)
-info "Test 12: bash deploy idempotent (upgrades)"
+# Test 16: bash deploy is idempotent (upgrades when already installed)
+info "Test 16: bash deploy idempotent (upgrades)"
 if ./install.sh deploy --no-backup &>/dev/null && [[ -f "$HOME/.bashrc" ]]; then
     pass "bash deploy upgrades when already installed"
 else
@@ -151,8 +187,8 @@ rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
 mkdir -p "$TEST_STATE/apps"
 
-# Test 13: setup.sh deploy --dry-run
-info "Test 13: setup.sh deploy --dry-run"
+# Test 17: setup.sh deploy --dry-run
+info "Test 17: setup.sh deploy --dry-run"
 cd "$ROOT_DIR"
 if ./setup.sh deploy --dry-run &>/dev/null; then
     pass "setup.sh deploy --dry-run succeeds"
@@ -160,29 +196,29 @@ else
     fail "setup.sh deploy --dry-run failed"
 fi
 
-# Test 14: setup.sh deploy --no-backup (full integration)
-info "Test 14: setup.sh deploy --no-backup (full integration)"
+# Test 18: setup.sh deploy --no-backup (full integration)
+info "Test 18: setup.sh deploy --no-backup (full integration)"
 cd "$ROOT_DIR"
 if ./setup.sh deploy --no-backup &>/dev/null && \
    [[ -f "$HOME/.bashrc" ]] && \
    [[ -f "$HOME/.tmux.conf" ]]; then
-    pass "setup.sh deploy installs both apps"
+    pass "setup.sh deploy installs configs"
 else
     fail "setup.sh deploy failed"
 fi
 
-# Test 15: setup.sh status
-info "Test 15: setup.sh status"
+# Test 19: setup.sh status
+info "Test 19: setup.sh status"
 cd "$ROOT_DIR"
 if output=$(./setup.sh status 2>&1) && \
    echo "$output" | grep -q "Installed"; then
-    pass "setup.sh status shows installed apps"
+    pass "setup.sh status shows installed configs"
 else
     fail "setup.sh status failed"
 fi
 
-# Test 16: Version stored on install (state file contains git hash)
-info "Test 16: Version stored on install"
+# Test 20: Version stored on install (state file contains git hash)
+info "Test 20: Version stored on install"
 STATE_FILE="$STATE_DIR/apps/bash.yaml"
 GIT_HASH=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 if grep -q "version: $GIT_HASH" "$STATE_FILE"; then
@@ -191,8 +227,8 @@ else
     fail "State file should contain git hash"
 fi
 
-# Test 17: Upgrade skips when current (same version)
-info "Test 17: Upgrade skips when current"
+# Test 21: Upgrade skips when current (same version)
+info "Test 21: Upgrade skips when current"
 cd "$ROOT_DIR/bash"
 OUTPUT=$(./install.sh deploy --no-backup 2>&1)
 if echo "$OUTPUT" | grep -q "already up to date"; then
@@ -201,8 +237,8 @@ else
     fail "Deploy should skip when version matches"
 fi
 
-# Test 18: --force overrides version skip
-info "Test 18: --force overrides version skip"
+# Test 22: --force overrides version skip
+info "Test 22: --force overrides version skip"
 cd "$ROOT_DIR/bash"
 OUTPUT=$(./install.sh deploy --no-backup --force 2>&1)
 if echo "$OUTPUT" | grep -q "upgraded successfully"; then
@@ -218,5 +254,5 @@ cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 18 setup orchestrator tests passed!${NC}"
+echo -e "${GREEN}All 22 setup orchestrator tests passed!${NC}"
 echo "======================================"

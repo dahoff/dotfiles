@@ -1,7 +1,8 @@
 # profiles/minimal.yaml - Minimal profile
-# Extends complete but excludes heavy/optional apps.
+# Extends complete but excludes heavy/optional packages.
 
 extends: complete
 exclude:
   - claude
-  - packages
+  - lazygit
+  - lazyssh

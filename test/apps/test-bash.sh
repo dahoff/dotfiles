@@ -53,7 +53,7 @@ fi
 
 # Test 2: config.yaml exists and has correct structure
 info "Test 2: Check config.yaml structure"
-if grep -q "name: bash" config.yaml && grep -q "version:" config.yaml; then
+if grep -q "name: bash" config.yaml && grep -q "description:" config.yaml; then
     pass "Config has correct app metadata"
 else
     fail "Config metadata incorrect"

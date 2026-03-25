@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# packages/install.sh - OS package and custom tool installer
+# packages/install.sh - Custom tool installer and drop-in manager
+# OS package installation is handled by setup.sh (phase 1).
+# This installer manages custom tool scripts and their shell drop-ins.
 # Usage: ./install.sh <command> [options]
 
 set -euo pipefail
@@ -18,29 +20,22 @@ source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/remote.sh"
 
 # Configuration
-CONFIG_FILE="$APP_DIR/config.yaml"
 FILES_DIR="$APP_DIR/files"
 
-# Global variables (set from config)
-APP_NAME=""
+# Global variables
+APP_NAME="packages"
 APP_VERSION=""
 BACKUP_DIR=""
 MAX_BACKUPS=3
-declare -a CONFIG_FILES
-declare -a CONFIG_DESTS
-declare -a CONFIG_MODES
-declare -a REQUIREMENTS
-declare -a POST_INSTALL_CMDS
+declare -a CONFIG_FILES=()
+declare -a CONFIG_DESTS=()
+declare -a CONFIG_MODES=()
 
-# Package manager state
-PKG_MANAGER=""
-declare -a PKG_LIST
-
-# Custom installs
-declare -a CUSTOM_NAMES
-declare -a CUSTOM_CHECKS
-declare -a CUSTOM_SCRIPTS
-declare -a CUSTOM_DROPINS
+# Custom installs (loaded from active profile)
+declare -a CUSTOM_NAMES=()
+declare -a CUSTOM_CHECKS=()
+declare -a CUSTOM_SCRIPTS=()
+declare -a CUSTOM_DROPINS=()
 
 # Flags
 DRY_RUN=false
@@ -52,178 +47,118 @@ REMOTE_MODE=false
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
 
-# Detect package manager
-detect_pkg_manager() {
-    if command_exists apt-get; then
-        PKG_MANAGER="apt"
-    elif command_exists dnf; then
-        PKG_MANAGER="dnf"
-    elif command_exists brew; then
-        PKG_MANAGER="brew"
-    else
-        log_error "No supported package manager found (tried: apt-get, dnf, brew)"
-        return 1
-    fi
-    log_info "Detected package manager: $PKG_MANAGER"
-}
+# Profiles directory
+PROFILES_DIR="$ROOT_DIR/profiles"
 
-# Load package list for detected package manager from config
-load_packages() {
+# Load custom install definitions from the active profile
+load_custom_from_profile() {
+    local profile="${DOTFILES_PROFILE:-complete}"
+    local profile_path="$PROFILES_DIR/${profile}.yaml"
+
+    if [[ ! -f "$profile_path" ]]; then
+        log_debug "Profile not found: $profile_path, checking for extends..."
+        # For derived profiles, resolve to parent
+        local extends=""
+        if [[ -f "$profile_path" ]]; then
+            extends=$(grep "^extends:" "$profile_path" 2>/dev/null | sed 's/^extends:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        fi
+        if [[ -n "$extends" ]]; then
+            profile_path="$PROFILES_DIR/${extends}.yaml"
+        fi
+    fi
+
+    [[ ! -f "$profile_path" ]] && return 0
+
     local in_packages=false
-    local in_manager=false
-    local target_manager="$PKG_MANAGER"
+    local current_name=""
+    local current_check=""
+    local current_script=""
+    local current_dropin=""
+    local in_custom=false
+
+    _save_custom() {
+        if [[ -n "$current_name" && -n "$current_script" ]]; then
+            CUSTOM_NAMES+=("$current_name")
+            CUSTOM_CHECKS+=("$current_check")
+            CUSTOM_SCRIPTS+=("$current_script")
+            CUSTOM_DROPINS+=("$current_dropin")
+        fi
+    }
 
     while IFS= read -r line; do
-        # Entering packages: section
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$line" ]] && continue
+
         if [[ "$line" =~ ^packages: ]]; then
             in_packages=true
             continue
         fi
 
         if [[ "$in_packages" == true ]]; then
-            # Check for package manager subsection (2-space indent, no dash)
-            if [[ "$line" =~ ^[[:space:]]{2}([a-z]+):[[:space:]]*$ ]]; then
-                local manager="${BASH_REMATCH[1]}"
-                if [[ "$manager" == "$target_manager" ]]; then
-                    in_manager=true
-                else
-                    in_manager=false
-                fi
-                continue
-            fi
-
-            # Package list item (4-space indent with dash)
-            if [[ "$in_manager" == true ]] && [[ "$line" =~ ^[[:space:]]+-.* ]]; then
-                local pkg
-                pkg=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')
-                PKG_LIST+=("$pkg")
-                continue
-            fi
-
-            # Exit packages section on non-indented line
-            if [[ "$line" =~ ^[[:alpha:]] ]]; then
-                break
-            fi
-        fi
-    done < "$CONFIG_FILE"
-
-    log_debug "Loaded ${#PKG_LIST[@]} packages for $PKG_MANAGER"
-}
-
-# Load custom install definitions from config
-load_custom_installs() {
-    local in_custom=false
-    local current_name=""
-    local current_check=""
-    local current_script=""
-    local current_dropin=""
-
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^custom: ]]; then
-            in_custom=true
-            continue
-        fi
-
-        if [[ "$in_custom" == true ]]; then
             if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*name:[[:space:]]*(.*) ]]; then
-                # Save previous entry if exists
-                if [[ -n "$current_name" ]]; then
-                    CUSTOM_NAMES+=("$current_name")
-                    CUSTOM_CHECKS+=("$current_check")
-                    CUSTOM_SCRIPTS+=("$current_script")
-                    CUSTOM_DROPINS+=("$current_dropin")
-                fi
+                _save_custom
                 current_name="${BASH_REMATCH[1]}"
+                current_name=$(echo "$current_name" | sed 's/[[:space:]]*$//')
                 current_check=""
                 current_script=""
                 current_dropin=""
-            elif [[ "$line" =~ ^[[:space:]]*check:[[:space:]]*(.*) ]]; then
-                current_check="${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ ^[[:space:]]*script:[[:space:]]*(.*) ]]; then
-                current_script="${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ ^[[:space:]]*dropin:[[:space:]]*(.*) ]]; then
-                current_dropin="${BASH_REMATCH[1]}"
+                in_custom=false
+            elif [[ "$line" =~ ^[[:space:]]+custom:[[:space:]]*$ ]]; then
+                in_custom=true
+            elif [[ "$in_custom" == true ]]; then
+                if [[ "$line" =~ ^[[:space:]]+check:[[:space:]]*(.*) ]]; then
+                    current_check="${BASH_REMATCH[1]}"
+                    current_check=$(echo "$current_check" | sed 's/[[:space:]]*$//')
+                elif [[ "$line" =~ ^[[:space:]]+script:[[:space:]]*(.*) ]]; then
+                    current_script="${BASH_REMATCH[1]}"
+                    current_script=$(echo "$current_script" | sed 's/[[:space:]]*$//')
+                elif [[ "$line" =~ ^[[:space:]]+dropin:[[:space:]]*(.*) ]]; then
+                    current_dropin="${BASH_REMATCH[1]}"
+                    current_dropin=$(echo "$current_dropin" | sed 's/[[:space:]]*$//')
+                fi
             elif [[ "$line" =~ ^[[:alpha:]] ]]; then
                 break
+            else
+                # Non-custom field resets in_custom
+                if [[ "$line" =~ ^[[:space:]]+(apt|dnf|brew|config): ]]; then
+                    in_custom=false
+                fi
             fi
         fi
-    done < "$CONFIG_FILE"
+    done < "$profile_path"
 
-    # Save last entry
-    if [[ -n "$current_name" ]]; then
-        CUSTOM_NAMES+=("$current_name")
-        CUSTOM_CHECKS+=("$current_check")
-        CUSTOM_SCRIPTS+=("$current_script")
-        CUSTOM_DROPINS+=("$current_dropin")
-    fi
+    _save_custom
 
-    log_debug "Loaded ${#CUSTOM_NAMES[@]} custom install(s)"
+    log_debug "Loaded ${#CUSTOM_NAMES[@]} custom install(s) from profile"
 }
 
-# Check if a package is installed
-is_pkg_installed() {
-    local pkg="$1"
-    case "$PKG_MANAGER" in
-        apt)
-            dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && return 0
-            # Fall back to command check
-            command_exists "$pkg" && return 0
-            return 1
-            ;;
-        dnf)
-            rpm -q "$pkg" &>/dev/null && return 0
-            command_exists "$pkg" && return 0
-            return 1
-            ;;
-        brew)
-            brew list "$pkg" &>/dev/null
-            ;;
-    esac
-}
+# Load configuration
+load_config() {
+    log_debug "Loading custom installs from profile"
 
-# Install packages via package manager
-install_packages() {
-    if [[ ${#PKG_LIST[@]} -eq 0 ]]; then
-        log_info "No packages to install for $PKG_MANAGER"
-        return 0
-    fi
+    BACKUP_DIR=$(abs_path "$HOME/.bak/$APP_NAME")
 
-    # Filter to only missing packages
-    local missing=()
-    for pkg in "${PKG_LIST[@]}"; do
-        if ! is_pkg_installed "$pkg"; then
-            missing+=("$pkg")
-        else
-            log_debug "Already installed: $pkg"
+    load_custom_from_profile
+
+    # Build file lists from custom dropins
+    for i in "${!CUSTOM_DROPINS[@]}"; do
+        local dropin="${CUSTOM_DROPINS[$i]}"
+        if [[ -n "$dropin" ]]; then
+            CONFIG_FILES+=("$dropin")
+            local dest_name
+            dest_name=$(basename "$dropin")
+            CONFIG_DESTS+=("$(abs_path "$SHELL_SCRIPTS_DIR/$dest_name")")
+            CONFIG_MODES+=("0644")
         fi
     done
 
-    if [[ ${#missing[@]} -eq 0 ]]; then
-        log_success "All packages already installed"
-        return 0
+    # Ensure shell scripts directory exists if any drop-ins will be deployed
+    if [[ ${#CONFIG_DESTS[@]} -gt 0 ]] && ! is_dry_run; then
+        ensure_dir "$SHELL_SCRIPTS_DIR" || return 1
     fi
 
-    log_info "Packages to install: ${missing[*]}"
-
-    if is_dry_run; then
-        log_info "[DRY-RUN] Would install ${#missing[@]} package(s) via $PKG_MANAGER"
-        return 0
-    fi
-
-    case "$PKG_MANAGER" in
-        apt)
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq "${missing[@]}"
-            ;;
-        dnf)
-            sudo dnf install -y -q "${missing[@]}"
-            ;;
-        brew)
-            brew install "${missing[@]}"
-            ;;
-    esac
-
-    log_success "Installed ${#missing[@]} package(s)"
+    log_debug "Loaded ${#CONFIG_FILES[@]} drop-in files to install"
+    return 0
 }
 
 # Run custom install scripts
@@ -264,94 +199,6 @@ run_custom_installs() {
     done
 }
 
-# Load configuration from config.yaml (files section for drop-ins)
-load_config() {
-    log_debug "Loading configuration from: $CONFIG_FILE"
-
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        log_error "Config file not found: $CONFIG_FILE"
-        return 1
-    fi
-
-    # Validate YAML
-    yaml_validate "$CONFIG_FILE" || return 1
-
-    # Parse config
-    yaml_load "$CONFIG_FILE"
-
-    # Extract values
-    APP_NAME=$(yaml_get "name" "unknown")
-    BACKUP_DIR=$(abs_path "$(yaml_get "dir" "$HOME/.bak/$APP_NAME")")
-    MAX_BACKUPS=$(yaml_get "max_backups" "3")
-
-    log_debug "App: $APP_NAME v$APP_VERSION"
-    log_debug "Backup dir: $BACKUP_DIR"
-    log_debug "Shell scripts dir: $SHELL_SCRIPTS_DIR"
-
-    # Load package and custom install configs
-    detect_pkg_manager || return 1
-    load_packages
-    load_custom_installs
-
-    # Build file lists from custom dropins
-    for i in "${!CUSTOM_DROPINS[@]}"; do
-        local dropin="${CUSTOM_DROPINS[$i]}"
-        if [[ -n "$dropin" ]]; then
-            CONFIG_FILES+=("$dropin")
-            local dest_name
-            dest_name=$(basename "$dropin")
-            CONFIG_DESTS+=("$(abs_path "$SHELL_SCRIPTS_DIR/$dest_name")")
-            CONFIG_MODES+=("0644")
-        fi
-    done
-
-    # Ensure shell scripts directory exists if any drop-ins will be deployed
-    if [[ ${#CONFIG_DESTS[@]} -gt 0 ]] && ! is_dry_run; then
-        ensure_dir "$SHELL_SCRIPTS_DIR" || return 1
-    fi
-
-    log_debug "Loaded ${#CONFIG_FILES[@]} drop-in files to install"
-
-    return 0
-}
-
-# Check requirements
-check_requirements() {
-    log_info "Checking requirements..."
-
-    local missing=()
-
-    local in_requirements=false
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^requirements: ]]; then
-            in_requirements=true
-            continue
-        fi
-
-        if [[ "$in_requirements" == true ]]; then
-            if [[ "$line" =~ ^[[:space:]]*- ]]; then
-                local req
-                req=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')
-
-                if ! command_exists "$req"; then
-                    missing+=("$req")
-                    log_error "Required command not found: $req"
-                fi
-            elif [[ "$line" =~ ^[[:alpha:]] ]]; then
-                break
-            fi
-        fi
-    done < "$CONFIG_FILE"
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        log_error "Missing requirements: ${missing[*]}"
-        return 1
-    fi
-
-    log_success "All requirements satisfied"
-    return 0
-}
-
 # Deploy operation (idempotent: install if new, upgrade if exists)
 cmd_deploy() {
     if state_is_installed "$APP_NAME"; then
@@ -364,7 +211,7 @@ cmd_deploy() {
 
 # Install operation
 cmd_install() {
-    log_info "Installing $APP_NAME..."
+    log_info "Installing $APP_NAME (custom tools + drop-ins)..."
 
     # Check if already installed
     if state_is_installed "$APP_NAME"; then
@@ -387,10 +234,6 @@ cmd_install() {
             fi
         done
     fi
-
-    # Install packages
-    log_info "Installing OS packages..."
-    install_packages || return 1
 
     # Run custom installs
     run_custom_installs || return 1
@@ -457,10 +300,6 @@ cmd_upgrade() {
         backup_prune "$BACKUP_DIR" "$MAX_BACKUPS"
     fi
 
-    # Re-run package install (picks up new packages)
-    log_info "Updating OS packages..."
-    install_packages || return 1
-
     # Re-run custom installs unconditionally on upgrade
     for i in "${!CUSTOM_NAMES[@]}"; do
         local name="${CUSTOM_NAMES[$i]}"
@@ -516,7 +355,6 @@ cmd_uninstall() {
         return 1
     fi
 
-    log_warn "OS packages are not uninstalled automatically"
     log_warn "Custom tools (lazygit, etc.) are not uninstalled automatically"
 
     # Get backup directory from state
@@ -606,18 +444,6 @@ cmd_status() {
     fi
 
     echo "Status: Installed"
-    echo "Package manager: $PKG_MANAGER"
-    echo
-
-    # Show package status
-    echo "Packages (${#PKG_LIST[@]} listed for $PKG_MANAGER):"
-    for pkg in "${PKG_LIST[@]}"; do
-        if is_pkg_installed "$pkg"; then
-            echo "  [installed] $pkg"
-        else
-            echo "  [missing]   $pkg"
-        fi
-    done
 
     # Show custom install status
     if [[ ${#CUSTOM_NAMES[@]} -gt 0 ]]; then
@@ -650,16 +476,6 @@ cmd_verify() {
     fi
 
     local errors=0
-
-    # Check packages
-    for pkg in "${PKG_LIST[@]}"; do
-        if is_pkg_installed "$pkg"; then
-            log_success "Package present: $pkg"
-        else
-            log_error "Package missing: $pkg"
-            ((errors++))
-        fi
-    done
 
     # Check custom installs
     for i in "${!CUSTOM_NAMES[@]}"; do
@@ -777,32 +593,6 @@ cmd_diff() {
     return 0
 }
 
-# Run post-install commands
-run_post_install() {
-    if is_dry_run; then
-        return 0
-    fi
-
-    local in_post_install=false
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^post_install: ]]; then
-            in_post_install=true
-            continue
-        fi
-
-        if [[ "$in_post_install" == true ]]; then
-            if [[ "$line" =~ ^[[:space:]]*- ]]; then
-                local cmd
-                cmd=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')
-                log_debug "Running post-install: $cmd"
-                eval "$cmd" &>/dev/null || log_warn "Post-install command failed: $cmd"
-            elif [[ "$line" =~ ^[[:alpha:]] ]]; then
-                break
-            fi
-        fi
-    done < "$CONFIG_FILE"
-}
-
 # Show usage
 usage() {
     cat << EOF
@@ -810,9 +600,9 @@ Usage: $0 <command> [options]
 
 Commands:
   deploy               Install if new, upgrade if exists (idempotent)
-  install              Install packages and custom tools
+  install              Install custom tools and drop-ins
   upgrade              Upgrade existing installation
-  uninstall            Remove drop-in files (packages are kept)
+  uninstall            Remove drop-in files (custom tools are kept)
   rollback [TIMESTAMP] Rollback to previous or specific backup
   status               Show installation status
   verify               Verify installation integrity
@@ -830,6 +620,8 @@ Options:
   --quiet              Minimal output
   --force              Force operation without prompts
   --shell-scripts-dir PATH   Set drop-in directory (default: ~/.bashrc.d)
+
+Note: OS package installation is handled by setup.sh, not this installer.
 
 Examples:
   $0 install
@@ -872,7 +664,7 @@ validate_command() {
     echo "" >&2
     echo "Valid commands:" >&2
     echo "  deploy     - Install if new, upgrade if exists" >&2
-    echo "  install    - Install packages and tools" >&2
+    echo "  install    - Install custom tools and drop-ins" >&2
     echo "  upgrade    - Upgrade to new version" >&2
     echo "  uninstall  - Remove installation" >&2
     echo "  rollback   - Restore previous version" >&2
