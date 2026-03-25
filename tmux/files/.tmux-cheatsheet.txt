@@ -46,6 +46,7 @@
   \033[1;35mCtrl+p\033[0m           Persistent popup shell \033[1;90m(toggle: Ctrl+p, destroy: exit)\033[0m
   \033[1;35mCtrl+l\033[0m           Lazygit popup          \033[1;90m(toggle: Ctrl+l, destroy: q)\033[0m
   \033[1;35mCtrl+t\033[0m           Top popup (monitor)    \033[1;90m(toggle: Ctrl+t, destroy: q)\033[0m
+  \033[1;35mCtrl+k\033[0m           Kill process popup     \033[1;90m(Enter=kill, Ctrl+x=kill -9, Ctrl+s=sort)\033[0m
   \033[1;35mCtrl+s\033[0m           Split pane shell       \033[1;90m(toggle: Ctrl+s, destroy: exit)\033[0m
 
 \033[1;33m► POPUP COPY-MODE\033[0m
