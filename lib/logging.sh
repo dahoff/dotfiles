@@ -9,7 +9,7 @@ LOG_VERBOSE=false
 LOG_QUIET=false
 
 # Colors
-if [[ -t 1 ]]; then  # Only use colors if stdout is a terminal
+if [[ -t 2 ]]; then  # Only use colors if stderr is a terminal
     COLOR_RESET='\033[0m'
     COLOR_RED='\033[0;31m'
     COLOR_YELLOW='\033[0;33m'
