@@ -594,45 +594,45 @@ run_phase_custom_installs() {
         [[ -z "$script" ]] && continue
         has_custom=true
 
-        # Check if already installed
+        # Run install script if tool not already installed
         if [[ -n "$check" ]] && eval "$check" &>/dev/null; then
-            log_debug "Custom install already satisfied: $name"
-            continue
-        fi
-
-        log_info "[$target] Running custom install: $name"
-
-        if [[ "$dry_run" == true ]]; then
+            log_info "[$target] $name: already installed"
+        elif [[ "$dry_run" == true ]]; then
             log_info "[$target] [DRY-RUN] Would run: $SCRIPT_DIR/packages/$script"
-            continue
-        fi
-
-        local script_path="$SCRIPT_DIR/packages/$script"
-        if [[ ! -x "$script_path" ]]; then
-            log_error "Custom install script not found or not executable: $script_path"
-            RESULTS+=("$target|$name|FAIL")
-            EXIT_CODE=1
-            continue
-        fi
-
-        if bash "$script_path"; then
-            log_success "[$target] Custom install complete: $name"
         else
-            log_error "[$target] Custom install failed: $name"
-            RESULTS+=("$target|$name|FAIL")
-            EXIT_CODE=1
-            continue
+            log_info "[$target] Running custom install: $name"
+
+            local script_path="$SCRIPT_DIR/packages/$script"
+            if [[ ! -x "$script_path" ]]; then
+                log_error "Custom install script not found or not executable: $script_path"
+                RESULTS+=("$target|$name|FAIL")
+                EXIT_CODE=1
+                continue
+            fi
+
+            if bash "$script_path"; then
+                log_success "[$target] Custom install complete: $name"
+            else
+                log_error "[$target] Custom install failed: $name"
+                RESULTS+=("$target|$name|FAIL")
+                EXIT_CODE=1
+                continue
+            fi
         fi
 
-        # Install dropin if present
+        # Always install dropin (even if tool was already installed)
         if [[ -n "$dropin" ]]; then
             local dropin_src="$SCRIPT_DIR/packages/$dropin"
             local dropin_dest="$SHELL_SCRIPTS_DIR/$(basename "$dropin")"
             if [[ -f "$dropin_src" ]]; then
-                mkdir -p "$SHELL_SCRIPTS_DIR"
-                cp "$dropin_src" "$dropin_dest"
-                chmod 0644 "$dropin_dest"
-                log_debug "Installed dropin: $dropin_dest"
+                if [[ "$dry_run" == true ]]; then
+                    log_info "[$target] [DRY-RUN] Would install dropin: $dropin_dest"
+                else
+                    mkdir -p "$SHELL_SCRIPTS_DIR"
+                    cp "$dropin_src" "$dropin_dest"
+                    chmod 0644 "$dropin_dest"
+                    log_debug "Installed dropin: $dropin_dest"
+                fi
             fi
         fi
     done

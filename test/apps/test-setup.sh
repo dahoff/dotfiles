@@ -247,6 +247,34 @@ else
     fail "--force should override version check"
 fi
 
+# Test 23: Dropins installed even when custom tool already present
+info "Test 23: Dropins installed even when custom tool already present"
+cd "$ROOT_DIR"
+# Create a fake "already installed" tool that the check will find
+mkdir -p "$HOME/.local/bin"
+echo '#!/bin/sh' > "$HOME/.local/bin/lazyssh"
+chmod +x "$HOME/.local/bin/lazyssh"
+export PATH="$HOME/.local/bin:$PATH"
+# Verify the check would pass (tool is "installed")
+if command -v lazyssh &>/dev/null; then
+    # Deploy should still install the dropin
+    ./setup.sh deploy --no-backup --dry-run &>/dev/null 2>&1
+    OUTPUT=$(./setup.sh deploy --no-backup --dry-run 2>&1)
+    if echo "$OUTPUT" | grep -qi "dropin\|50-lazyssh"; then
+        pass "Dropin referenced even when tool already installed"
+    else
+        # Verify by doing a real deploy and checking the file
+        ./setup.sh deploy --no-backup &>/dev/null 2>&1
+        if [[ -f "$HOME/.bashrc.d/50-lazyssh.sh" ]]; then
+            pass "Dropin installed even when tool already installed"
+        else
+            fail "Dropin not installed when tool already present"
+        fi
+    fi
+else
+    fail "Test setup failed: fake lazyssh not in PATH"
+fi
+
 # Cleanup
 cd "$ROOT_DIR/bash" && ./install.sh uninstall &>/dev/null 2>&1 || true
 cd "$ROOT_DIR/tmux" && ./install.sh uninstall &>/dev/null 2>&1 || true
@@ -254,5 +282,5 @@ cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 22 setup orchestrator tests passed!${NC}"
+echo -e "${GREEN}All 23 setup orchestrator tests passed!${NC}"
 echo "======================================"
