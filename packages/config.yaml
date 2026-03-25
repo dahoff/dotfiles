@@ -42,3 +42,7 @@ custom:
     check: command -v lazygit
     script: custom/lazygit/install.sh
     dropin: custom/lazygit/files/50-lazygit.sh
+  - name: lazyssh
+    check: command -v lazyssh
+    script: custom/lazyssh/install.sh
+    dropin: custom/lazyssh/files/50-lazyssh.sh
