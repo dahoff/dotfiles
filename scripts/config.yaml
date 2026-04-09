@@ -10,6 +10,9 @@ files:
   - src: extract
     dest: ~/.local/bin/extract
     mode: '0755'
+  - src: fuzzy-find
+    dest: ~/.local/bin/fuzzy-find
+    mode: '0755'
 
 # Backup settings
 backup:

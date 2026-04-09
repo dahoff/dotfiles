@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# fuzzy-find - Fuzzy file finder that opens selection in vim
+# Usage: fuzzy-find [directory]  (alias: f)
+#
+# Controls:
+#   Enter    - open file in vim
+#   Ctrl-g   - change search directory
+#   ESC      - cancel
+
+set -euo pipefail
+
+# On any error, show the message and wait for keypress before closing
+trap 'echo ""; echo "Press any key to close..."; read -r -n 1' ERR
+
+if ! command -v fzf &>/dev/null; then
+    echo "fzf is required but not installed"
+    read -r -n 1
+    exit 1
+fi
+
+# Search root: first argument, or current directory
+SEARCH_DIR="${1:-.}"
+SEARCH_DIR="$(cd "$SEARCH_DIR" && pwd)"
+
+# Detect available tools
+if command -v fd &>/dev/null; then
+    find_cmd() { fd --type f --hidden --exclude .git "$1"; }
+elif command -v fdfind &>/dev/null; then
+    find_cmd() { fdfind --type f --hidden --exclude .git "$1"; }
+else
+    find_cmd() { find "$1" -type f -not -path '*/.git/*' 2>/dev/null; }
+fi
+
+if command -v bat &>/dev/null; then
+    preview_cmd="bat --style=numbers --color=always --line-range=:200 {}"
+elif command -v batcat &>/dev/null; then
+    preview_cmd="batcat --style=numbers --color=always --line-range=:200 {}"
+else
+    preview_cmd="cat -n {} 2>/dev/null | head -200"
+fi
+
+# Temp file for passing new directory from fzf execute back to the loop
+DIR_FILE=$(mktemp)
+echo "$SEARCH_DIR" > "$DIR_FILE"
+trap 'rm -f "$DIR_FILE"' EXIT
+
+# Script invoked by fzf execute binding — prompts for new path inline
+CHANGE_DIR_CMD="read -e -i \"\$(cat '$DIR_FILE')\" -p 'Search path: ' new_dir < /dev/tty; new_dir=\"\${new_dir/#\\~/$HOME}\"; if [ -n \"\$new_dir\" ] && [ -d \"\$new_dir\" ]; then cd \"\$new_dir\" && pwd > '$DIR_FILE'; elif [ -n \"\$new_dir\" ]; then echo \"Not a directory: \$new_dir\"; sleep 1; fi"
+
+while true; do
+    HEADER="📁 ${SEARCH_DIR}
+Enter=open in vim | Ctrl-g=change directory | ESC=cancel"
+
+    result=$(find_cmd "$SEARCH_DIR" | \
+        fzf --header="$HEADER" \
+            --layout=reverse \
+            --preview="$preview_cmd" \
+            --preview-window=right:50%:wrap \
+            --bind="ctrl-g:execute($CHANGE_DIR_CMD)+abort" \
+            || true)
+
+    # Check if directory was changed via ctrl-g
+    new_dir="$(cat "$DIR_FILE")"
+    if [[ -z "$result" && "$new_dir" != "$SEARCH_DIR" ]]; then
+        SEARCH_DIR="$new_dir"
+        continue
+    fi
+
+    if [[ -n "$result" ]]; then
+        if [[ -n "${FUZZY_FIND_TARGET_PANE:-}" ]]; then
+            # Running in tmux popup — open vim in the parent pane
+            printf -v escaped '%q' "$result"
+            tmux send-keys -t "$FUZZY_FIND_TARGET_PANE" "vim $escaped" Enter
+        else
+            vim "$result"
+        fi
+    fi
+    break
+done
