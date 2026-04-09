@@ -4,10 +4,24 @@
 #
 # Controls:
 #   Enter    - open file in vim
+#   Ctrl-y   - copy file path to clipboard
 #   Ctrl-g   - change search directory
 #   ESC      - cancel
 
 set -euo pipefail
+
+# --copy mode: called by fzf ctrl-y binding to copy a path to the clipboard
+if [[ "${1:-}" == "--copy" ]]; then
+    path="$2"
+    # OSC 52 to terminal (works in tmux with set-clipboard on)
+    encoded=$(printf '%s' "$path" | base64 | tr -d '\n')
+    printf '\033]52;c;%s\a' "$encoded" > /dev/tty
+    # Also load into tmux buffer as a fallback
+    if [[ -n "${TMUX:-}" ]]; then
+        printf '%s' "$path" | tmux load-buffer - 2>/dev/null || true
+    fi
+    exit 0
+fi
 
 # On any error, show the message and wait for keypress before closing
 trap 'echo ""; echo "Press any key to close..."; read -r -n 1' ERR
@@ -17,6 +31,9 @@ if ! command -v fzf &>/dev/null; then
     read -r -n 1
     exit 1
 fi
+
+# Absolute path to self (for fzf execute bindings)
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 
 # Search root: first argument, or current directory
 SEARCH_DIR="${1:-.}"
@@ -49,7 +66,7 @@ CHANGE_DIR_CMD="read -e -i \"\$(cat '$DIR_FILE')\" -p 'Search path: ' new_dir < 
 
 while true; do
     HEADER="📁 ${SEARCH_DIR}
-Enter=open in vim | Ctrl-g=change directory | ESC=cancel"
+Enter=open in vim | Ctrl-y=copy path | Ctrl-g=change directory | ESC=cancel"
 
     result=$(find_cmd "$SEARCH_DIR" | \
         fzf --header="$HEADER" \
@@ -57,6 +74,7 @@ Enter=open in vim | Ctrl-g=change directory | ESC=cancel"
             --preview="$preview_cmd" \
             --preview-window=right:50%:wrap \
             --bind="ctrl-g:execute($CHANGE_DIR_CMD)+abort" \
+            --bind="ctrl-y:execute-silent($SELF --copy {})+abort" \
             || true)
 
     # Check if directory was changed via ctrl-g
