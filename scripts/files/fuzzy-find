@@ -75,6 +75,7 @@ Enter=open in vim | Ctrl-y=copy path | Ctrl-g=change directory | ESC=cancel"
             --preview-window=right:50%:wrap \
             --bind="ctrl-g:execute($CHANGE_DIR_CMD)+abort" \
             --bind="ctrl-y:execute-silent($SELF --copy {})+abort" \
+            --bind="ctrl-f:abort" \
             || true)
 
     # Check if directory was changed via ctrl-g
