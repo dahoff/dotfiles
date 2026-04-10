@@ -37,6 +37,7 @@ declare -a GLOBAL_FLAGS=()
 # Result tracking: "host|item|ok" or "host|item|FAIL"
 declare -a RESULTS=()
 EXIT_CODE=0
+CONTINUE_ON_ERROR=false
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -842,6 +843,7 @@ Options (passed through to each app's installer):
   --verbose            Verbose output
   --quiet              Minimal output
   --force              Force operation without prompts
+  --continue-on-error  Continue to next host if one fails (hosts-file mode)
   --shell-scripts-dir PATH  Set drop-in directory (default: ~/.bashrc.d)
   --log FILE           Log to file
 
@@ -932,6 +934,10 @@ parse_args() {
                 PROFILE_ARG="$2"
                 shift 2
                 ;;
+            --continue-on-error)
+                CONTINUE_ON_ERROR=true
+                shift
+                ;;
             --dry-run|--no-backup|--verbose|--quiet|--force)
                 GLOBAL_FLAGS+=("$1")
                 shift
@@ -993,7 +999,11 @@ main() {
         for entry in "${host_entries[@]}"; do
             local host profile
             IFS='|' read -r host profile <<< "$entry"
-            run_all "$host" "$profile"
+            if [[ "$CONTINUE_ON_ERROR" == true ]]; then
+                run_all "$host" "$profile" || true
+            else
+                run_all "$host" "$profile"
+            fi
         done
     elif [[ -n "$REMOTE_HOST_ARG" ]]; then
         # Single remote host
