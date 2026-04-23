@@ -11,6 +11,7 @@
   \033[1;34mnew session\033[0m      tmux new -s name       \033[1;34mattach\033[0m           tmux a -t name
   \033[1;34mdetach\033[0m           ` d                    \033[1;34mlist sessions\033[0m    tmux ls
   \033[1;34mswitch session\033[0m   ` s                    \033[1;90m(interactive list)\033[0m
+  \033[1;34msave session\033[0m     ` S                    \033[1;34mrestore session\033[0m  ` R
   \033[1;34mnew window\033[0m       ` c                    \033[1;34mnext/prev\033[0m        ` n / ` p
   \033[1;34mrename window\033[0m    ` ,                    \033[1;34mlist windows\033[0m     ` w
   \033[1;34mswitch window\033[0m    Alt+1 to Alt+9         \033[1;90m(direct, no prefix!)\033[0m
@@ -52,6 +53,10 @@
 \033[1;33m► POPUP COPY-MODE\033[0m
   \033[1;34menter copy-mode\033[0m  scroll wheel up        \033[1;34mor\033[0m               Ctrl+[
   \033[1;34mnavigate/select\033[0m  same as regular copy-mode (h j k l, v, y, etc.)
+
+\033[1;33m► PLUGINS\033[0m \033[1;90m(via TPM — installed at ~/.tmux/plugins/)\033[0m
+  \033[1;34mtmux-resurrect\033[0m   save/restore sessions manually  \033[1;90m(keys: ` S / ` R)\033[0m
+  \033[1;34mtmux-continuum\033[0m   auto-save every 5 min, auto-restore on tmux start
 
 \033[1;90m──────────────────────────────────────────────────────────────────────────────\033[0m
 \033[1;36mPress any key to close\033[0m

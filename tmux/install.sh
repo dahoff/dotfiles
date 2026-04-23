@@ -148,6 +148,33 @@ check_requirements() {
     return 0
 }
 
+# TPM (Tmux Plugin Manager) bootstrap
+TPM_DIR="$HOME/.tmux/plugins/tpm"
+TPM_REPO="https://github.com/tmux-plugins/tpm"
+
+bootstrap_tpm() {
+    if [[ -d "$TPM_DIR/.git" ]]; then
+        log_debug "TPM already present at $TPM_DIR"
+        return 0
+    fi
+    log_info "Cloning TPM into $TPM_DIR"
+    if is_dry_run; then
+        log_info "[DRY-RUN] git clone --depth 1 $TPM_REPO $TPM_DIR"
+        return 0
+    fi
+    git clone --depth 1 "$TPM_REPO" "$TPM_DIR" || {
+        log_error "Failed to clone TPM. Check internet connectivity."
+        return 1
+    }
+}
+
+cleanup_tpm() {
+    [[ -d "$HOME/.tmux/plugins" ]] || return 0
+    log_info "Removing tmux plugins directory"
+    is_dry_run && return 0
+    rm -rf "$HOME/.tmux/plugins"
+}
+
 # Deploy operation (idempotent: install if new, upgrade if exists)
 cmd_deploy() {
     if state_is_installed "$APP_NAME"; then
@@ -213,6 +240,10 @@ cmd_install() {
         state_init || return 1
         state_create "$APP_NAME" "$APP_VERSION" "$BACKUP_DIR" "${CONFIG_DESTS[@]}" || return 1
     fi
+
+    # Bootstrap TPM (clone) before post-install runs install_plugins.
+    # Non-fatal: failure (e.g. offline) leaves tmux usable without plugins.
+    bootstrap_tpm || log_warn "TPM bootstrap failed; plugins will not be installed"
 
     # Run post-install commands
     run_post_install
@@ -282,6 +313,9 @@ cmd_upgrade() {
         state_update_files "$APP_NAME" "${CONFIG_DESTS[@]}"
     fi
 
+    # Bootstrap TPM (idempotent — skips if already cloned; non-fatal if offline)
+    bootstrap_tpm || log_warn "TPM bootstrap failed; plugins will not be installed"
+
     # Run post-install commands
     run_post_install
 
@@ -320,6 +354,9 @@ cmd_uninstall() {
             fi
         fi
     done
+
+    # Remove TPM and any plugin clones
+    cleanup_tpm
 
     # Remove state file
     if ! is_dry_run; then

@@ -43,8 +43,10 @@ backup:
 # Requirements (commands that must exist)
 requirements:
   - tmux
+  - git
 
 # Post-install commands (run after installation)
 post_install:
   - chmod +x ~/.tmux/.tmux-cheatsheet.sh
+  - ~/.tmux/plugins/tpm/bin/install_plugins || true
   - tmux source-file ~/.tmux.conf || true

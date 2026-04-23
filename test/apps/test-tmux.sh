@@ -109,8 +109,9 @@ else
 fi
 
 # Test 9: Verify config.yaml has correct app info
+# (version is derived from git hash, not stored in config.yaml)
 info "Test 9: Check config.yaml structure"
-if grep -q "name: tmux" config.yaml && grep -q "version:" config.yaml; then
+if grep -q "name: tmux" config.yaml; then
     pass "Config has correct app metadata"
 else
     fail "Config metadata incorrect"
@@ -184,7 +185,7 @@ fi
 
 # Test 18: Ctrl+t top popup binding
 info "Test 18: Verify Ctrl+t top popup binding"
-if grep -q 'bind -n C-t display-popup.*"top"' files/.tmux.conf; then
+if grep -q 'bind -n C-t display-popup.*tmux-top.sh' files/.tmux.conf; then
     pass "Ctrl+t bound to top popup"
 else
     fail "Ctrl+t top binding missing"
@@ -192,15 +193,85 @@ fi
 
 # Test 19: Cheatsheet documents Ctrl+t
 info "Test 19: Check cheatsheet documents Ctrl+t"
-if grep -q "Ctrl+t.*top" files/.tmux-cheatsheet.txt; then
+if grep -qi "Ctrl+t.*top" files/.tmux-cheatsheet.txt; then
     pass "Cheatsheet documents Ctrl+t shortcut"
 else
     fail "Cheatsheet missing Ctrl+t documentation"
+fi
+
+# Test 20: Plugin block enabled (TPM line not commented out)
+info "Test 20: Verify TPM plugin block is enabled"
+if grep -q "^set -g @plugin 'tmux-plugins/tpm'" files/.tmux.conf; then
+    pass "TPM plugin block enabled"
+else
+    fail "TPM plugin block not active (still commented?)"
+fi
+
+# Test 21: Resurrect + continuum plugins referenced
+info "Test 21: Verify resurrect and continuum plugins declared"
+if grep -q "@plugin 'tmux-plugins/tmux-resurrect'" files/.tmux.conf && \
+   grep -q "@plugin 'tmux-plugins/tmux-continuum'" files/.tmux.conf; then
+    pass "resurrect + continuum plugins declared"
+else
+    fail "resurrect or continuum plugin missing from .tmux.conf"
+fi
+
+# Test 22: Custom save/restore keybindings configured
+info "Test 22: Verify custom save/restore keys (prefix + S / R)"
+if grep -q "@resurrect-save 'S'" files/.tmux.conf && \
+   grep -q "@resurrect-restore 'R'" files/.tmux.conf; then
+    pass "Custom resurrect keybindings configured"
+else
+    fail "@resurrect-save / @resurrect-restore overrides missing"
+fi
+
+# Test 23: Continuum save interval set to 5
+info "Test 23: Verify continuum save interval is 5 minutes"
+if grep -q "@continuum-save-interval '5'" files/.tmux.conf; then
+    pass "Save interval set to 5 min"
+else
+    fail "Save interval not set to 5"
+fi
+
+# Test 24: git is in requirements
+info "Test 24: Verify git is a listed requirement"
+if awk '/^requirements:/{flag=1;next} /^[[:alpha:]]/{flag=0} flag' config.yaml | grep -qE "^[[:space:]]+-[[:space:]]+git[[:space:]]*$"; then
+    pass "git listed as requirement"
+else
+    fail "git not listed in requirements"
+fi
+
+# Test 25: install_plugins step in post_install
+info "Test 25: Verify TPM install_plugins is a post_install step"
+if grep -q "install_plugins" config.yaml; then
+    pass "install_plugins post_install step present"
+else
+    fail "install_plugins not in post_install"
+fi
+
+# Test 26: Cheatsheet documents save/restore + PLUGINS section
+info "Test 26: Verify cheatsheet documents session resurrection + plugins"
+if grep -q "save session" files/.tmux-cheatsheet.txt && \
+   grep -q "restore session" files/.tmux-cheatsheet.txt && \
+   grep -q "► PLUGINS" files/.tmux-cheatsheet.txt && \
+   grep -q "tmux-resurrect" files/.tmux-cheatsheet.txt && \
+   grep -q "tmux-continuum" files/.tmux-cheatsheet.txt; then
+    pass "Cheatsheet documents save/restore + plugins"
+else
+    fail "Cheatsheet missing save/restore lines or PLUGINS section"
+fi
+
+# Test 27: install.sh defines bootstrap_tpm and cleanup_tpm
+info "Test 27: Verify install.sh has TPM helpers"
+if grep -q "^bootstrap_tpm()" install.sh && grep -q "^cleanup_tpm()" install.sh; then
+    pass "bootstrap_tpm and cleanup_tpm defined"
+else
+    fail "TPM helper functions missing from install.sh"
 fi
 
 cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 19 tmux-specific tests passed!${NC}"
+echo -e "${GREEN}All 27 tmux-specific tests passed!${NC}"
 echo "======================================"
