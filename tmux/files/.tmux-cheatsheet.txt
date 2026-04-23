@@ -34,9 +34,10 @@
   \033[1;34mcopy (stay)\033[0m      y                      \033[1;34mcopy + exit\033[0m      Enter
 
   \033[1;32m● Mouse selection:\033[0m
-  \033[1;34mdrag to copy\033[0m     click & drag, release to copy & exit
-  \033[1;34mdouble-click\033[0m     select word, copy & exit
-  \033[1;34mtriple-click\033[0m     select line, copy & exit
+  \033[1;34mdrag to copy\033[0m     click & drag, release to copy    \033[1;90m(stays in copy-mode)\033[0m
+  \033[1;34mdouble-click\033[0m     select word, copy                \033[1;90m(stays in copy-mode)\033[0m
+  \033[1;34mtriple-click\033[0m     select line, copy                \033[1;90m(stays in copy-mode)\033[0m
+  \033[1;90m  (press q to exit copy-mode when done)\033[0m
 
   \033[1;32m● Paste:\033[0m
   \033[1;34mpaste tmux\033[0m       p/P (in copy) or ` ]
