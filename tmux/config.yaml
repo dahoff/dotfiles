@@ -48,5 +48,5 @@ requirements:
 # Post-install commands (run after installation)
 post_install:
   - chmod +x ~/.tmux/.tmux-cheatsheet.sh
-  - ~/.tmux/plugins/tpm/bin/install_plugins || true
+  - tmux start-server \; set-environment -g TMUX_PLUGIN_MANAGER_PATH ~/.tmux/plugins/ && ~/.tmux/plugins/tpm/bin/install_plugins || true
   - tmux source-file ~/.tmux.conf || true
