@@ -236,8 +236,18 @@ cmd_upgrade() {
     local installed_version
     installed_version=$(state_get_version "$APP_NAME")
     if [[ "$installed_version" == "$APP_VERSION" ]] && [[ "$FORCE" != true ]]; then
-        log_info "$APP_NAME is already up to date ($APP_VERSION)"
-        return 0
+        local all_present=true
+        for dest in "${CONFIG_DESTS[@]}"; do
+            if [[ ! -f "$dest" ]]; then
+                log_warn "Expected file missing, re-applying: $dest"
+                all_present=false
+                break
+            fi
+        done
+        if [[ "$all_present" == true ]]; then
+            log_info "$APP_NAME is already up to date ($APP_VERSION)"
+            return 0
+        fi
     fi
 
     # Create snapshot backup
