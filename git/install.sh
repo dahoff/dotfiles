@@ -38,6 +38,7 @@ NO_BACKUP=false
 TEST_MODE=false
 FORCE=false
 REMOTE_MODE=false
+SKIP_GIT_SETUP=false
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -74,6 +75,40 @@ _preserve_existing_gitconfig() {
     mv "$existing" "$local_config"
     log_success "Renamed ~/.gitconfig -> ~/.gitconfig.local (all existing settings preserved)"
     log_info "The managed .gitconfig will include ~/.gitconfig.local automatically"
+}
+
+# Run git-setup interactively if identity is not yet configured.
+# Skipped when: identity already set, --skip-git-setup passed, or --dry-run.
+_maybe_run_git_setup() {
+    local local_config="$HOME/.gitconfig.local"
+
+    local current_name current_email
+    current_name=$(git config --file "$local_config" user.name 2>/dev/null || true)
+    current_email=$(git config --file "$local_config" user.email 2>/dev/null || true)
+
+    if [[ -n "$current_name" && -n "$current_email" ]]; then
+        log_info "Git identity already configured ($current_email), skipping git-setup"
+        return 0
+    fi
+
+    if [[ "$SKIP_GIT_SETUP" == true || "${GIT_SETUP_SKIP:-false}" == true ]]; then
+        log_info "Skipping git-setup (--skip-git-setup); run 'git-setup' manually to configure identity"
+        return 0
+    fi
+
+    if is_dry_run; then
+        log_info "[DRY-RUN] Would run git-setup (identity not yet configured)"
+        return 0
+    fi
+
+    local git_setup_bin="$HOME/.local/bin/git-setup"
+    if [[ ! -x "$git_setup_bin" ]]; then
+        log_warn "git-setup not found at $git_setup_bin; run it manually to configure git identity"
+        return 0
+    fi
+
+    log_info "Git identity not configured — running git-setup..."
+    "$git_setup_bin"
 }
 
 # Load configuration from config.yaml
@@ -254,6 +289,9 @@ cmd_install() {
     # Run post-install commands
     run_post_install
 
+    # Prompt for git identity on fresh systems
+    _maybe_run_git_setup
+
     log_success "$APP_NAME installed successfully!"
     return 0
 }
@@ -283,6 +321,7 @@ cmd_upgrade() {
         done
         if [[ "$all_present" == true ]]; then
             log_info "$APP_NAME is already up to date ($APP_VERSION)"
+            _maybe_run_git_setup
             return 0
         fi
     fi
@@ -331,6 +370,9 @@ cmd_upgrade() {
 
     # Run post-install commands
     run_post_install
+
+    # Prompt for git identity if it was never configured
+    _maybe_run_git_setup
 
     log_success "$APP_NAME upgraded successfully!"
     return 0
@@ -621,6 +663,7 @@ Options:
   --verbose            Verbose output
   --quiet              Minimal output
   --force              Force operation without prompts
+  --skip-git-setup     Skip interactive git identity setup (for unattended deploys)
   --shell-scripts-dir PATH   Set drop-in directory (default: ~/.bashrc.d)
 
 Examples:
@@ -721,6 +764,10 @@ parse_args() {
                 ;;
             --force)
                 FORCE=true
+                shift
+                ;;
+            --skip-git-setup)
+                SKIP_GIT_SETUP=true
                 shift
                 ;;
             --to)

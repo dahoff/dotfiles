@@ -843,6 +843,7 @@ Options (passed through to each app's installer):
   --verbose            Verbose output
   --quiet              Minimal output
   --force              Force operation without prompts
+  --skip-git-setup     Skip interactive git identity setup (for unattended deploys)
   --continue-on-error  Continue to next host if one fails (hosts-file mode)
   --shell-scripts-dir PATH  Set drop-in directory (default: ~/.bashrc.d)
   --log FILE           Log to file
@@ -940,6 +941,10 @@ parse_args() {
                 ;;
             --dry-run|--no-backup|--verbose|--quiet|--force)
                 GLOBAL_FLAGS+=("$1")
+                shift
+                ;;
+            --skip-git-setup)
+                export GIT_SETUP_SKIP=true
                 shift
                 ;;
             --shell-scripts-dir)
