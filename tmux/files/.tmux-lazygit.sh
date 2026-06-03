@@ -17,6 +17,10 @@ if ! tmux has-session -t "$session" 2>/dev/null; then
     tmux set-option -t "$session_id" key-table lazygit
     tmux set-option -t "$session_id" status off
     session="$session_id"
+else
+    # Re-apply settings lost when tmux-resurrect restores the session
+    tmux set-option -t "$session" key-table lazygit
+    tmux set-option -t "$session" status off
 fi
 
 exec tmux attach-session -t "$session" > /dev/null
