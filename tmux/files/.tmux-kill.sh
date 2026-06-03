@@ -31,35 +31,39 @@ trap 'rm -f "$SORT_FILE"' EXIT
 # Helper script for reload - fzf calls this to get the process list
 RELOAD_CMD="sort=\$(cat $SORT_FILE); if [ \"\$sort\" = mem ]; then echo cpu > $SORT_FILE; ps aux --sort=-%cpu; else echo mem > $SORT_FILE; ps aux --sort=-%mem; fi"
 
-HEADER="Enter=kill | Ctrl-x=kill -9 | Ctrl-s=toggle sort (mem/cpu) | ESC=cancel"
+HEADER="Space=select | Enter=kill selected | Ctrl-x=kill -9 selected | Ctrl-s=sort | ESC=cancel"
 
 result=$(ps aux --sort=-%cpu | \
     fzf --header="$HEADER" \
         --header-lines=1 \
+        --multi \
         --layout=reverse \
         --preview='echo "PID: {2}  CPU: {3}%  MEM: {4}%  CMD: {11..}"' \
         --preview-window=down:3:wrap \
         --expect=ctrl-x \
         --bind="ctrl-k:abort" \
         --bind="ctrl-s:reload($RELOAD_CMD)" \
+        --bind="space:toggle+down" \
     || true)
 
-# --expect outputs two lines: the key pressed, then the selected line
+# --expect outputs the key on line 1; selected items (one per line) follow
 key=$(head -1 <<< "$result")
-line=$(tail -n +2 <<< "$result")
-pid=$(awk '{print $2}' <<< "$line")
+mapfile -t selected_lines < <(tail -n +2 <<< "$result")
 
-if [[ -z "$pid" ]]; then
-    exit 0
-fi
+killed=0
+for line in "${selected_lines[@]}"; do
+    pid=$(awk '{print $2}' <<< "$line")
+    [[ -z "$pid" ]] && continue
+    cmd_name=$(awk '{print $11}' <<< "$line")
+    if [[ "$key" == "ctrl-x" ]]; then
+        echo "Force killing (SIGKILL) PID $pid ($cmd_name)..."
+        sudo kill -9 "$pid" 2>&1 || echo "Failed to kill $pid"
+    else
+        echo "Killing (SIGTERM) PID $pid ($cmd_name)..."
+        sudo kill "$pid" 2>&1 || echo "Failed to kill $pid"
+    fi
+    ((killed++))
+done
 
-cmd_name=$(awk '{print $11}' <<< "$line")
-
-if [[ "$key" == "ctrl-x" ]]; then
-    echo "Force killing (SIGKILL) PID $pid ($cmd_name)..."
-    sudo kill -9 "$pid" 2>&1 || echo "Failed to kill $pid"
-else
-    echo "Killing (SIGTERM) PID $pid ($cmd_name)..."
-    sudo kill "$pid" 2>&1 || echo "Failed to kill $pid"
-fi
+[[ $killed -eq 0 ]] && exit 0
 sleep 1
