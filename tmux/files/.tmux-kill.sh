@@ -62,7 +62,7 @@ for line in "${selected_lines[@]}"; do
         echo "Killing (SIGTERM) PID $pid ($cmd_name)..."
         sudo kill "$pid" 2>&1 || echo "Failed to kill $pid"
     fi
-    ((killed++))
+    ((++killed))
 done
 
 [[ $killed -eq 0 ]] && exit 0
