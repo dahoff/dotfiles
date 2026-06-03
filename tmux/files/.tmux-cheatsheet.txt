@@ -54,6 +54,7 @@
 \033[1;33m► POPUP COPY-MODE\033[0m
   \033[1;34menter copy-mode\033[0m  scroll wheel up        \033[1;34mor\033[0m               Ctrl+[
   \033[1;34mnavigate/select\033[0m  same as regular copy-mode (h j k l, v, y, etc.)
+  \033[1;34mbypass app input\033[0m Shift+drag             \033[1;90m(terminal native select, e.g. in lazygit)\033[0m
 
 \033[1;33m► PLUGINS\033[0m \033[1;90m(via TPM — installed at ~/.tmux/plugins/)\033[0m
   \033[1;34mtmux-resurrect\033[0m   save/restore sessions manually  \033[1;90m(keys: ` S / ` R)\033[0m
