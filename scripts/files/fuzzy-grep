@@ -66,7 +66,7 @@ SEARCH_DIR="${1:-.}"
 SEARCH_DIR="$(cd "$SEARCH_DIR" && pwd)"
 
 # Marker file used to tell "Ctrl-e pressed" apart from a plain ESC/cancel.
-# MATCHES_FILE holds the current search's full result set (see colorize_matches)
+# MATCHES_FILE holds the current search's full result set (see stream_matches)
 # so the preview pane can list every match in the highlighted file.
 EDIT_FLAG=$(mktemp -u)
 MATCHES_FILE=$(mktemp)
@@ -81,17 +81,20 @@ raw=""
 # Build grep_argv from the current fields. A non-blank Pattern always wins
 # (built from the guided fields); clear Pattern and use Raw args for full
 # manual control. --color=always is always first so the results list can
-# highlight the matched text (see colorize_matches); it's harmless if Raw
-# args also sets its own --color later, since grep uses the last one given.
+# highlight the matched text (see stream_matches); --line-buffered makes grep
+# flush each match right away instead of batching, so results (and fzf's
+# built-in "searching" spinner) stream in live rather than appearing all at
+# once at the end. Both are harmless if Raw args also sets its own --color
+# later, since grep uses the last value given for a repeated flag.
 build_grep_argv() {
     if [[ -n "$pattern" ]]; then
-        grep_argv=(--color=always -r -n --exclude-dir=.git)
+        grep_argv=(--color=always --line-buffered -r -n --exclude-dir=.git)
         [[ -n "$include_ext" ]] && grep_argv+=(--include="*.$include_ext")
         [[ -n "$exclude_ext" ]] && grep_argv+=(--exclude="*.$exclude_ext")
         grep_argv+=(-- "$pattern" "$dir")
     else
         eval "grep_argv=($raw)" 2>/dev/null || grep_argv=()
-        grep_argv=(--color=always "${grep_argv[@]}")
+        grep_argv=(--color=always --line-buffered "${grep_argv[@]}")
     fi
 }
 
@@ -111,24 +114,50 @@ quote_grep_argv() {
 # highlighted). fzf's {1}/{2} delimiter fields need to be plain text though, so
 # rebuild each line as clean-file:clean-line:colored-rest — the colored part is
 # only ever displayed, never parsed.
-colorize_matches() {
+#
+# Also dedupes: prints each file's name to stdout only the first time it's
+# seen (this is pick_file's live source on the first search of a filter set),
+# while every match still gets appended to MATCHES_FILE for the preview and
+# the line picker. Safe to stream straight into fzf: grep -r finishes a file
+# before moving to the next, so by the time a filename is first printed here,
+# all of that file's matches are already in MATCHES_FILE.
+stream_matches() {
     local raw_line clean_line file lineno colored_rest
+    local -A seen
+    : > "$MATCHES_FILE"
     while IFS= read -r raw_line; do
         clean_line=$(sed -E $'s/\x1b\\[[0-9;]*m//g' <<< "$raw_line")
         IFS=':' read -r file lineno _ <<< "$clean_line"
         colored_rest=$(cut -d: -f3- <<< "$raw_line")
-        printf '%s:%s:%s\n' "$file" "$lineno" "$colored_rest"
+        printf '%s:%s:%s\n' "$file" "$lineno" "$colored_rest" >> "$MATCHES_FILE"
+        if [[ -z "${seen[$file]:-}" ]]; then
+            seen[$file]=1
+            printf '%s\n' "$file"
+        fi
     done
 }
 
-# Pick a file from MATCHES_FILE (deduplicated, one entry per file — the
-# preview lists every match in it). Sets $selected_file on success (return 0).
-# Ctrl-e/ESC ask to go back to the filter menu (return 1); Ctrl-g closes.
+# Source for pick_file's list: on the first call for this search, stream
+# straight from grep (so fzf's spinner/list fill in live); on later calls in
+# the same search (e.g. bouncing back from the line list) MATCHES_FILE is
+# already complete, so just re-list it instantly with no new search.
+file_source() {
+    if [[ "$first_pick" == true ]]; then
+        first_pick=false
+        GREP_COLORS='fn=:ln=:se=:mt=01;31' grep "${grep_argv[@]}" 2>/dev/null | stream_matches
+    else
+        cut -d: -f1 "$MATCHES_FILE" | sort -u
+    fi
+}
+
+# Pick a file (deduplicated, one entry per file — the preview lists every
+# match in it). Sets $selected_file on success (return 0). Ctrl-e/ESC ask to
+# go back to the filter menu (return 1); Ctrl-g closes.
 pick_file() {
     HEADER="🔎 grep ${raw}
 Enter=select file | Ctrl-y=copy path | Esc/Ctrl-e=back to filters | Ctrl-g=close"
 
-    selected_file=$(cut -d: -f1 "$MATCHES_FILE" | sort -u | \
+    selected_file=$(file_source | \
         fzf --header="$HEADER" \
             --ansi \
             --layout=reverse \
@@ -251,20 +280,15 @@ while true; do
     build_grep_argv
     quote_grep_argv
     raw="${display_parts[*]}"
-
-    GREP_COLORS='fn=:ln=:se=:mt=01;31' grep "${grep_argv[@]}" 2>/dev/null | \
-        colorize_matches > "$MATCHES_FILE"
-
-    if [[ ! -s "$MATCHES_FILE" ]]; then
-        echo "No matches."
-        sleep 1
-        continue
-    fi
+    first_pick=true
 
     # File list, then (only if that file has more than one match) a line
     # list. `continue 2`/`break 2` reach past this inner loop to the outer
     # one: continue 2 = pick_file asked to go back to the filter menu;
-    # break 2 = a specific file+line was chosen, ready to open.
+    # break 2 = a specific file+line was chosen, ready to open. The first
+    # pick_file call streams live from grep (see file_source); if there are
+    # no matches at all, fzf just shows an empty list — ESC/Ctrl-e from
+    # there behaves the same as backing out of any other empty screen.
     while true; do
         pick_file || continue 2
         if pick_line "$selected_file"; then
