@@ -1,0 +1,18 @@
+app:
+  name: vim
+  description: Vim editor configuration
+
+# Files to install (relative to files/ directory)
+files:
+  - src: .vimrc
+    dest: ~/.vimrc
+    mode: '0644'
+
+# Backup settings
+backup:
+  dir: ~/.bak/vim
+  max_backups: 3
+
+# Requirements (commands that must exist)
+requirements:
+  - vim

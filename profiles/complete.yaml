@@ -22,6 +22,13 @@ packages:
     config:
       dir: tmux
 
+  - name: vim
+    apt: vim
+    dnf: vim
+    brew: vim
+    config:
+      dir: vim
+
   - name: curl
     apt: curl
     dnf: curl
