@@ -3,7 +3,7 @@
 # Usage: fuzzy-find [directory]  (alias: f)
 #
 # Controls:
-#   Enter    - open file in vim
+#   Enter    - select file, then choose current/new window (in tmux) and open in vim
 #   Ctrl-y   - copy file path to clipboard
 #   Ctrl-g   - change search directory
 #   ESC      - cancel
@@ -66,7 +66,7 @@ CHANGE_DIR_CMD="read -e -i \"\$(cat '$DIR_FILE')\" -p 'Search path: ' new_dir < 
 
 while true; do
     HEADER="📁 ${SEARCH_DIR}
-Enter=open in vim | Ctrl-y=copy path | Ctrl-g=change directory | ESC=cancel"
+Enter=select | Ctrl-y=copy path | Ctrl-g=change directory | ESC=cancel"
 
     result=$(find_cmd "$SEARCH_DIR" | \
         fzf --header="$HEADER" \
@@ -87,9 +87,30 @@ Enter=open in vim | Ctrl-y=copy path | Ctrl-g=change directory | ESC=cancel"
 
     if [[ -n "$result" ]]; then
         if [[ -n "${FUZZY_FIND_TARGET_PANE:-}" ]]; then
-            # Running in tmux popup — open vim in the parent pane
+            # Running in tmux popup — ask whether to open in the current or a new window
+            choice=$(printf '%s\n' "Current window" "New window" | \
+                fzf --header="📄 ${result}
+Open in:" \
+                    --layout=reverse \
+                    --prompt="" \
+                    --info=hidden \
+                    --bind="j:down,k:up" \
+                    || true)
+
             printf -v escaped '%q' "$result"
-            tmux send-keys -t "$FUZZY_FIND_TARGET_PANE" "vim $escaped" Enter
+            case "$choice" in
+                "New window")
+                    # new-window needs a target *window*, not a pane
+                    target_window=$(tmux display-message -p -t "$FUZZY_FIND_TARGET_PANE" '#{window_id}')
+                    tmux new-window -a -t "$target_window" -c "$SEARCH_DIR" "vim $escaped"
+                    ;;
+                "Current window")
+                    tmux send-keys -t "$FUZZY_FIND_TARGET_PANE" "vim $escaped" Enter
+                    ;;
+                *)
+                    # ESC / cancelled — do nothing
+                    ;;
+            esac
         else
             vim "$result"
         fi
