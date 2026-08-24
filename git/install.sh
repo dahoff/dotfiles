@@ -78,7 +78,8 @@ _preserve_existing_gitconfig() {
 }
 
 # Run git-setup interactively if identity is not yet configured.
-# Skipped when: identity already set, --skip-git-setup passed, or --dry-run.
+# Skipped when: identity already set, --skip-git-setup passed, --dry-run,
+# or stdin isn't a TTY (unattended/remote/test contexts can't answer prompts).
 _maybe_run_git_setup() {
     local local_config="$HOME/.gitconfig.local"
 
@@ -98,6 +99,11 @@ _maybe_run_git_setup() {
 
     if is_dry_run; then
         log_info "[DRY-RUN] Would run git-setup (identity not yet configured)"
+        return 0
+    fi
+
+    if [[ ! -t 0 ]]; then
+        log_warn "No interactive terminal detected; skipping git-setup. Run 'git-setup' manually to configure identity"
         return 0
     fi
 
