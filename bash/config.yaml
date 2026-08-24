@@ -12,6 +12,9 @@ files:
   - src: 50-fuzzy-find.sh
     dest: ~/.bashrc.d/50-fuzzy-find.sh
     mode: '0644'
+  - src: 50-fuzzy-grep.sh
+    dest: ~/.bashrc.d/50-fuzzy-grep.sh
+    mode: '0644'
 
 backup:
   dir: ~/.bak/bash

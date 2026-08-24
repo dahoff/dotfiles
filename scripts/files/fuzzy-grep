@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# fuzzy-grep - Interactive grep search with a filter menu, opens match in vim
+# Usage: fuzzy-grep [directory]  (alias: g)
+#
+# Filter menu — just start typing to set the search pattern (regex), then
+# Enter to search. Arrows/j-k move down to the other fields; Enter on one of
+# them edits it instead:
+#   Include ext   - only search files with this extension
+#   Exclude ext   - skip files with this extension
+#   Directory     - directory to search
+#   Raw args      - used instead of the pattern when Pattern is left blank;
+#                   typed verbatim as grep arguments. The header always shows the
+#                   exact command that would run, so it can be copied/tweaked directly.
+#
+# File list (one entry per file; preview lists every match in it):
+#   Enter      - pick this file — if it has only one match, jumps straight to
+#                it; otherwise opens a line list to pick which match
+#   Ctrl-y     - copy file path to clipboard
+#   Ctrl-e/ESC - back to the filter menu (ESC again there closes the popup)
+#   Ctrl-g     - close immediately
+#
+# Line list (only shown when a file has more than one match):
+#   Enter      - jump to this match, then choose current/new window (in tmux)
+#   Ctrl-y     - copy file:line to clipboard
+#   ESC        - back to the file list
+
+set -euo pipefail
+
+# --copy mode: called by fzf ctrl-y binding to copy file:line to the clipboard
+if [[ "${1:-}" == "--copy" ]]; then
+    path="$2"
+    encoded=$(printf '%s' "$path" | base64 | tr -d '\n')
+    printf '\033]52;c;%s\a' "$encoded" > /dev/tty
+    if [[ -n "${TMUX:-}" ]]; then
+        printf '%s' "$path" | tmux load-buffer - 2>/dev/null || true
+    fi
+    exit 0
+fi
+
+# --show-matches mode: called by fzf's preview binding to list every match in
+# the highlighted file (not just the one on the highlighted row), full width.
+if [[ "${1:-}" == "--show-matches" ]]; then
+    matches_file="$2"
+    target_file="$3"
+    awk -F: -v f="$target_file" '$1==f' "$matches_file" | \
+        cut -d: -f2- | \
+        sed -E 's/^([0-9]+):/\n\x1b[1;34mL\1:\x1b[0m /'
+    exit 0
+fi
+
+# On any error, show the message and wait for keypress before closing
+trap 'echo ""; echo "Press any key to close..."; read -r -n 1' ERR
+
+for bin in fzf grep; do
+    if ! command -v "$bin" &>/dev/null; then
+        echo "$bin is required but not installed"
+        read -r -n 1
+        exit 1
+    fi
+done
+
+# Absolute path to self (for fzf execute bindings)
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+
+SEARCH_DIR="${1:-.}"
+SEARCH_DIR="$(cd "$SEARCH_DIR" && pwd)"
+
+# Marker file used to tell "Ctrl-e pressed" apart from a plain ESC/cancel.
+# MATCHES_FILE holds the current search's full result set (see colorize_matches)
+# so the preview pane can list every match in the highlighted file.
+EDIT_FLAG=$(mktemp -u)
+MATCHES_FILE=$(mktemp)
+trap 'rm -f "$EDIT_FLAG" "$MATCHES_FILE"' EXIT
+
+pattern=""
+include_ext=""
+exclude_ext=""
+dir="$SEARCH_DIR"
+raw=""
+
+# Build grep_argv from the current fields. A non-blank Pattern always wins
+# (built from the guided fields); clear Pattern and use Raw args for full
+# manual control. --color=always is always first so the results list can
+# highlight the matched text (see colorize_matches); it's harmless if Raw
+# args also sets its own --color later, since grep uses the last one given.
+build_grep_argv() {
+    if [[ -n "$pattern" ]]; then
+        grep_argv=(--color=always -r -n --exclude-dir=.git)
+        [[ -n "$include_ext" ]] && grep_argv+=(--include="*.$include_ext")
+        [[ -n "$exclude_ext" ]] && grep_argv+=(--exclude="*.$exclude_ext")
+        grep_argv+=(-- "$pattern" "$dir")
+    else
+        eval "grep_argv=($raw)" 2>/dev/null || grep_argv=()
+        grep_argv=(--color=always "${grep_argv[@]}")
+    fi
+}
+
+# Reconstruct a shell-quoted display string from grep_argv, so the command
+# that would run can be shown, copied, or typed back into Raw args.
+quote_grep_argv() {
+    display_parts=()
+    local a q
+    for a in "${grep_argv[@]}"; do
+        printf -v q '%q' "$a"
+        display_parts+=("$q")
+    done
+}
+
+# grep --color=always wraps filename/linenumber/match in ANSI codes (GREP_COLORS
+# below keeps filename/linenumber/separator uncolored, only the match itself is
+# highlighted). fzf's {1}/{2} delimiter fields need to be plain text though, so
+# rebuild each line as clean-file:clean-line:colored-rest — the colored part is
+# only ever displayed, never parsed.
+colorize_matches() {
+    local raw_line clean_line file lineno colored_rest
+    while IFS= read -r raw_line; do
+        clean_line=$(sed -E $'s/\x1b\\[[0-9;]*m//g' <<< "$raw_line")
+        IFS=':' read -r file lineno _ <<< "$clean_line"
+        colored_rest=$(cut -d: -f3- <<< "$raw_line")
+        printf '%s:%s:%s\n' "$file" "$lineno" "$colored_rest"
+    done
+}
+
+# Pick a file from MATCHES_FILE (deduplicated, one entry per file — the
+# preview lists every match in it). Sets $selected_file on success (return 0).
+# Ctrl-e/ESC ask to go back to the filter menu (return 1); Ctrl-g closes.
+pick_file() {
+    HEADER="🔎 grep ${raw}
+Enter=select file | Ctrl-y=copy path | Esc/Ctrl-e=back to filters | Ctrl-g=close"
+
+    selected_file=$(cut -d: -f1 "$MATCHES_FILE" | sort -u | \
+        fzf --header="$HEADER" \
+            --ansi \
+            --layout=reverse \
+            --preview="$SELF --show-matches '$MATCHES_FILE' {}" \
+            --preview-window=right:60%:wrap \
+            --preview-label="📄 matches in this file" \
+            --bind="ctrl-y:execute-silent($SELF --copy {})+abort" \
+            --bind="ctrl-e:execute-silent(touch '$EDIT_FLAG')+abort" \
+            --bind="esc:execute-silent(touch '$EDIT_FLAG')+abort" \
+            --bind="ctrl-g:abort" \
+            || true)
+
+    if [[ -f "$EDIT_FLAG" ]]; then
+        rm -f "$EDIT_FLAG"
+        return 1
+    fi
+
+    [[ -z "$selected_file" ]] && exit 0
+    return 0
+}
+
+# Pick which match line to jump to within file $1. If it only has one match,
+# use it directly with no extra prompt. Sets $line on success (return 0);
+# ESC on the (only-shown-when-needed) line list goes back to the file list
+# (return 1).
+pick_line() {
+    local target_file="$1" line_choice match_count
+
+    match_count=$(awk -F: -v f="$target_file" '$1==f' "$MATCHES_FILE" | wc -l)
+    if [[ "$match_count" -le 1 ]]; then
+        line=$(awk -F: -v f="$target_file" '$1==f {print $2; exit}' "$MATCHES_FILE")
+        return 0
+    fi
+
+    line_choice=$(awk -F: -v f="$target_file" '$1==f' "$MATCHES_FILE" | cut -d: -f2- | \
+        fzf --header="📄 ${target_file}
+Enter=jump to this match | Ctrl-y=copy path:line | ESC=back to file list" \
+            --ansi \
+            --delimiter=':' \
+            --layout=reverse \
+            --bind="ctrl-y:execute-silent($SELF --copy ${target_file}:{1})+abort" \
+            || true)
+
+    [[ -z "$line_choice" ]] && return 1
+
+    line="${line_choice%%:*}"
+    return 0
+}
+
+# Filter menu — the query box IS the Pattern field (type directly into it,
+# no need to select it first). Arrows/j-k move to the other fields; Enter
+# edits the highlighted one, unless "▶ Search" is highlighted (the default),
+# in which case Enter runs the search right away. Returns 1 on ESC/cancel.
+edit_filters() {
+    while true; do
+        build_grep_argv
+        quote_grep_argv
+        preview="${display_parts[*]}"
+
+        menu_items=(
+            "▶ Search"
+            "Include ext:  ${include_ext:-<empty>}"
+            "Exclude ext:  ${exclude_ext:-<empty>}"
+            "Directory:    $dir"
+            "Raw args:     ${raw:-<empty>}"
+        )
+
+        fzf_out=$(printf '%s\n' "${menu_items[@]}" | \
+            fzf --header="🔎 grep ${preview}
+Type=pattern | Enter=search | ↓ then Enter=edit field | Ctrl-g=close | ESC=cancel" \
+                --print-query \
+                --disabled \
+                --query="$pattern" \
+                --prompt="Pattern: " \
+                --layout=reverse \
+                --bind="ctrl-g:abort" \
+                || true)
+
+        if [[ -z "$fzf_out" ]]; then
+            return 1
+        fi
+
+        mapfile -t fzf_lines <<< "$fzf_out"
+        pattern="${fzf_lines[0]:-}"
+        selected="${fzf_lines[1]:-}"
+
+        case "$selected" in
+            "Include ext:"*)
+                read -e -i "$include_ext" -p "Include ext: " include_ext < /dev/tty
+                ;;
+            "Exclude ext:"*)
+                read -e -i "$exclude_ext" -p "Exclude ext: " exclude_ext < /dev/tty
+                ;;
+            "Directory:"*)
+                read -e -i "$dir" -p "Directory: " new_dir < /dev/tty
+                new_dir="${new_dir/#\~/$HOME}"
+                dir="$(cd "$new_dir" 2>/dev/null && pwd || echo "$dir")"
+                ;;
+            "Raw args:"*)
+                read -e -i "$raw" -p "Raw grep args: " raw < /dev/tty
+                ;;
+            "▶ Search"*)
+                if [[ -z "$pattern" && -z "$raw" ]]; then
+                    echo "Enter a pattern, or fill Raw args instead."
+                    sleep 1.2
+                    continue
+                fi
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    done
+}
+
+while true; do
+    edit_filters || exit 0
+
+    build_grep_argv
+    quote_grep_argv
+    raw="${display_parts[*]}"
+
+    GREP_COLORS='fn=:ln=:se=:mt=01;31' grep "${grep_argv[@]}" 2>/dev/null | \
+        colorize_matches > "$MATCHES_FILE"
+
+    if [[ ! -s "$MATCHES_FILE" ]]; then
+        echo "No matches."
+        sleep 1
+        continue
+    fi
+
+    # File list, then (only if that file has more than one match) a line
+    # list. `continue 2`/`break 2` reach past this inner loop to the outer
+    # one: continue 2 = pick_file asked to go back to the filter menu;
+    # break 2 = a specific file+line was chosen, ready to open.
+    while true; do
+        pick_file || continue 2
+        if pick_line "$selected_file"; then
+            file="$selected_file"
+            break 2
+        fi
+        # ESC on the line list (only shown when >1 match) — back to file list
+    done
+done
+
+if [[ -n "${FUZZY_GREP_TARGET_PANE:-}" ]]; then
+    # Running in tmux popup — ask whether to open in the current or a new window
+    choice=$(printf '%s\n' "Current window" "New window" | \
+        fzf --header="📄 ${file}:${line}
+Open in:" \
+            --layout=reverse \
+            --prompt="" \
+            --info=hidden \
+            --bind="j:down,k:up" \
+            || true)
+
+    printf -v escaped '%q' "$file"
+    case "$choice" in
+        "New window")
+            # new-window needs a target *window*, not a pane
+            target_window=$(tmux display-message -p -t "$FUZZY_GREP_TARGET_PANE" '#{window_id}')
+            tmux new-window -a -t "$target_window" -c "$dir" "vim +$line $escaped"
+            ;;
+        "Current window")
+            tmux send-keys -t "$FUZZY_GREP_TARGET_PANE" "vim +$line $escaped" Enter
+            ;;
+        *)
+            # ESC / cancelled — do nothing
+            ;;
+    esac
+else
+    vim "+$line" "$file"
+fi
