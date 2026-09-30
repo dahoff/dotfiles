@@ -12,6 +12,12 @@ fi
 
 session="_lazygit_$(tmux display-message -p '#S')"
 
+# A session not running lazygit (e.g. restored as a bare shell) is stale
+if tmux has-session -t "=$session" 2>/dev/null &&
+    [[ "$(tmux display-message -p -t "=$session:" '#{pane_current_command}')" != lazygit ]]; then
+    tmux kill-session -t "=$session"
+fi
+
 if ! tmux has-session -t "$session" 2>/dev/null; then
     session_id="$(tmux new-session -dP -s "$session" -c "$PWD" -F '#{session_id}' "lazygit")"
     tmux set-option -t "$session_id" key-table lazygit
