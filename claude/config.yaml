@@ -1,6 +1,6 @@
 app:
   name: claude
-  description: Claude Code CLI configuration (settings, statusline)
+  description: Claude Code CLI configuration (settings, statusline, tmux notifications)
 
 files:
   - src: settings.json
@@ -12,6 +12,9 @@ files:
   - src: statusline-command.sh
     dest: ~/.claude/statusline-command.sh
     mode: '0644'
+  - src: tmux-notify.sh
+    dest: ~/.claude/tmux-notify.sh
+    mode: '0755'
 
 backup:
   dir: ~/.bak/claude

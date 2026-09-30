@@ -4,5 +4,27 @@
   "statusLine": {
     "type": "command",
     "command": "sh $HOME/.claude/statusline-command.sh"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh $HOME/.claude/tmux-notify.sh 'done'"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh $HOME/.claude/tmux-notify.sh 'needs input'"
+          }
+        ]
+      }
+    ]
   }
 }

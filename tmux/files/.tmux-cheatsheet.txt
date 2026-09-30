@@ -58,6 +58,10 @@
   \033[1;34mnavigate/select\033[0m  same as regular copy-mode (h j k l, v, y, etc.)
   \033[1;34mbypass app input\033[0m Shift+drag             \033[1;90m(terminal native select, e.g. in lazygit)\033[0m
 
+\033[1;33m► CLAUDE CODE\033[0m
+  \033[1;34mbell on done\033[0m     window shows red \033[1;31m!\033[0m + status message when Claude finishes/needs input
+  \033[1;34mShift+Enter\033[0m      newline in Claude prompt  \033[1;90m(extended-keys passthrough)\033[0m
+
 \033[1;33m► PLUGINS\033[0m \033[1;90m(via TPM — installed at ~/.tmux/plugins/)\033[0m
   \033[1;34mtmux-resurrect\033[0m   save/restore sessions manually  \033[1;90m(keys: ` S / ` R)\033[0m
   \033[1;34mtmux-continuum\033[0m   auto-save every 5 min, auto-restore on tmux start
