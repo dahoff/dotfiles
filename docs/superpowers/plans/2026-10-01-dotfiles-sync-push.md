@@ -162,7 +162,7 @@ This task is a refactor plus removal. Local behavior is unchanged except that `d
   It returns 0 when the file is missing, with all defaults. For each malformed or unknown line it logs `log_warn "<file>:<n>: ignoring <reason>: <line>"`. It returns 1 for `auto_sync` not in `on`/`off`, and for an invalid interval.
 - `config_interval_seconds STR` prints the seconds for `<n>m|h|d` and returns 1 for anything else.
 - In `dotfiles`, after `parse_args`, a function `resolve_settings` fills in:
-  - `DOTFILES_REPO`: config, else `SCRIPT_DIR`. Abort if the directory is missing. `SCRIPT_DIR`, which `PROFILES_DIR`/app dirs/`packages` use, becomes `DOTFILES_REPO`. If the config points somewhere else, log `log_warn "Running $SCRIPT_DIR/dotfiles but config dotfiles_repo is $X; using $X"` and re-exec `"$X/dotfiles" "$@"` **only if** `$X/dotfiles` exists and `DOTFILES_REEXEC` is unset (set `DOTFILES_REEXEC=1` for the exec).
+  - `DOTFILES_REPO`: always `SCRIPT_DIR`, the repo whose code is running. The config's `dotfiles_repo` must name an existing directory or the command aborts ("dotfiles repo not found: X"). When it names a different directory from `SCRIPT_DIR`, log `log_warn "Running $SCRIPT_DIR/dotfiles but config dotfiles_repo is $X"` and continue with `SCRIPT_DIR`; there is no re-exec. The config key matters mainly to `push`, which reads the remote's value, and to `init` in sub-project 3.
   - `HOSTS_REPO`: flag > env > config > the default path if that directory exists > empty. A configured or flagged path that doesn't exist aborts (existing message).
   - `HOSTNAME_ARG`: flag > config `hostname` > empty, which keeps the `hosts_local_name` fallback.
   - `PROFILE_ARG`: flag > config `profile` > empty.
