@@ -12,6 +12,7 @@ source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/backup.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/remote.sh"
+source "$ROOT_DIR/lib/overlay.sh"
 
 # Configuration
 CONFIG_FILE="$APP_DIR/config.yaml"
@@ -25,6 +26,13 @@ MAX_BACKUPS=3
 declare -a CONFIG_FILES=()
 declare -a CONFIG_DESTS=()
 declare -a CONFIG_MODES=()
+
+# Staging directory (--stage, or built by prepare_stage)
+STAGE_DIR=""
+STAGING_ENABLED=true   # false for apps without config.yaml (packages)
+
+# Per-run count of files that failed to deploy
+FILE_FAILURES=0
 
 # Flags
 DRY_RUN=false
@@ -182,15 +190,61 @@ check_requirements() {
 }
 
 # Path of the file to deploy for a config src
-installer_src() { echo "$FILES_DIR/$1"; }
+installer_src() {
+    if [[ -n "$STAGE_DIR" ]]; then
+        echo "$STAGE_DIR/files/$1"
+    else
+        echo "$FILES_DIR/$1"
+    fi
+}
 
-# Strategy for a config src
-installer_strategy() { echo replace; }
+# Strategy for a config src (replace unless the stage says otherwise)
+installer_strategy() {
+    local src strategy
+    if [[ -n "$STAGE_DIR" ]]; then
+        while read -r src strategy; do
+            if [[ "$src" == "$1" ]]; then
+                echo "$strategy"
+                return 0
+            fi
+        done < "$STAGE_DIR/strategies"
+    fi
+    echo replace
+}
 
-# Copy one file into place
+# True if staging could not compose this src
+installer_is_skipped() {
+    [[ -n "$STAGE_DIR" ]] && grep -qxF "$1" "$STAGE_DIR/skip"
+}
+
+# Count a failed file and report it to setup.sh
+record_file_failure() {
+    FILE_FAILURES=$((FILE_FAILURES + 1))
+    if [[ -n "${DOTFILES_FAILURES_FILE:-}" ]]; then
+        echo "$(basename "$APP_DIR")/$1" >> "$DOTFILES_FAILURES_FILE"
+    fi
+}
+
+# Copy (replace) or merge (JSON) one file into place
 # Usage: deploy_file_default src dest mode strategy install|upgrade
 deploy_file_default() {
-    local src="$1" dest="$2" mode="$3" verb="${5:-install}"
+    local src="$1" dest="$2" mode="$3" strategy="${4:-replace}" verb="${5:-install}"
+
+    if [[ "$strategy" == merge ]]; then
+        if is_dry_run; then
+            log_info "[DRY-RUN] Would merge: $src -> $dest (mode: $mode)"
+            return 0
+        fi
+        log_info "Merging: $(basename "$dest")"
+        ensure_dir "$(dirname "$dest")" || return 1
+        if [[ -s "$dest" ]]; then
+            overlay_json_merge "$dest" "$dest" "$src" || return 1
+        else
+            copy_file "$src" "$dest" || return 1
+        fi
+        set_permissions "$dest" "$mode"
+        return
+    fi
 
     if [[ "$verb" == upgrade ]]; then
         if is_dry_run; then
@@ -209,10 +263,12 @@ deploy_file_default() {
     set_permissions "$dest" "$mode"
 }
 
-# Deploy every config file
+# Deploy every config file. A failed file is counted and skipped; the
+# others continue. A missing source aborts.
 # Usage: deploy_all_files install|upgrade
 deploy_all_files() {
     local verb="$1" i
+    FILE_FAILURES=0
     for i in "${!CONFIG_FILES[@]}"; do
         local name="${CONFIG_FILES[$i]}"
         local dest="${CONFIG_DESTS[$i]}"
@@ -220,12 +276,56 @@ deploy_all_files() {
         local src
         src=$(installer_src "$name")
 
+        if installer_is_skipped "$name"; then
+            log_error "Skipping $name: its repo layers could not be merged"
+            record_file_failure "$name"
+            continue
+        fi
         if [[ ! -f "$src" ]]; then
             log_error "Source file not found: $src"
             return 1
         fi
-        deploy_file "$src" "$dest" "$mode" "$(installer_strategy "$name")" "$verb" || return 1
+        if ! deploy_file "$src" "$dest" "$mode" "$(installer_strategy "$name")" "$verb"; then
+            log_error "Failed to deploy $name; left $dest as it was"
+            record_file_failure "$name"
+        fi
     done
+}
+
+# Version recorded in state: incomplete when any file failed
+installed_version() {
+    if [[ $FILE_FAILURES -gt 0 ]]; then
+        echo incomplete
+    else
+        echo "$APP_VERSION"
+    fi
+}
+
+# Version of what would be deployed
+installer_version() {
+    if [[ -n "$STAGE_DIR" ]]; then
+        cat "$STAGE_DIR/version"
+    elif [[ -f "$APP_DIR/.version" ]]; then
+        cat "$APP_DIR/.version"
+    else
+        (cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    fi
+}
+
+# Commands that deploy files need a stage
+command_needs_stage() {
+    list_contains "$COMMAND" deploy install upgrade diff
+}
+
+# Stage this app's own files (dotfiles layer only) when no --stage was given
+prepare_stage() {
+    [[ "$STAGING_ENABLED" == true && -z "$STAGE_DIR" ]] || return 0
+    local tmp
+    tmp=$(mktemp -d) || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" EXIT
+    STAGE_DIR="$tmp/stage"
+    overlay_stage_app "$APP_DIR" "$STAGE_DIR" /dev/null
 }
 
 # Deploy operation (idempotent: install if new, upgrade if exists)
@@ -278,7 +378,7 @@ cmd_install() {
     # Create state file
     if ! is_dry_run; then
         state_init || return 1
-        state_create "$APP_NAME" "$APP_VERSION" "$BACKUP_DIR" "${CONFIG_DESTS[@]}" || return 1
+        state_create "$APP_NAME" "$(installed_version)" "$BACKUP_DIR" "${CONFIG_DESTS[@]}" || return 1
     fi
 
     app_post_files install || return 1
@@ -288,6 +388,10 @@ cmd_install() {
 
     app_post_install install
 
+    if [[ $FILE_FAILURES -gt 0 ]]; then
+        log_error "$APP_NAME installed with $FILE_FAILURES failed file(s)"
+        return 1
+    fi
     log_success "$APP_NAME installed successfully!"
     return 0
 }
@@ -351,7 +455,7 @@ cmd_upgrade() {
 
     # Update state file (version + file list)
     if ! is_dry_run; then
-        state_set_version "$APP_NAME" "$APP_VERSION"
+        state_set_version "$APP_NAME" "$(installed_version)"
         state_update_files "$APP_NAME" "${CONFIG_DESTS[@]}"
     fi
 
@@ -362,6 +466,10 @@ cmd_upgrade() {
 
     app_post_install upgrade
 
+    if [[ $FILE_FAILURES -gt 0 ]]; then
+        log_error "$APP_NAME upgraded with $FILE_FAILURES failed file(s)"
+        return 1
+    fi
     log_success "$APP_NAME upgraded successfully!"
     return 0
 }
@@ -575,8 +683,9 @@ cmd_diff() {
     local has_diff=false
 
     for i in "${!CONFIG_FILES[@]}"; do
-        local src="$FILES_DIR/${CONFIG_FILES[$i]}"
-        local dest="${CONFIG_DESTS[$i]}"
+        local name="${CONFIG_FILES[$i]}"
+        local src dest="${CONFIG_DESTS[$i]}"
+        src=$(installer_src "$name")
 
         if [[ ! -f "$dest" ]]; then
             echo "File not installed: $dest"
@@ -584,12 +693,21 @@ cmd_diff() {
             continue
         fi
 
+        local want="$src" tmp=""
+        if [[ "$(installer_strategy "$name")" == merge && -s "$dest" ]]; then
+            tmp=$(mktemp)
+            if overlay_json_merge "$tmp" "$dest" "$src"; then
+                want="$tmp"
+            fi
+        fi
+
         echo "=== $(basename "$dest") ==="
-        if diff -u "$dest" "$src" 2>/dev/null; then
+        if diff -u "$dest" "$want" 2>/dev/null; then
             echo "No differences"
         else
             has_diff=true
         fi
+        [[ -n "$tmp" ]] && rm -f "$tmp"
         echo
     done
 
@@ -653,6 +771,7 @@ Options:
   --verbose            Verbose output
   --quiet              Minimal output
   --force              Force operation without prompts
+  --stage DIR          Deploy files composed by setup.sh (internal)
   --shell-scripts-dir PATH   Set drop-in directory (default: ~/.bashrc.d)
 
 Examples:
@@ -790,6 +909,18 @@ parse_args() {
                 SHELL_SCRIPTS_DIR=$(abs_path "$2")
                 shift 2
                 ;;
+            --stage)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --stage requires a directory argument" >&2
+                    exit 1
+                fi
+                if [[ ! -f "$2/version" ]]; then
+                    echo "Error: Not a staging directory: $2" >&2
+                    exit 1
+                fi
+                STAGE_DIR=$(abs_path "$2")
+                shift 2
+                ;;
             *)
                 if app_parse_arg "$@"; then
                     shift "$APP_ARG_SHIFT"
@@ -812,12 +943,16 @@ execute_remote() {
 
     app_pre_remote
 
-    # Skip if remote is already at current version
-    remote_skip_if_current "$APP_DIR" "$COMMAND" "$FORCE" && exit 0
+    local app_name version
+    app_name=$(basename "$APP_DIR")
+    version=$(installer_version)
 
-    # Package installer
+    # Skip if remote is already at current version
+    remote_skip_if_current "$app_name" "$COMMAND" "$FORCE" "$version" && exit 0
+
+    # Package installer (with the stage, if any)
     local package_file
-    package_file=$(remote_package_installer "$APP_DIR") || exit 1
+    package_file=$(remote_package_installer "$APP_DIR" "$version" "$STAGE_DIR") || exit 1
 
     # Deploy to remote
     remote_deploy_installer "$package_file" || {
@@ -825,7 +960,7 @@ execute_remote() {
         exit 1
     }
 
-    # Build remote arguments (exclude --remote)
+    # Build remote arguments (drop --remote, --stage and app-specific local-only flags)
     local remote_args=()
     local skip_next=false
 
@@ -835,7 +970,7 @@ execute_remote() {
             continue
         fi
 
-        if [[ "$arg" == "--remote" ]] || list_contains "$arg" "${APP_REMOTE_DROP_ARGS[@]}"; then
+        if list_contains "$arg" --remote --stage "${APP_REMOTE_DROP_ARGS[@]}"; then
             skip_next=true
             continue
         fi
@@ -843,10 +978,11 @@ execute_remote() {
         remote_args+=("$arg")
     done
 
-    # Execute installer on remote
-    local app_name
-    app_name=$(basename "$APP_DIR")
+    if [[ -n "$STAGE_DIR" ]]; then
+        remote_args+=(--stage "$REMOTE_TMP_DIR/$app_name/.stage")
+    fi
 
+    # Execute installer on remote
     remote_run_installer "$app_name" "${remote_args[@]}"
     local exit_code=$?
 
@@ -865,6 +1001,11 @@ installer_main() {
     # Initialize logging
     log_init "$@"
 
+    # Compose files to deploy (before --remote, so the stage ships with it)
+    if command_needs_stage; then
+        prepare_stage || exit 1
+    fi
+
     # Handle remote mode
     if [[ "$REMOTE_MODE" == true ]]; then
         execute_remote "$@"
@@ -875,13 +1016,7 @@ installer_main() {
     load_config || exit 1
     app_after_load_config || exit 1
 
-    # Set version from git hash
-    # Use .version file if present (remote deploys), otherwise git hash
-    if [[ -f "$APP_DIR/.version" ]]; then
-        APP_VERSION=$(< "$APP_DIR/.version")
-    else
-        APP_VERSION=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    fi
+    APP_VERSION=$(installer_version)
 
     # Initialize state
     state_init || exit 1

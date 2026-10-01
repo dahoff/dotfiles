@@ -218,14 +218,14 @@ else
     fail "setup.sh status failed"
 fi
 
-# Test 20: Version stored on install (state file contains git hash)
+# Test 20: Version stored on install is a content hash
 info "Test 20: Version stored on install"
 STATE_FILE="$STATE_DIR/apps/bash.yaml"
-GIT_HASH=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-if grep -q "version: $GIT_HASH" "$STATE_FILE"; then
-    pass "State file contains git hash ($GIT_HASH)"
+VERSION=$(grep "^  version:" "$STATE_FILE" | awk '{print $2}')
+if [[ "$VERSION" =~ ^[0-9a-f]{12}$ ]]; then
+    pass "State file contains content hash ($VERSION)"
 else
-    fail "State file should contain git hash"
+    fail "State file should contain a 12-char content hash, got '$VERSION'"
 fi
 
 # Test 21: Upgrade skips when current (same version)

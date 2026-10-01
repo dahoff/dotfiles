@@ -6,6 +6,7 @@ files:
   - src: settings.json
     dest: ~/.claude/settings.json
     mode: '0644'
+    strategy: merge
   - src: settings.local.json
     dest: ~/.claude/settings.local.json
     mode: '0644'

@@ -11,6 +11,7 @@ source "$(dirname "$APP_DIR")/lib/installer.sh"
 APP_NAME="packages"
 FILES_DIR="$APP_DIR"   # drop-in paths are relative to packages/
 UPGRADE_ALWAYS=true    # custom installs are re-run on every upgrade
+STAGING_ENABLED=false   # no config.yaml; drop-ins come from the profile
 
 # Custom installs (loaded from active profile)
 declare -a CUSTOM_NAMES=()

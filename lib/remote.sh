@@ -118,39 +118,42 @@ remote_dir_exists() {
 }
 
 # Package installer for remote deployment
-# Usage: remote_package_installer app_dir
+# Usage: remote_package_installer app_dir version [stage_dir]
+# The stage directory, if given, ships as <app>/.stage
 remote_package_installer() {
     local app_dir="$1"
-    local app_name
-    local package_file
+    local version="$2"
+    local stage_dir="${3:-}"
+    local app_name root_dir build package_file
 
     app_name=$(basename "$app_dir")
+    root_dir=$(dirname "$app_dir")
     package_file="/tmp/${app_name}-installer-$(timestamp).tar.gz"
 
     log_info "Packaging installer: $app_name"
 
-    # Create package with app files and libraries
-    local root_dir
-    root_dir=$(dirname "$app_dir")
-
-    # Write version file so remote installs know the current version
-    # (remote has no .git directory, so git rev-parse would fail)
-    local version
-    version=$(cd "$root_dir" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    echo "$version" > "$app_dir/.version"
-
-    tar -czf "$package_file" \
-        -C "$root_dir" \
-        "$(basename "$app_dir")" \
-        lib/ \
-        2>/dev/null || {
-        rm -f "$app_dir/.version"
+    build=$(mktemp -d) || return 1
+    if ! cp -R "$app_dir" "$build/$app_name" || ! cp -R "$root_dir/lib" "$build/lib"; then
+        rm -rf "$build"
         log_error "Failed to create package"
         return 1
-    }
+    fi
 
-    # Clean up version file from local tree
-    rm -f "$app_dir/.version"
+    # Remote has no .git directory, so ship the version
+    echo "$version" > "$build/$app_name/.version"
+
+    if [[ -n "$stage_dir" ]] && ! cp -R "$stage_dir" "$build/$app_name/.stage"; then
+        rm -rf "$build"
+        log_error "Failed to add staged files to package"
+        return 1
+    fi
+
+    if ! tar -czf "$package_file" -C "$build" "$app_name" lib 2>/dev/null; then
+        rm -rf "$build"
+        log_error "Failed to create package"
+        return 1
+    fi
+    rm -rf "$build"
 
     log_debug "Package created: $package_file"
     echo "$package_file"
@@ -237,23 +240,17 @@ remote_get_version() {
 }
 
 # Check if remote is already up to date, skip packaging if so
-# Usage: remote_skip_if_current app_dir command force
-# Exits 0 if remote is current and should be skipped, returns 1 otherwise
+# Usage: remote_skip_if_current app_name command force local_version
+# Returns 0 if remote is current and should be skipped, 1 otherwise
 remote_skip_if_current() {
-    local app_dir="$1"
+    local app_name="$1"
     local command="$2"
     local force="$3"
-    local app_name
-    app_name=$(basename "$app_dir")
-    local root_dir
-    root_dir=$(dirname "$app_dir")
+    local local_version="$4"
 
     if [[ "$command" != "deploy" && "$command" != "upgrade" ]] || [[ "$force" == true ]]; then
         return 1
     fi
-
-    local local_version
-    local_version=$(cd "$root_dir" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
     local remote_version
     remote_version=$(remote_get_version "$app_name")

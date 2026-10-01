@@ -80,7 +80,7 @@ echo
 # Test 2: Create package
 info "Test 2: Testing package creation"
 cd tmux
-PACKAGE=$(source ../lib/logging.sh; source ../lib/utils.sh; source ../lib/remote.sh; remote_package_installer "$PWD" 2>/dev/null)
+PACKAGE=$(source ../lib/logging.sh; source ../lib/utils.sh; source ../lib/remote.sh; remote_package_installer "$PWD" "$(git rev-parse --short HEAD)" 2>/dev/null)
 if [[ -f "$PACKAGE" ]]; then
     pass "Package created: $PACKAGE"
 else
