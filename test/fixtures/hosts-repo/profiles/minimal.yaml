@@ -1,0 +1,4 @@
+# Builds on dotfiles' minimal (extending its own name continues in dotfiles)
+extends: minimal
+exclude:
+  - tree

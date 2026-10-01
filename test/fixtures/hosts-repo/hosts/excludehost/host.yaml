@@ -1,0 +1,7 @@
+profile: base
+exclude:
+  - scripts
+extra:
+  - name: vim
+    config:
+      dir: vim

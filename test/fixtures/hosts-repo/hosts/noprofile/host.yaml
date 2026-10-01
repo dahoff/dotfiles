@@ -1,0 +1,3 @@
+# Missing profile: on purpose
+exclude:
+  - scripts

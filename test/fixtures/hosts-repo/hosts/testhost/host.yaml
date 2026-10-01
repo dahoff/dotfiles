@@ -1,0 +1,3 @@
+profile: base
+files:
+  claude/settings.local.json: replace

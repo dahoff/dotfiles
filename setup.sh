@@ -12,6 +12,8 @@ source "$SCRIPT_DIR/lib/logging.sh"
 source "$SCRIPT_DIR/lib/yaml.sh"
 source "$SCRIPT_DIR/lib/utils.sh"
 source "$SCRIPT_DIR/lib/remote.sh"
+source "$SCRIPT_DIR/lib/hosts.sh"
+source "$SCRIPT_DIR/lib/overlay.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
@@ -32,6 +34,14 @@ COMMAND=""
 REMOTE_HOST_ARG=""
 HOSTS_FILE=""
 PROFILE_ARG=""
+HOSTS_REPO="${DOTFILES_HOSTS_REPO:-}"
+HOSTNAME_ARG=""
+
+# Resolution results (set by load_packages_for_profile)
+RESOLVED_PROFILE=""
+declare -a HOSTS_PROFILE_CHAIN=()   # hosts-repo profiles in the chain, base-most first
+HOST_YAML=""
+OVERLAY_HOST=""
 declare -a GLOBAL_FLAGS=()
 
 # Result tracking: "host|item|ok" or "host|item|FAIL"
@@ -182,55 +192,21 @@ load_manifest() {
     return 0
 }
 
-# Resolve profile name to file path
+# Resolve profile name to file path (hosts repo first unless skip_hosts)
+# Usage: resolve_profile_path name [skip_hosts]
 resolve_profile_path() {
-    local name="$1"
-    echo "$PROFILES_DIR/${name}.yaml"
+    hosts_resolve_profile_path "$PROFILES_DIR" "$HOSTS_REPO" "$1" "${2:-false}"
 }
 
-# Load packages from a profile file into PKG_* arrays
-# Handles 'extends', 'exclude'/'include', and 'extra' directives
-load_profile() {
-    local name="$1"
-    local profile_path
-    profile_path=$(resolve_profile_path "$name")
-
-    if [[ ! -f "$profile_path" ]]; then
-        log_error "Profile not found: $profile_path"
-        return 1
-    fi
-
-    # Check for extends directive and packages section
-    local extends_name=""
+# Apply exclude/include/extra from a profile or host.yaml to PKG_* arrays
+# Usage: apply_profile_modifiers file label
+apply_profile_modifiers() {
+    local file="$1" label="$2"
     local -a exclude_list=()
     local -a include_list=()
-    local has_packages=false
     local has_extra=false
-
-    while IFS= read -r line; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$line" ]] && continue
-
-        if [[ "$line" =~ ^extends:[[:space:]]*(.*) ]]; then
-            extends_name="${BASH_REMATCH[1]}"
-            extends_name=$(echo "$extends_name" | sed 's/[[:space:]]*$//')
-        elif [[ "$line" =~ ^packages: ]]; then
-            has_packages=true
-        elif [[ "$line" =~ ^extra: ]]; then
-            has_extra=true
-        fi
-    done < "$profile_path"
-
-    if [[ "$has_packages" == true ]]; then
-        # Form 1: full package list — parse directly
-        load_manifest "$profile_path"
-        return $?
-    fi
-
-    if [[ -z "$extends_name" ]]; then
-        log_error "Profile '$name' has no 'packages:' list and no 'extends:' directive"
-        return 1
-    fi
+    local line
+    grep -q '^extra:' "$file" && has_extra=true
 
     # Parse exclude/include lists
     local in_exclude=false
@@ -261,10 +237,7 @@ load_profile() {
             item=$(echo "$item" | sed 's/[[:space:]]*$//')
             include_list+=("$item")
         fi
-    done < "$profile_path"
-
-    # Recursively load the parent profile
-    load_profile "$extends_name" || return 1
+    done < "$file"
 
     # Apply exclude filter
     if [[ ${#exclude_list[@]} -gt 0 ]]; then
@@ -336,7 +309,7 @@ load_profile() {
         # Create a temp file with extra: renamed to packages: for reuse of load_manifest
         local tmp_extra
         tmp_extra=$(mktemp)
-        sed 's/^extra:/packages:/' "$profile_path" > "$tmp_extra"
+        sed 's/^extra:/packages:/' "$file" > "$tmp_extra"
 
         # Save current arrays
         local -a save_names=("${PKG_NAMES[@]}")
@@ -376,30 +349,125 @@ load_profile() {
     fi
 
     if [[ ${#PKG_NAMES[@]} -eq 0 ]]; then
-        log_error "No packages remaining after applying profile '$name' filters"
+        log_error "No packages remaining after applying profile '$label' filters"
+        return 1
+    fi
+    return 0
+}
+
+# Load packages from a profile file into PKG_* arrays
+# Handles 'extends', 'exclude'/'include', and 'extra' directives.
+# A hosts-repo profile that extends its own name continues the lookup in dotfiles.
+# Usage: load_profile name [skip_hosts] [depth]
+load_profile() {
+    local name="$1" skip_hosts="${2:-false}" depth="${3:-0}"
+
+    if [[ $depth -gt 10 ]]; then
+        log_error "Profile chain too deep at '$name' (extends cycle?)"
         return 1
     fi
 
+    local profile_path
+    profile_path=$(resolve_profile_path "$name" "$skip_hosts")
+
+    if [[ ! -f "$profile_path" ]]; then
+        log_error "Profile not found: $profile_path"
+        return 1
+    fi
+
+    local from_hosts=false
+    if [[ -n "$HOSTS_REPO" && "$profile_path" == "$HOSTS_REPO/profiles/"* ]]; then
+        from_hosts=true
+    fi
+
+    local extends_name=""
+    local has_packages=false
+    local line
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$line" ]] && continue
+
+        if [[ "$line" =~ ^extends:[[:space:]]*(.*) ]]; then
+            extends_name="${BASH_REMATCH[1]}"
+            extends_name=$(echo "$extends_name" | sed 's/[[:space:]]*$//')
+        elif [[ "$line" =~ ^packages: ]]; then
+            has_packages=true
+        fi
+    done < "$profile_path"
+
+    if [[ "$has_packages" == true ]]; then
+        # Form 1: full package list
+        load_manifest "$profile_path" || return 1
+    else
+        if [[ -z "$extends_name" ]]; then
+            log_error "Profile '$name' has no 'packages:' list and no 'extends:' directive"
+            return 1
+        fi
+        local parent_skip=false
+        if [[ "$from_hosts" == true && "$extends_name" == "$name" ]]; then
+            parent_skip=true
+        fi
+        load_profile "$extends_name" "$parent_skip" $((depth + 1)) || return 1
+        apply_profile_modifiers "$profile_path" "$name" || return 1
+    fi
+
+    if [[ "$from_hosts" == true ]]; then
+        HOSTS_PROFILE_CHAIN+=("$name")
+    fi
     log_debug "Profile '$name': ${#PKG_NAMES[@]} package(s) after filtering"
     return 0
 }
 
-# Load packages for a given profile name
+# Resolve host and profile, load packages into PKG_* arrays
+# Usage: load_packages_for_profile profile_arg hostname
+#   profile_arg: explicit profile ("" = not given)
+# Sets RESOLVED_PROFILE, HOSTS_PROFILE_CHAIN, HOST_YAML
 load_packages_for_profile() {
-    local profile="${1:-complete}"
+    local profile_arg="$1" hostname="$2"
 
     reset_pkg_arrays
+    HOSTS_PROFILE_CHAIN=()
+    HOST_YAML=""
 
-    if [[ -d "$PROFILES_DIR" ]]; then
-        load_profile "$profile"
-    else
+    if [[ ! -d "$PROFILES_DIR" ]]; then
         log_error "No profiles directory found: $PROFILES_DIR"
         return 1
     fi
+
+    if [[ -n "$HOSTS_REPO" ]]; then
+        local host_dir="$HOSTS_REPO/hosts/$hostname"
+        if [[ -f "$host_dir/host.yaml" ]]; then
+            HOST_YAML="$host_dir/host.yaml"
+        elif [[ -d "$host_dir" ]]; then
+            log_warn "Ignoring hosts/$hostname/: no host.yaml"
+        fi
+    fi
+
+    if [[ -z "$HOST_YAML" ]]; then
+        RESOLVED_PROFILE="${profile_arg:-complete}"
+        load_profile "$RESOLVED_PROFILE"
+        return
+    fi
+
+    local host_profile
+    host_profile=$(hosts_read_scalar "$HOST_YAML" profile)
+    if [[ -z "$host_profile" ]]; then
+        log_error "$HOST_YAML has no 'profile:'"
+        return 1
+    fi
+
+    RESOLVED_PROFILE="$host_profile"
+    if [[ -n "$profile_arg" ]]; then
+        log_warn "Explicit profile '$profile_arg' overrides profile '$host_profile' from hosts/$hostname/host.yaml"
+        RESOLVED_PROFILE="$profile_arg"
+    fi
+
+    load_profile "$RESOLVED_PROFILE" || return 1
+    apply_profile_modifiers "$HOST_YAML" "host $hostname"
 }
 
 # Load hosts from hosts file
-# Outputs lines of "host|profile" (profile defaults to "complete")
+# Outputs lines of "host|profile" (profile empty when not given)
 load_hosts() {
     local hosts_file="$1"
     local hosts=()
@@ -411,7 +479,7 @@ load_hosts() {
 
     local in_hosts=false
     local current_host=""
-    local current_profile="complete"
+    local current_profile=""
 
     while IFS= read -r line; do
         # Skip comments and empty lines
@@ -432,7 +500,7 @@ load_hosts() {
                 fi
                 current_host="${BASH_REMATCH[1]}"
                 current_host=$(echo "$current_host" | sed 's/[[:space:]]*$//')
-                current_profile="complete"
+                current_profile=""
             # Profile field within a host entry
             elif [[ "$line" =~ ^[[:space:]]+profile:[[:space:]]*(.*) ]]; then
                 current_profile="${BASH_REMATCH[1]}"
@@ -444,7 +512,7 @@ load_hosts() {
                 fi
                 current_host="${BASH_REMATCH[1]}"
                 current_host=$(echo "$current_host" | sed 's/[[:space:]]*$//')
-                current_profile="complete"
+                current_profile=""
             elif [[ "$line" =~ ^[[:alpha:]] ]]; then
                 break
             fi
@@ -744,12 +812,24 @@ run_phase_configs() {
 # Usage: run_all [host] [profile]
 run_all() {
     local host="${1:-}"
-    local profile="${2:-complete}"
+    local profile="${2:-}"
     local target="${host:-local}"
 
+    if [[ -n "$HOSTNAME_ARG" ]]; then
+        OVERLAY_HOST="$HOSTNAME_ARG"
+    elif [[ -n "$host" ]]; then
+        OVERLAY_HOST=$(hosts_normalize_name "$host")
+    else
+        OVERLAY_HOST=$(hostname -s)
+    fi
+
     # Load profile-specific package list
-    load_packages_for_profile "$profile" || return 1
-    log_info "[$target] Using profile '$profile' (${#PKG_NAMES[@]} package(s))"
+    load_packages_for_profile "$profile" "$OVERLAY_HOST" || return 1
+    log_info "[$target] Using profile '$RESOLVED_PROFILE' (${#PKG_NAMES[@]} package(s))"
+    if [[ -n "$HOST_YAML" ]]; then
+        log_info "[$target] Host directory: hosts/$OVERLAY_HOST"
+    fi
+    log_info "[$target] Packages: ${PKG_NAMES[*]}"
 
     # For remote hosts, check connectivity first
     if [[ -n "$host" ]]; then
@@ -835,7 +915,13 @@ Target options (mutually exclusive):
 Profile options:
   --profile NAME       Use a specific profile (default: complete)
                        Profiles are defined in profiles/<name>.yaml
-                       Ignored when using --hosts-file (hosts define their own profiles)
+                       With --hosts-file, a host entry's profile: acts like --profile
+
+Hosts repo options:
+  --hosts-repo PATH    dotfiles-hosts checkout (default: env DOTFILES_HOSTS_REPO)
+                       Profiles are looked up there first, then in profiles/
+  --hostname NAME      Host directory hosts/NAME/ to apply (default: hostname -s;
+                       with --host, the host without user@ and domain)
 
 Options (passed through to each app's installer):
   --dry-run            Show what would be done without making changes
@@ -935,6 +1021,22 @@ parse_args() {
                 PROFILE_ARG="$2"
                 shift 2
                 ;;
+            --hosts-repo)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --hosts-repo requires a path argument" >&2
+                    exit 1
+                fi
+                HOSTS_REPO="$2"
+                shift 2
+                ;;
+            --hostname)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --hostname requires a name argument" >&2
+                    exit 1
+                fi
+                HOSTNAME_ARG="$2"
+                shift 2
+                ;;
             --continue-on-error)
                 CONTINUE_ON_ERROR=true
                 shift
@@ -971,6 +1073,11 @@ parse_args() {
                 ;;
         esac
     done
+
+    if [[ -n "$HOSTNAME_ARG" && -n "$HOSTS_FILE" ]]; then
+        echo "Error: --hostname and --hosts-file are mutually exclusive" >&2
+        exit 1
+    fi
 }
 
 # Main
@@ -984,6 +1091,15 @@ main() {
     if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then
         usage
         exit 0
+    fi
+
+    # Validate hosts repo before any changes
+    if [[ -n "$HOSTS_REPO" ]]; then
+        if [[ ! -d "$HOSTS_REPO" ]]; then
+            log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
+            exit 1
+        fi
+        HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
     fi
 
     # Determine execution mode
@@ -1012,11 +1128,11 @@ main() {
         done
     elif [[ -n "$REMOTE_HOST_ARG" ]]; then
         # Single remote host
-        local profile="${PROFILE_ARG:-complete}"
+        local profile="$PROFILE_ARG"
         run_all "$REMOTE_HOST_ARG" "$profile"
     else
         # Local mode
-        local profile="${PROFILE_ARG:-complete}"
+        local profile="$PROFILE_ARG"
         run_all "" "$profile"
     fi
 

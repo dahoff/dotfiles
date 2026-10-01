@@ -1,0 +1,11 @@
+# Config-only package list for overlay tests (no OS packages, no custom installs)
+packages:
+  - name: claude
+    config:
+      dir: claude
+  - name: scripts
+    config:
+      dir: scripts
+
+files:
+  claude/settings.local.json: merge
