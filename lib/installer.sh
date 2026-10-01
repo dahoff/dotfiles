@@ -11,7 +11,6 @@ source "$ROOT_DIR/lib/yaml.sh"
 source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/backup.sh"
 source "$ROOT_DIR/lib/state.sh"
-source "$ROOT_DIR/lib/remote.sh"
 source "$ROOT_DIR/lib/overlay.sh"
 
 # Configuration
@@ -39,14 +38,12 @@ DRY_RUN=false
 NO_BACKUP=false
 TEST_MODE=false
 FORCE=false
-REMOTE_MODE=false
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
 
 # App switches (apps override after sourcing)
 UPGRADE_ALWAYS=false               # true: upgrade never skips on matching version
-declare -a APP_REMOTE_DROP_ARGS=() # "--flag value" options not forwarded with --remote
 
 # Set by app_parse_arg: number of arguments it consumed
 APP_ARG_SHIFT=0
@@ -73,8 +70,6 @@ app_post_install() { :; }
 app_up_to_date() { :; }
 # uninstall: after files were restored/removed, before state is removed
 app_post_uninstall() { :; }
-# --remote: before packaging
-app_pre_remote() { :; }
 
 # Deploy one file; apps may override and call deploy_file_default for the rest
 # Usage: deploy_file src dest mode strategy install|upgrade
@@ -217,7 +212,7 @@ installer_is_skipped() {
     [[ -n "$STAGE_DIR" ]] && grep -qxF "$1" "$STAGE_DIR/skip"
 }
 
-# Count a failed file and report it to setup.sh
+# Count a failed file and report it to dotfiles
 record_file_failure() {
     FILE_FAILURES=$((FILE_FAILURES + 1))
     if [[ -n "${DOTFILES_FAILURES_FILE:-}" ]]; then
@@ -305,8 +300,6 @@ installed_version() {
 installer_version() {
     if [[ -n "$STAGE_DIR" ]]; then
         cat "$STAGE_DIR/version"
-    elif [[ -f "$APP_DIR/.version" ]]; then
-        cat "$APP_DIR/.version"
     else
         (cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     fi
@@ -763,7 +756,6 @@ Commands:
   help                 Show this help message
 
 Options:
-  --remote HOST        Execute on remote host (user@host or host)
   --dry-run            Show what would be done without making changes
   --test-mode          Run in test mode (sandbox)
   --no-backup          Skip creating backups
@@ -771,7 +763,7 @@ Options:
   --verbose            Verbose output
   --quiet              Minimal output
   --force              Force operation without prompts
-  --stage DIR          Deploy files composed by setup.sh (internal)
+  --stage DIR          Deploy files composed by dotfiles (internal)
   --shell-scripts-dir PATH   Set drop-in directory (default: ~/.bashrc.d)
 
 Examples:
@@ -780,8 +772,6 @@ Examples:
   $0 rollback
   $0 rollback --to 20240225_120000
   $0 rollback --to original
-  $0 install --remote user@hostname
-  $0 status --remote hostname
 
 EOF
     app_usage
@@ -848,15 +838,6 @@ parse_args() {
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --remote)
-                if [[ $# -lt 2 || "$2" == --* ]]; then
-                    echo "Error: --remote requires a host argument" >&2
-                    exit 1
-                fi
-                REMOTE_MODE=true
-                remote_parse_host "$2"
-                shift 2
-                ;;
             --dry-run)
                 DRY_RUN=true
                 export DRY_RUN
@@ -934,65 +915,6 @@ parse_args() {
     done
 }
 
-# Execute in remote mode
-execute_remote() {
-    log_info "Remote installation mode"
-
-    # Check connection
-    remote_check_connection || exit 1
-
-    app_pre_remote
-
-    local app_name version
-    app_name=$(basename "$APP_DIR")
-    version=$(installer_version)
-
-    # Skip if remote is already at current version
-    remote_skip_if_current "$app_name" "$COMMAND" "$FORCE" "$version" && exit 0
-
-    # Package installer (with the stage, if any)
-    local package_file
-    package_file=$(remote_package_installer "$APP_DIR" "$version" "$STAGE_DIR") || exit 1
-
-    # Deploy to remote
-    remote_deploy_installer "$package_file" || {
-        rm -f "$package_file"
-        exit 1
-    }
-
-    # Build remote arguments (drop --remote, --stage and app-specific local-only flags)
-    local remote_args=()
-    local skip_next=false
-
-    for arg in "$@"; do
-        if [[ "$skip_next" == true ]]; then
-            skip_next=false
-            continue
-        fi
-
-        if list_contains "$arg" --remote --stage "${APP_REMOTE_DROP_ARGS[@]}"; then
-            skip_next=true
-            continue
-        fi
-
-        remote_args+=("$arg")
-    done
-
-    if [[ -n "$STAGE_DIR" ]]; then
-        remote_args+=(--stage "$REMOTE_TMP_DIR/$app_name/.stage")
-    fi
-
-    # Execute installer on remote
-    remote_run_installer "$app_name" "${remote_args[@]}"
-    local exit_code=$?
-
-    # Cleanup
-    rm -f "$package_file"
-    remote_cleanup
-
-    exit $exit_code
-}
-
 # Main
 installer_main() {
     # Parse arguments
@@ -1001,15 +923,9 @@ installer_main() {
     # Initialize logging
     log_init "$@"
 
-    # Compose files to deploy (before --remote, so the stage ships with it)
+    # Compose files to deploy
     if command_needs_stage; then
         prepare_stage || exit 1
-    fi
-
-    # Handle remote mode
-    if [[ "$REMOTE_MODE" == true ]]; then
-        execute_remote "$@"
-        # Never returns (exits in execute_remote)
     fi
 
     # Load configuration

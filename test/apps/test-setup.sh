@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-setup.sh - Setup orchestrator tests
+# test-dotfiles - Setup orchestrator tests
 
 set -euo pipefail
 unset DOTFILES_HOSTS_REPO
@@ -41,12 +41,12 @@ cleanup_test() {
     rm -rf "/tmp/dotfiles-test-$test_id" "/tmp/home-test-$test_id"
 }
 
-# Test 1: setup.sh exists and is executable
-info "Test 1: setup.sh exists and is executable"
-if [[ -x "$ROOT_DIR/setup.sh" ]]; then
-    pass "setup.sh exists and is executable"
+# Test 1: dotfiles exists and is executable
+info "Test 1: dotfiles exists and is executable"
+if [[ -x "$ROOT_DIR/dotfiles" ]]; then
+    pass "dotfiles exists and is executable"
 else
-    fail "setup.sh missing or not executable"
+    fail "dotfiles missing or not executable"
 fi
 
 # Test 2: complete.yaml has packages section with bash and tmux
@@ -71,7 +71,7 @@ fi
 
 # Test 4: help command
 info "Test 4: help command exits 0 and shows usage"
-if output=$(cd "$ROOT_DIR" && ./setup.sh help 2>&1) && echo "$output" | grep -q "Usage:"; then
+if output=$(cd "$ROOT_DIR" && ./dotfiles help 2>&1) && echo "$output" | grep -q "Usage:"; then
     pass "help command works"
 else
     fail "help command failed"
@@ -79,7 +79,7 @@ fi
 
 # Test 5: No args exits non-zero
 info "Test 5: no args exits non-zero"
-if cd "$ROOT_DIR" && ./setup.sh &>/dev/null 2>&1; then
+if cd "$ROOT_DIR" && ./dotfiles &>/dev/null 2>&1; then
     fail "Should have exited non-zero with no args"
 else
     pass "Correctly exits non-zero with no args"
@@ -87,26 +87,22 @@ fi
 
 # Test 6: Invalid command exits non-zero
 info "Test 6: invalid command exits non-zero"
-if cd "$ROOT_DIR" && ./setup.sh boguscmd &>/dev/null 2>&1; then
+if cd "$ROOT_DIR" && ./dotfiles boguscmd &>/dev/null 2>&1; then
     fail "Should have rejected invalid command"
+elif cd "$ROOT_DIR" && ./dotfiles deploy &>/dev/null 2>&1; then
+    fail "Should have rejected the removed 'deploy' command"
 else
-    pass "Correctly rejects invalid command"
+    pass "Correctly rejects invalid command and 'deploy'"
 fi
 
-# Test 7: Mutual exclusion of --host and --hosts-file
-info "Test 7: --host and --hosts-file are mutually exclusive"
-if cd "$ROOT_DIR" && ./setup.sh deploy --host user@server --hosts-file hosts.yaml &>/dev/null 2>&1; then
-    fail "Should have rejected mutual exclusion"
+# Test 7: remote options are gone
+info "Test 7: removed --host option is rejected"
+if output=$(cd "$ROOT_DIR" && ./dotfiles sync --host x 2>&1); then
+    fail "Should have rejected --host"
+elif echo "$output" | grep -q "Unknown option"; then
+    pass "Correctly rejects --host as an unknown option"
 else
-    pass "Correctly rejects --host + --hosts-file"
-fi
-
-# Test 8: Missing hosts file
-info "Test 8: error for nonexistent hosts file"
-if cd "$ROOT_DIR" && ./setup.sh deploy --hosts-file /tmp/nonexistent-hosts-file.yaml &>/dev/null 2>&1; then
-    fail "Should have errored for missing hosts file"
-else
-    pass "Correctly errors for missing hosts file"
+    fail "--host rejected without 'Unknown option': $output"
 fi
 
 # Test 9: app installers use the shared core
@@ -182,41 +178,41 @@ else
     fail "bash deploy idempotent failed"
 fi
 
-# Clean up for setup.sh tests
+# Clean up for dotfiles tests
 ./install.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
 mkdir -p "$TEST_STATE/apps"
 
-# Test 17: setup.sh deploy --dry-run
-info "Test 17: setup.sh deploy --dry-run"
+# Test 17: dotfiles sync --dry-run
+info "Test 17: dotfiles sync --dry-run"
 cd "$ROOT_DIR"
-if ./setup.sh deploy --dry-run &>/dev/null; then
-    pass "setup.sh deploy --dry-run succeeds"
+if ./dotfiles sync --dry-run &>/dev/null; then
+    pass "dotfiles sync --dry-run succeeds"
 else
-    fail "setup.sh deploy --dry-run failed"
+    fail "dotfiles sync --dry-run failed"
 fi
 
-# Test 18: setup.sh deploy --no-backup (full integration)
-info "Test 18: setup.sh deploy --no-backup (full integration)"
+# Test 18: dotfiles sync --no-backup (full integration)
+info "Test 18: dotfiles sync --no-backup (full integration)"
 cd "$ROOT_DIR"
-if ./setup.sh deploy --no-backup &>/dev/null && \
+if ./dotfiles sync --no-backup &>/dev/null && \
    [[ -f "$HOME/.bashrc" ]] && \
    [[ -f "$HOME/.tmux.conf" ]]; then
-    pass "setup.sh deploy installs configs"
+    pass "dotfiles sync installs configs"
 else
-    fail "setup.sh deploy failed"
+    fail "dotfiles sync failed"
 fi
 
-# Test 19: setup.sh status
-info "Test 19: setup.sh status"
+# Test 19: dotfiles status
+info "Test 19: dotfiles status"
 cd "$ROOT_DIR"
-if output=$(./setup.sh status 2>&1) && \
+if output=$(./dotfiles status 2>&1) && \
    echo "$output" | grep -q "Installed"; then
-    pass "setup.sh status shows installed configs"
+    pass "dotfiles status shows installed configs"
 else
-    fail "setup.sh status failed"
+    fail "dotfiles status failed"
 fi
 
 # Test 20: Version stored on install is a content hash
@@ -260,13 +256,13 @@ export PATH="$HOME/.local/bin:$PATH"
 # Verify the check would pass (tool is "installed")
 if command -v lazyssh &>/dev/null; then
     # Deploy should still install the dropin
-    ./setup.sh deploy --no-backup --dry-run &>/dev/null 2>&1
-    OUTPUT=$(./setup.sh deploy --no-backup --dry-run 2>&1)
+    ./dotfiles sync --no-backup --dry-run &>/dev/null 2>&1
+    OUTPUT=$(./dotfiles sync --no-backup --dry-run 2>&1)
     if echo "$OUTPUT" | grep -qi "dropin\|50-lazyssh"; then
         pass "Dropin referenced even when tool already installed"
     else
         # Verify by doing a real deploy and checking the file
-        ./setup.sh deploy --no-backup &>/dev/null 2>&1
+        ./dotfiles sync --no-backup &>/dev/null 2>&1
         if [[ -f "$HOME/.bashrc.d/50-lazyssh.sh" ]]; then
             pass "Dropin installed even when tool already installed"
         else

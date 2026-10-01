@@ -36,7 +36,7 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 
 ### Processing Order
 
-setup.sh processes the unified list in three phases:
+dotfiles processes the unified list in three phases:
 1. **Phase 1: OS packages** — Collect all `apt`/`dnf`/`brew` values, batch into one package manager call.
 2. **Phase 2: Custom installs** — Run each `custom` entry's script (if `check` fails), install dropins.
 3. **Phase 3: Configs** — For each entry with `config.dir`, call `<dir>/install.sh deploy [flags]`.
@@ -143,29 +143,6 @@ post_install:
 
 ---
 
-## Hosts Schema (`hosts.yaml`)
-
-Optional file for multi-host deployment. Maps remote hosts to profiles.
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `hosts` | array of objects | Yes | — | List of remote host definitions. |
-| `hosts[].host` | string | Yes | — | SSH target (e.g., `user@server.example.com`). |
-| `hosts[].profile` | string | No | `"complete"` | Profile for this host. Overrides hosts/<name>/host.yaml's profile (with a warning) when a hosts repo is used. |
-
-Legacy format also supported: plain strings in the `hosts` array are treated as hostnames with the default profile.
-
-**Example:**
-```yaml
-hosts:
-  - host: user@server1.example.com
-    profile: complete
-  - host: user@server2.example.com
-    profile: minimal
-```
-
----
-
 ## Hosts Repo (`dotfiles-hosts`)
 
 Optional data-only repo, given with `--hosts-repo PATH` or env `DOTFILES_HOSTS_REPO`.
@@ -180,8 +157,8 @@ Optional data-only repo, given with `--hosts-repo PATH` or env `DOTFILES_HOSTS_R
 
 ### Resolution
 
-- The host name is `--hostname`, else `hostname -s`. For `--host`/`--hosts-file` targets it is the host entry without `user@` and domain (IPv4 addresses are kept whole).
-- If `hosts/<hostname>/host.yaml` exists, its `profile:` is the base profile. An explicit `--profile` (or a `--hosts-file` entry's `profile:`) wins, with a warning.
+- The host name is `--hostname`, else `hostname -s`.
+- If `hosts/<hostname>/host.yaml` exists, its `profile:` is the base profile. An explicit `--profile` wins, with a warning.
 - A profile name resolves to `dotfiles-hosts/profiles/<name>.yaml` first, then `profiles/<name>.yaml`. A hosts-repo profile that `extends:` its own name continues the lookup in dotfiles.
 - `host.yaml`'s `exclude`/`include`/`extra` apply last.
 
@@ -202,7 +179,7 @@ Layers, lowest to highest: `dotfiles/<app>/files/<src>`, each hosts-repo profile
 `replace`: the highest layer that has the file wins. `merge`: live ⊕ all layers in order.
 In practice the repo layers are pre-merged and then merged onto the live file: live ⊕ (dotfiles ⊕ profiles ⊕ host). This differs from strict left-to-right only when a lower layer sets a scalar or null and a higher layer sets an object at the same path; the result then keeps more live data.
 
-Running an app's `install.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `setup.sh` with the hosts repo to keep host overlays.
+Running an app's `install.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `dotfiles sync` with the hosts repo to keep host overlays.
 Strategy: last declaration among the app `config.yaml`, the hosts-repo profile `files:` maps (base-most first), and `host.yaml` `files:`.
 
 ### Errors

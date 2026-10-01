@@ -1,0 +1,567 @@
+#!/usr/bin/env bash
+# dotfiles - Dotfiles orchestrator
+# Usage: dotfiles <command> [--profile NAME] [options]
+
+set -euo pipefail
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source libraries
+source "$SCRIPT_DIR/lib/logging.sh"
+source "$SCRIPT_DIR/lib/yaml.sh"
+source "$SCRIPT_DIR/lib/utils.sh"
+source "$SCRIPT_DIR/lib/hosts.sh"
+source "$SCRIPT_DIR/lib/overlay.sh"
+source "$SCRIPT_DIR/lib/profile.sh"
+
+# Configuration
+PROFILES_DIR="$SCRIPT_DIR/profiles"
+
+# Parsed package manifest (parallel arrays)
+declare -a PKG_NAMES=()
+declare -a PKG_APT=()
+declare -a PKG_DNF=()
+declare -a PKG_BREW=()
+declare -a PKG_CUSTOM_CHECK=()
+declare -a PKG_CUSTOM_SCRIPT=()
+declare -a PKG_CUSTOM_DROPIN=()
+declare -a PKG_CONFIG_DIR=()
+declare -a PKG_CONFIG_FLAGS=()
+
+# Command and flags
+COMMAND=""
+INSTALLER_CMD=""
+PROFILE_ARG=""
+HOSTS_REPO="${DOTFILES_HOSTS_REPO:-}"
+HOSTNAME_ARG=""
+
+# Resolution results (set by load_packages_for_profile)
+RESOLVED_PROFILE=""
+declare -a HOSTS_PROFILE_CHAIN=()   # hosts-repo profiles in the chain, base-most first
+HOST_YAML=""
+OVERLAY_HOST=""
+
+# Overlay staging (per run_all)
+WORK_DIR=""
+STAGE_ROOT=""
+STRATEGIES_FILE=""
+declare -a LAYER_ROOTS=()
+declare -a GLOBAL_FLAGS=()
+
+# Result tracking: "target|item|ok" or "target|item|FAIL"
+declare -a RESULTS=()
+EXIT_CODE=0
+
+# Cross-module: shell scripts drop-in directory
+SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
+
+# Run a shell command string locally
+# Usage: run_on_target command
+run_on_target() {
+    eval "$@"
+}
+
+# Detect package manager
+detect_pkg_manager() {
+    if run_on_target "command -v apt-get" &>/dev/null; then
+        echo "apt"
+    elif run_on_target "command -v dnf" &>/dev/null; then
+        echo "dnf"
+    elif run_on_target "command -v brew" &>/dev/null; then
+        echo "brew"
+    else
+        log_error "No supported package manager found (tried: apt-get, dnf, brew)"
+        return 1
+    fi
+}
+
+# Check if a package is installed
+is_pkg_installed() {
+    local pkg="$1"
+    local manager="$2"
+    case "$manager" in
+        apt)
+            run_on_target "dpkg -l '$pkg' 2>/dev/null | grep -q '^ii'" && return 0
+            run_on_target "command -v '$pkg'" &>/dev/null && return 0
+            return 1
+            ;;
+        dnf)
+            run_on_target "rpm -q '$pkg'" &>/dev/null && return 0
+            run_on_target "command -v '$pkg'" &>/dev/null && return 0
+            return 1
+            ;;
+        brew)
+            run_on_target "brew list '$pkg'" &>/dev/null
+            ;;
+    esac
+}
+
+# Phase 1: Install all OS packages in one batch
+run_phase_os_packages() {
+    local target="local"
+    local dry_run=false
+    for flag in "${GLOBAL_FLAGS[@]}"; do
+        [[ "$flag" == "--dry-run" ]] && dry_run=true
+    done
+
+    # Detect package manager
+    local pkg_manager
+    pkg_manager=$(detect_pkg_manager) || return 1
+    log_info "[$target] Detected package manager: $pkg_manager"
+
+    # Collect all OS packages for this manager
+    local -a pkg_list=()
+    for idx in "${!PKG_NAMES[@]}"; do
+        local pkg=""
+        case "$pkg_manager" in
+            apt) pkg="${PKG_APT[$idx]}" ;;
+            dnf) pkg="${PKG_DNF[$idx]}" ;;
+            brew) pkg="${PKG_BREW[$idx]}" ;;
+        esac
+        if [[ -n "$pkg" ]]; then
+            pkg_list+=("$pkg")
+        fi
+    done
+
+    if [[ ${#pkg_list[@]} -eq 0 ]]; then
+        log_info "[$target] No OS packages to install"
+        return 0
+    fi
+
+    # Filter to only missing packages 
+    local -a missing=()
+    for pkg in "${pkg_list[@]}"; do
+        if ! is_pkg_installed "$pkg" "$pkg_manager"; then
+            missing+=("$pkg")
+        else
+            log_debug "Already installed: $pkg"
+        fi
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        log_success "[$target] All OS packages already installed"
+        RESULTS+=("$target|os-packages|ok")
+        return 0
+    fi
+
+    log_info "[$target] Packages to install: ${missing[*]}"
+
+    if [[ "$dry_run" == true ]]; then
+        log_info "[$target] [DRY-RUN] Would install ${#missing[@]} package(s) via $pkg_manager"
+        RESULTS+=("$target|os-packages|ok")
+        return 0
+    fi
+
+    case "$pkg_manager" in
+        apt)
+            run_on_target "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
+            ;;
+        dnf)
+            run_on_target "sudo dnf install -y -q ${missing[*]}"
+            ;;
+        brew)
+            run_on_target "brew install ${missing[*]}"
+            ;;
+    esac
+
+    log_success "[$target] Installed ${#missing[@]} OS package(s)"
+    RESULTS+=("$target|os-packages|ok")
+    return 0
+}
+
+# Phase 2: Run custom installs
+run_phase_custom_installs() {
+    local target="local"
+    local dry_run=false
+    for flag in "${GLOBAL_FLAGS[@]}"; do
+        [[ "$flag" == "--dry-run" ]] && dry_run=true
+    done
+
+    local has_custom=false
+    for idx in "${!PKG_NAMES[@]}"; do
+        local name="${PKG_NAMES[$idx]}"
+        local check="${PKG_CUSTOM_CHECK[$idx]}"
+        local script="${PKG_CUSTOM_SCRIPT[$idx]}"
+        local dropin="${PKG_CUSTOM_DROPIN[$idx]}"
+
+        [[ -z "$script" ]] && continue
+        has_custom=true
+
+        # Run install script if tool not already installed 
+        if [[ -n "$check" ]] && run_on_target "$check" &>/dev/null; then
+            log_info "[$target] $name: already installed"
+        elif [[ "$dry_run" == true ]]; then
+            log_info "[$target] [DRY-RUN] Would run: $SCRIPT_DIR/packages/$script"
+        else
+            log_info "[$target] Running custom install: $name"
+
+            local script_path="$SCRIPT_DIR/packages/$script"
+            if [[ ! -x "$script_path" ]]; then
+                log_error "Custom install script not found or not executable: $script_path"
+                RESULTS+=("$target|$name|FAIL")
+                EXIT_CODE=1
+                continue
+            fi
+
+            if bash "$script_path"; then
+                log_success "[$target] Custom install complete: $name"
+            else
+                log_error "[$target] Custom install failed: $name"
+                RESULTS+=("$target|$name|FAIL")
+                EXIT_CODE=1
+                continue
+            fi
+        fi
+
+        # Always install dropin (even if tool was already installed)
+        if [[ -n "$dropin" ]]; then
+            local dropin_src="$SCRIPT_DIR/packages/$dropin"
+            local dropin_dest="$SHELL_SCRIPTS_DIR/$(basename "$dropin")"
+            if [[ -f "$dropin_src" ]]; then
+                if [[ "$dry_run" == true ]]; then
+                    log_info "[$target] [DRY-RUN] Would install dropin: $dropin_dest"
+                else
+                    mkdir -p "$SHELL_SCRIPTS_DIR"
+                    cp "$dropin_src" "$dropin_dest"
+                    chmod 0644 "$dropin_dest"
+                    log_debug "Installed dropin: $dropin_dest"
+                fi
+            fi
+        fi
+    done
+
+    if [[ "$has_custom" == true ]]; then
+        RESULTS+=("$target|custom-installs|ok")
+    fi
+    return 0
+}
+
+# Phase 3: Deploy configs via app installers
+run_phase_configs() {
+    local target="local"
+
+    for idx in "${!PKG_NAMES[@]}"; do
+        local name="${PKG_NAMES[$idx]}"
+        local dir="${PKG_CONFIG_DIR[$idx]}"
+        local flags="${PKG_CONFIG_FLAGS[$idx]}"
+
+        [[ -z "$dir" ]] && continue
+
+        local installer="$SCRIPT_DIR/$dir/install.sh"
+
+        if [[ ! -f "$installer" ]]; then
+            log_error "Installer not found: $installer"
+            RESULTS+=("$target|$name|FAIL")
+            EXIT_CODE=1
+            continue
+        fi
+
+        # Compose this app's files from all layers
+        local -a stage_args=()
+        if [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]]; then
+            local stage="$STAGE_ROOT/apps/$dir"
+            if ! overlay_stage_app "$SCRIPT_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}"; then
+                log_error "[$target] $name: could not stage files"
+                RESULTS+=("$target|$name|FAIL")
+                EXIT_CODE=1
+                continue
+            fi
+            stage_args=(--stage "$stage")
+        fi
+
+        # Build command
+        local cmd_args=("$INSTALLER_CMD")
+
+        cmd_args+=("${stage_args[@]}")
+
+        # Add per-package config flags
+        if [[ -n "$flags" ]]; then
+            # shellcheck disable=SC2206
+            cmd_args+=($flags)
+        fi
+
+        # Add global flags
+        cmd_args+=("${GLOBAL_FLAGS[@]}")
+
+        log_info "[$target] $name: $INSTALLER_CMD"
+        log_debug "Running: $installer ${cmd_args[*]}"
+
+        export DOTFILES_FAILURES_FILE="$STAGE_ROOT/failures"
+        : > "$DOTFILES_FAILURES_FILE"
+
+        if bash "$installer" "${cmd_args[@]}"; then
+            RESULTS+=("$target|$name|ok")
+        else
+            log_error "[$target] $name: $INSTALLER_CMD failed"
+            RESULTS+=("$target|$name|FAIL")
+            EXIT_CODE=1
+        fi
+
+        # Per-file failures reported by the installer
+        local failed
+        while IFS= read -r failed; do
+            [[ -n "$failed" ]] && RESULTS+=("$target|$failed|FAIL")
+        done < "$DOTFILES_FAILURES_FILE"
+    done
+}
+
+# Run all phases locally
+# Usage: run_all PROFILE_ARG
+run_all() {
+    local profile="${1:-}"
+    local target="local"
+
+    if [[ -n "$HOSTNAME_ARG" ]]; then
+        OVERLAY_HOST="$HOSTNAME_ARG"
+    else
+        OVERLAY_HOST=$(hosts_local_name)
+    fi
+
+    # Load profile-specific package list
+    load_packages_for_profile "$profile" "$OVERLAY_HOST" || return 1
+    log_info "[$target] Using profile '$RESOLVED_PROFILE' (${#PKG_NAMES[@]} package(s))"
+    if [[ -n "$HOST_YAML" ]]; then
+        log_info "[$target] Host directory: hosts/$OVERLAY_HOST"
+    fi
+    log_info "[$target] Packages: ${PKG_NAMES[*]}"
+
+    # Validate overlays before any change
+    if ! prepare_overlays "$target"; then
+        log_error "[$target] Invalid overlay configuration; no changes made"
+        return 1
+    fi
+
+    # Phase 1: OS packages (batch install)
+    log_info "[$target] Phase 1: OS packages"
+    run_phase_os_packages || true
+
+    # Phase 2: Custom installs
+    log_info "[$target] Phase 2: Custom installs"
+    run_phase_custom_installs || true
+
+    # Phase 3: Config deployments
+    log_info "[$target] Phase 3: Config deployments"
+    run_phase_configs
+}
+
+# Print summary report
+print_summary() {
+    echo
+    echo "======================================"
+    echo "Setup Summary"
+    echo "======================================"
+    echo
+
+    local total=0
+    local passed=0
+    local failed=0
+
+    for result in "${RESULTS[@]}"; do
+        total=$((total + 1))
+        local target item status
+        IFS='|' read -r target item status <<< "$result"
+
+        if [[ "$status" == "ok" ]]; then
+            passed=$((passed + 1))
+            log_success "[$target] $item: $INSTALLER_CMD"
+        else
+            failed=$((failed + 1))
+            log_error "[$target] $item: $INSTALLER_CMD FAILED"
+        fi
+    done
+
+    echo
+    echo "Total: $total  Passed: $passed  Failed: $failed"
+
+    if [[ $failed -eq 0 ]]; then
+        log_success "All operations completed successfully!"
+    else
+        log_error "$failed operation(s) failed"
+    fi
+}
+
+# Show usage
+usage() {
+    cat << 'EOF'
+Usage: dotfiles <command> [options]
+
+Commands:
+  sync                 Install if new, upgrade if exists (idempotent)
+  uninstall            Uninstall all configs
+  status               Show status for all configs
+  verify               Verify all installations
+  help                 Show this help message
+
+Profile options:
+  --profile NAME       Use a specific profile (default: complete)
+                       Profiles are defined in profiles/<name>.yaml
+
+Hosts repo options:
+  --hosts-repo PATH    dotfiles-hosts checkout (default: env DOTFILES_HOSTS_REPO)
+                       Profiles are looked up there first, then in profiles/
+  --hostname NAME      Host directory hosts/NAME/ to apply (default: hostname -s)
+
+Options (passed through to each app's installer):
+  --dry-run            Show what would be done without making changes
+  --no-backup          Skip creating backups
+  --verbose            Verbose output
+  --quiet              Minimal output
+  --force              Force operation without prompts
+  --skip-git-setup     Skip interactive git identity setup (for unattended runs)
+  --shell-scripts-dir PATH  Set drop-in directory (default: ~/.bashrc.d)
+  --log FILE           Log to file
+
+Examples:
+  dotfiles sync                      # Sync (uses profiles/complete.yaml)
+  dotfiles sync --profile minimal    # Sync with the minimal profile
+  dotfiles sync --dry-run            # Preview what would happen
+  dotfiles status                    # Check all configs
+  dotfiles uninstall --no-backup     # Remove all configs
+
+EOF
+}
+
+# Validate command
+validate_command() {
+    local cmd="$1"
+
+    cmd=$(echo "$cmd" | tr -cd '[:alnum:]-')
+
+    local valid_commands=(
+        "sync"
+        "uninstall"
+        "status"
+        "verify"
+        "help"
+        "-h"
+        "--help"
+    )
+
+    for valid_cmd in "${valid_commands[@]}"; do
+        if [[ "$cmd" == "$valid_cmd" ]]; then
+            echo "$cmd"
+            return 0
+        fi
+    done
+
+    echo "Error: Unknown command '$1'" >&2
+    echo "" >&2
+    echo "Valid commands: sync, uninstall, status, verify, help" >&2
+    return 1
+}
+
+# Parse arguments
+parse_args() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 1
+    fi
+
+    COMMAND=$(validate_command "$1") || exit 1
+    shift
+
+    case "$COMMAND" in
+        sync) INSTALLER_CMD="deploy" ;;
+        *) INSTALLER_CMD="$COMMAND" ;;
+    esac
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --profile)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --profile requires a profile name" >&2
+                    exit 1
+                fi
+                PROFILE_ARG="$2"
+                shift 2
+                ;;
+            --hosts-repo)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --hosts-repo requires a path argument" >&2
+                    exit 1
+                fi
+                HOSTS_REPO="$2"
+                shift 2
+                ;;
+            --hostname)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --hostname requires a name argument" >&2
+                    exit 1
+                fi
+                if [[ -z "$2" || "$2" == */* || "$2" == . || "$2" == .. ]]; then
+                    echo "Error: invalid --hostname '$2' (must be a plain name without '/')" >&2
+                    exit 1
+                fi
+                HOSTNAME_ARG="$2"
+                shift 2
+                ;;
+            --dry-run|--no-backup|--verbose|--quiet|--force)
+                GLOBAL_FLAGS+=("$1")
+                shift
+                ;;
+            --skip-git-setup)
+                export GIT_SETUP_SKIP=true
+                shift
+                ;;
+            --shell-scripts-dir)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --shell-scripts-dir requires a path argument" >&2
+                    exit 1
+                fi
+                SHELL_SCRIPTS_DIR="$2"
+                GLOBAL_FLAGS+=("$1" "$2")
+                shift 2
+                ;;
+            --log)
+                if [[ $# -lt 2 || "$2" == --* ]]; then
+                    echo "Error: --log requires a filename argument" >&2
+                    exit 1
+                fi
+                GLOBAL_FLAGS+=("$1" "$2")
+                shift 2
+                ;;
+            *)
+                echo "Error: Unknown option: $1" >&2
+                usage
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Main
+main() {
+    parse_args "$@"
+
+    # Initialize logging
+    log_init "$@"
+
+    WORK_DIR=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$WORK_DIR'" EXIT
+
+    # Handle help
+    if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then
+        usage
+        exit 0
+    fi
+
+    # Validate hosts repo before any changes
+    if [[ -n "$HOSTS_REPO" ]]; then
+        if [[ ! -d "$HOSTS_REPO" ]]; then
+            log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
+            exit 1
+        fi
+        HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
+    fi
+
+    run_all "$PROFILE_ARG"
+
+    # Print summary
+    print_summary
+
+    exit $EXIT_CODE
+}
+
+main "$@"

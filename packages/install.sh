@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # packages/install.sh - Custom tool installer and drop-in manager
-# OS package installation is handled by setup.sh.
+# OS package installation is handled by dotfiles.
 # This installer manages custom tool scripts and their shell drop-ins.
 
 set -euo pipefail
@@ -297,7 +297,7 @@ app_post_uninstall() {
 
 app_usage() {
     cat << EOT
-Note: OS package installation is handled by setup.sh, not this installer.
+Note: OS package installation is handled by dotfiles, not this installer.
 
 EOT
 }

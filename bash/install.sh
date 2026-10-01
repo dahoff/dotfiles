@@ -10,7 +10,6 @@ source "$(dirname "$APP_DIR")/lib/installer.sh"
 # Bash-specific flags
 APPEND_MODE=false
 SUPPLEMENT_FILES=()
-APP_REMOTE_DROP_ARGS=(--supplement)
 
 app_parse_arg() {
     case $1 in
@@ -58,13 +57,6 @@ EOT
 app_after_load_config() {
     if ! is_dry_run; then
         ensure_dir "$SHELL_SCRIPTS_DIR" || return 1
-    fi
-}
-
-app_pre_remote() {
-    if [[ ${#SUPPLEMENT_FILES[@]} -gt 0 ]]; then
-        log_warn "--supplement is not supported in --remote mode"
-        log_warn "Supplement files must be copied to the remote host manually"
     fi
 }
 
