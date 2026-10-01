@@ -189,3 +189,20 @@ The run aborts before any change if the hosts repo is missing, `host.yaml` lacks
 ### Removing managed keys
 
 `merge` never deletes keys from the live file. To remove a key, delete it from the repo layer and from the live file by hand.
+
+---
+
+## Config file
+
+`${DOTFILES_CONFIG:-~/.config/dotfiles/config}` holds per-host settings. It is optional. It is made of `key=value` lines and is parsed, never sourced. Blank lines and `#` comments are ignored, and one pair of surrounding quotes is stripped from a value. A leading `~` is expanded. Unknown or malformed lines are ignored with a warning. An invalid `auto_sync` or `auto_sync_interval` aborts the command.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `dotfiles_repo` | the directory of the running `dotfiles` | dotfiles checkout. It must exist. The running code is always `SCRIPT_DIR`; a different value only produces a warning (it matters for `push` and `init`). |
+| `hosts_repo` | `~/.local/share/dotfiles/dotfiles-hosts` if that directory exists, else none | dotfiles-hosts checkout |
+| `hostname` | `hostname -s`, then `uname -n` | selects `hosts/<name>/` |
+| `profile` | `complete` | used when there is no `host.yaml`; with one, it overrides it with a warning (same as `--profile`) |
+| `auto_sync` | `on` | `off` disables the background sync |
+| `auto_sync_interval` | `4h` | minimum gap between background syncs: `<n>m`, `<n>h` or `<n>d` |
+
+Precedence: command-line flag > env `DOTFILES_HOSTS_REPO` (hosts repo only) > config file > default.

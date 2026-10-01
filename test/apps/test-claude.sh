@@ -27,6 +27,7 @@ rm -rf "$TEST_STATE" "$TEST_HOME"
 mkdir -p "$TEST_STATE/apps" "$TEST_HOME/.claude"
 export STATE_DIR="$TEST_STATE"
 export HOME="$TEST_HOME"
+export DOTFILES_CONFIG="$TEST_HOME/nonexistent-config"
 
 REPO_SETTINGS="$ROOT_DIR/claude/files/settings.json"
 LIVE="$HOME/.claude/settings.json"

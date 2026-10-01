@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib/utils.sh"
 source "$SCRIPT_DIR/lib/hosts.sh"
 source "$SCRIPT_DIR/lib/overlay.sh"
 source "$SCRIPT_DIR/lib/profile.sh"
+source "$SCRIPT_DIR/lib/config.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
@@ -33,8 +34,12 @@ declare -a PKG_CONFIG_FLAGS=()
 COMMAND=""
 INSTALLER_CMD=""
 PROFILE_ARG=""
-HOSTS_REPO="${DOTFILES_HOSTS_REPO:-}"
+HOSTS_REPO=""
 HOSTNAME_ARG=""
+DOTFILES_REPO=""
+AUTO_SYNC="on"
+AUTO_SYNC_SECONDS=14400
+DEFAULT_HOSTS_REPO="$HOME/.local/share/dotfiles/dotfiles-hosts"
 
 # Resolution results (set by load_packages_for_profile)
 RESOLVED_PROFILE=""
@@ -530,6 +535,41 @@ parse_args() {
     done
 }
 
+# Fill in settings from flags, env, the config file and defaults.
+# Precedence: flag > env DOTFILES_HOSTS_REPO (hosts repo only) > config > default.
+# parse_args has set PROFILE_ARG/HOSTS_REPO/HOSTNAME_ARG only from flags.
+resolve_settings() {
+    local config_file="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
+    config_load "$config_file" || return 1
+
+    # The running code is always the repo it was started from
+    DOTFILES_REPO="$SCRIPT_DIR"
+    if [[ -n "$CFG_DOTFILES_REPO" ]]; then
+        if [[ ! -d "$CFG_DOTFILES_REPO" ]]; then
+            log_error "dotfiles repo not found: $CFG_DOTFILES_REPO"
+            return 1
+        fi
+        if [[ "$(cd "$CFG_DOTFILES_REPO" && pwd -P)" != "$(cd "$SCRIPT_DIR" && pwd -P)" ]]; then
+            log_warn "Running $SCRIPT_DIR/dotfiles but config dotfiles_repo is $CFG_DOTFILES_REPO"
+        fi
+    fi
+
+    if [[ -z "$HOSTS_REPO" ]]; then
+        if [[ -n "${DOTFILES_HOSTS_REPO:-}" ]]; then
+            HOSTS_REPO="$DOTFILES_HOSTS_REPO"
+        elif [[ -n "$CFG_HOSTS_REPO" ]]; then
+            HOSTS_REPO="$CFG_HOSTS_REPO"
+        elif [[ -d "$DEFAULT_HOSTS_REPO" ]]; then
+            HOSTS_REPO="$DEFAULT_HOSTS_REPO"
+        fi
+    fi
+    [[ -n "$HOSTNAME_ARG" ]] || HOSTNAME_ARG="$CFG_HOSTNAME"
+    [[ -n "$PROFILE_ARG" ]] || PROFILE_ARG="$CFG_PROFILE"
+
+    AUTO_SYNC="$CFG_AUTO_SYNC"
+    AUTO_SYNC_SECONDS=$(config_interval_seconds "$CFG_AUTO_SYNC_INTERVAL")
+}
+
 # Main
 main() {
     parse_args "$@"
@@ -546,6 +586,8 @@ main() {
         usage
         exit 0
     fi
+
+    resolve_settings || exit 1
 
     # Validate hosts repo before any changes
     if [[ -n "$HOSTS_REPO" ]]; then

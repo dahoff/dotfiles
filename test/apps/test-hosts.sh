@@ -30,6 +30,7 @@ mkdir -p "$TEST_STATE/apps" "$TEST_HOME"
 cp -R "$TEST_DIR/fixtures/hosts-repo" "$HR"
 export STATE_DIR="$TEST_STATE"
 export HOME="$TEST_HOME"
+export DOTFILES_CONFIG="$TEST_HOME/nonexistent-config"
 cd "$ROOT_DIR"
 
 # Run dotfiles, capture output and exit code in OUT / RC
