@@ -17,6 +17,7 @@ source "$SCRIPT_DIR/lib/profile.sh"
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/sync.sh"
 source "$SCRIPT_DIR/lib/state.sh"
+source "$SCRIPT_DIR/lib/push.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
@@ -58,6 +59,7 @@ declare -a GLOBAL_FLAGS=()
 
 # Result tracking: "target|item|ok" or "target|item|FAIL"
 declare -a RESULTS=()
+declare -a PUSH_HOSTS=()
 EXIT_CODE=0
 SYNC_NO_PULL=false
 SYNC_RECORD=false
@@ -465,8 +467,9 @@ Usage: dotfiles <command> [options]
 
 Commands:
   sync                 Pull, then install if new, upgrade if exists (idempotent)
+  push HOST...         Copy committed repo snapshots to HOST over ssh and sync there
   uninstall            Uninstall all configs
-  status               Show repos, host, last sync, pending packages and app state (read-only)
+  status              Show repos, host, last sync, pending packages and app state (read-only)
   verify               Verify all installations
   help                 Show this help message
 
@@ -497,6 +500,7 @@ Examples:
   dotfiles sync                      # Sync (uses profiles/complete.yaml)
   dotfiles sync --profile minimal    # Sync with the minimal profile
   dotfiles sync --dry-run            # Preview what would happen
+  dotfiles push user@host            # Ship the repos to a host without git, sync there
   dotfiles status                    # Check all configs
   dotfiles uninstall --no-backup     # Remove all configs
 
@@ -511,6 +515,7 @@ validate_command() {
 
     local valid_commands=(
         "sync"
+        "push"
         "uninstall"
         "status"
         "verify"
@@ -528,7 +533,7 @@ validate_command() {
 
     echo "Error: Unknown command '$1'" >&2
     echo "" >&2
-    echo "Valid commands: sync, uninstall, status, verify, help" >&2
+    echo "Valid commands: sync, push, uninstall, status, verify, help" >&2
     return 1
 }
 
@@ -612,6 +617,11 @@ parse_args() {
                 shift 2
                 ;;
             *)
+                if [[ "$COMMAND" == "push" && "$1" != -* ]]; then
+                    PUSH_HOSTS+=("$1")
+                    shift
+                    continue
+                fi
                 echo "Error: Unknown option: $1" >&2
                 usage
                 exit 1
@@ -832,6 +842,27 @@ cmd_status() {
     return 0
 }
 
+# dotfiles push HOST...: no local sync, no lock, no local state
+cmd_push() {
+    if [[ ${#PUSH_HOSTS[@]} -eq 0 ]]; then
+        echo "Usage: dotfiles push [--dry-run] HOST..." >&2
+        exit 1
+    fi
+    local dry=false host failed=0
+    is_dry_run && dry=true
+    for host in "${PUSH_HOSTS[@]}"; do
+        log_info "[$host] Pushing"
+        if push_host "$host" false "$dry"; then
+            RESULTS+=("$host|push|ok")
+        else
+            RESULTS+=("$host|push|FAIL")
+            failed=1
+        fi
+    done
+    [[ "$dry" == true ]] || print_summary
+    exit $failed
+}
+
 # Main
 main() {
     parse_args "$@"
@@ -883,6 +914,8 @@ main() {
         fi
         HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
     fi
+
+    [[ "$COMMAND" != "push" ]] || cmd_push
 
     if [[ "$COMMAND" == "sync" ]]; then
         if [[ "$SYNC_NO_PULL" != true ]] && ! is_dry_run; then

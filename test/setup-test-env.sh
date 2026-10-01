@@ -119,9 +119,9 @@ echo
 echo "Test SSH connection:"
 echo "  ssh -i ssh-key -p 2222 testuser@localhost"
 echo
-echo "Test remote installation:"
-echo "  cd ../tmux"
-echo "  ./install.sh install --remote testuser@localhost"
+echo "Test pushing the dotfiles to it (from the repo root):"
+echo "  DOTFILES_SSH_OPTS=\"-o Port=2222 -o IdentityFile=test/ssh-key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\" \\"
+echo "    ./dotfiles push --dry-run testuser@localhost"
 echo
 echo "View container logs:"
 echo "  cd docker && docker-compose logs -f"

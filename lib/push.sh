@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# push.sh - dotfiles push: ship committed repo snapshots to a host over ssh
+# Requires lib/logging.sh and lib/hosts.sh (hosts_local_name).
+# DOTFILES_SSH_OPTS: extra whitespace-split ssh/scp options (used by tests).
+
+# ssh with the push options. Usage: push_ssh [-t] HOST CMD
+push_ssh() {
+    local -a tty=()
+    if [[ "${1:-}" == "-t" ]]; then
+        tty=(-t)
+        shift
+    fi
+    # shellcheck disable=SC2086
+    ssh -o ConnectTimeout=10 ${DOTFILES_SSH_OPTS:-} "${tty[@]}" "$@" 9>&-
+}
+
+# scp with the push options. Usage: push_scp SRC... HOST:DEST
+push_scp() {
+    # shellcheck disable=SC2086
+    scp -q -o ConnectTimeout=10 ${DOTFILES_SSH_OPTS:-} "$@" 9>&-
+}
+
+# Quote a string for a POSIX shell
+push_quote() {
+    printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+# Tar REPO into OUT_TAR: git archive HEAD for a git work tree, else the plain
+# directory. Appends a PUSHED marker file either way.
+# Usage: push_build_payload REPO OUT_TAR
+push_build_payload() {
+    local repo="$1" out="$2" top commit="none" marker rc=0
+    top=$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)
+    if [[ -n "$top" && "$(cd "$top" && pwd -P)" == "$(cd "$repo" && pwd -P)" ]]; then
+        git -C "$repo" archive --format=tar HEAD -o "$out" || return 1
+        commit=$(git -C "$repo" rev-parse HEAD)
+    else
+        tar -C "$repo" -cf "$out" --exclude=./PUSHED . || return 1
+    fi
+    marker=$(mktemp -d "${out}.marker.XXXXXX") || return 1
+    printf 'source=%s commit=%s date=%s\n' "$(hosts_local_name)" "$commit" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$marker/PUSHED"
+    tar -rf "$out" -C "$marker" PUSHED || rc=1
+    rm -rf "$marker"
+    return $rc
+}
+
+# Print "dotfiles_repo=<abs>" and "hosts_repo=<abs>" as the remote sees them.
+# Usage: push_remote_paths HOST
+push_remote_paths() {
+    local host="$1"
+    push_ssh "$host" "sh -s" <<'SNIPPET'
+cfg="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
+d=; h=
+if [ -f "$cfg" ]; then
+    while IFS= read -r l || [ -n "$l" ]; do
+        case "$l" in
+            dotfiles_repo=*) d=${l#*=} ;;
+            hosts_repo=*) h=${l#*=} ;;
+        esac
+    done < "$cfg"
+fi
+[ -n "$d" ] || d="$HOME/.local/share/dotfiles/dotfiles"
+[ -n "$h" ] || h="$HOME/.local/share/dotfiles/dotfiles-hosts"
+case "$d" in "~") d=$HOME ;; "~/"*) d="$HOME/${d#"~/"}" ;; esac
+case "$h" in "~") h=$HOME ;; "~/"*) h="$HOME/${h#"~/"}" ;; esac
+printf 'dotfiles_repo=%s\nhosts_repo=%s\n' "$d" "$h"
+SNIPPET
+}
+
+# Push both repos to HOST and run the sync there. Returns the remote exit code.
+# Usage: push_host HOST INIT(true|false) [DRY_RUN(true|false)]
+push_host() {
+    local host="$1" init="$2" dry_run="${3:-false}"
+    if [[ "$init" == true ]]; then
+        log_error "[$host] push --init is not available yet"
+        return 1
+    fi
+
+    local dir="$WORK_DIR/push"
+    mkdir -p "$dir"
+    # Built once per run, so every host gets the same snapshot
+    if [[ ! -f "$dir/dotfiles.tar" ]]; then
+        if ! push_build_payload "$DOTFILES_REPO" "$dir/dotfiles.tar"; then
+            log_error "[$host] could not build the dotfiles payload"
+            return 1
+        fi
+        if [[ -n "$HOSTS_REPO" ]] && ! push_build_payload "$HOSTS_REPO" "$dir/hosts.tar"; then
+            log_error "[$host] could not build the hosts payload"
+            return 1
+        fi
+    fi
+
+    local paths line rdot="" rhosts=""
+    if ! paths=$(push_remote_paths "$host"); then
+        log_error "[$host] ssh failed"
+        return 1
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+            dotfiles_repo=*) rdot="${line#*=}" ;;
+            hosts_repo=*) rhosts="${line#*=}" ;;
+        esac
+    done <<< "$paths"
+    if [[ -z "$rdot" || -z "$rhosts" ]]; then
+        log_error "[$host] could not determine the remote repo paths"
+        return 1
+    fi
+
+    local -a tars=("$dir/dotfiles.tar") targets=("$rdot")
+    if [[ -f "$dir/hosts.tar" ]]; then
+        tars+=("$dir/hosts.tar")
+        targets+=("$rhosts")
+    fi
+
+    # Refuse git checkouts (they pull for themselves); note if the repo exists
+    local state i check=""
+    for i in "${!targets[@]}"; do
+        check+="[ -e $(push_quote "${targets[$i]}/.git") ] && echo $(push_quote "git ${targets[$i]}"); "
+    done
+    check+="[ -x $(push_quote "$rdot/dotfiles") ] && echo exists; true"
+    if ! state=$(push_ssh "$host" "$check"); then
+        log_error "[$host] ssh failed"
+        return 1
+    fi
+    local refused=false exists=false
+    while IFS= read -r line; do
+        if [[ "$line" == "git "* ]]; then
+            log_error "$host:${line#git } is a git checkout; run 'dotfiles sync' there instead"
+            refused=true
+        elif [[ "$line" == "exists" ]]; then
+            exists=true
+        fi
+    done <<< "$state"
+    [[ "$refused" == false ]] || return 1
+
+    if [[ "$dry_run" == true ]]; then
+        for i in "${!tars[@]}"; do
+            echo "Would push $(basename "${tars[$i]}") ($(du -h "${tars[$i]}" | cut -f1)) to $host:${targets[$i]}"
+        done
+        if [[ "$exists" == true ]]; then
+            push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") sync --no-pull --dry-run"
+        else
+            echo "Would run dotfiles sync on $host"
+        fi
+        return $?
+    fi
+
+    local rtmp
+    if ! rtmp=$(push_ssh "$host" "mktemp -d") || [[ -z "$rtmp" ]]; then
+        log_error "[$host] could not create a remote temp dir"
+        return 1
+    fi
+    if ! push_scp "${tars[@]}" "$host:$rtmp/"; then
+        log_error "[$host] scp failed"
+        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
+        return 1
+    fi
+
+    local unpack="" p t
+    for i in "${!tars[@]}"; do
+        p=$(push_quote "${targets[$i]}")
+        t=$(push_quote "$rtmp/$(basename "${tars[$i]}")")
+        unpack+="mkdir -p \"\$(dirname $p)\" && rm -rf $p.new && mkdir $p.new && tar -xf $t -C $p.new"
+        unpack+=" && rm -rf $p.old && { [ -e $p ] && mv $p $p.old || true; } && mv $p.new $p && rm -rf $p.old || exit 1; "
+    done
+    unpack+="rm -rf $(push_quote "$rtmp")"
+    if ! push_ssh "$host" "$unpack"; then
+        log_error "[$host] could not unpack the payload"
+        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
+        return 1
+    fi
+
+    log_info "[$host] Running dotfiles sync"
+    push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") sync --no-pull"
+}
