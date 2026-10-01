@@ -138,7 +138,36 @@ else
     fail "No temp file cleanup"
 fi
 
+# Test 15: verify does not call removed backup functions
+info "Test 15: verify works with an original backup present"
+T15=$(mktemp -d)
+mkdir -p "$T15/home/.bak/packages/original" "$T15/state/apps"
+echo "orig" > "$T15/home/.bak/packages/original/.bashrc"
+cat > "$T15/state/apps/packages.yaml" <<YAML
+app:
+  name: packages
+  version: test
+  installed: true
+
+backup:
+  dir: $T15/home/.bak/packages
+  original: $T15/home/.bak/packages/original
+
+files:
+
+snapshots: []
+YAML
+OUT=$(HOME="$T15/home" STATE_DIR="$T15/state" XDG_STATE_HOME="$T15/xdg" DOTFILES_CONFIG="$T15/config" \
+    packages/install.sh verify 2>&1) && RC=0 || RC=$?
+rm -rf "$T15"
+if [[ $RC -eq 0 ]] && ! echo "$OUT" | grep -qi "command not found"; then
+    pass "verify passes with original backup present"
+else
+    echo "$OUT"
+    fail "verify failed or hit a missing function (rc=$RC)"
+fi
+
 echo
 echo "======================================"
-echo -e "${GREEN}All 14 packages module tests passed!${NC}"
+echo -e "${GREEN}All 15 packages module tests passed!${NC}"
 echo "======================================"

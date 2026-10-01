@@ -242,19 +242,6 @@ cmd_verify() {
         fi
     done
 
-    # Verify backups
-    local backup_dir
-    backup_dir=$(state_get_backup_dir "$APP_NAME")
-
-    if [[ -d "$backup_dir/original" ]]; then
-        log_info "Verifying original backup..."
-        if backup_verify "$backup_dir" "original"; then
-            log_success "Original backup verified"
-        else
-            ((errors++))
-        fi
-    fi
-
     if [[ $errors -eq 0 ]]; then
         log_success "Verification passed!"
         return 0
