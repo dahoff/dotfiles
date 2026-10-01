@@ -58,10 +58,6 @@ backup_create_original() {
 
     copy_file "$source_file" "$dest" || return 1
 
-    # Store checksum
-    local checksum_file="$backup_dir/original/.checksums"
-    echo "$(checksum "$dest") $filename" >> "$checksum_file"
-
     return 0
 }
 
@@ -90,10 +86,6 @@ backup_create_snapshot() {
     log_info "Creating backup snapshot: $filename -> $ts"
 
     copy_file "$source_file" "$dest" || return 1
-
-    # Store checksum
-    local checksum_file="$snapshot_dir/.checksums"
-    echo "$(checksum "$dest") $filename" >> "$checksum_file"
 
     echo "$ts"  # Return timestamp
 }
@@ -185,64 +177,6 @@ backup_restore() {
     return 0
 }
 
-# Get latest backup timestamp
-# Usage: backup_get_latest backup_dir
-backup_get_latest() {
-    local backup_dir="$1"
-
-    backup_list_snapshots "$backup_dir" | tail -1
-}
-
-# Verify backup integrity
-# Usage: backup_verify backup_dir timestamp
-backup_verify() {
-    local backup_dir="$1"
-    local timestamp="$2"
-    local backup_path
-    local checksum_file
-
-    if [[ "$timestamp" == "original" ]]; then
-        backup_path="$backup_dir/original"
-    else
-        backup_path="$backup_dir/$timestamp"
-    fi
-
-    checksum_file="$backup_path/.checksums"
-
-    if [[ ! -f "$checksum_file" ]]; then
-        log_warn "No checksum file found for backup: $timestamp"
-        return 1
-    fi
-
-    local errors=0
-
-    while read -r expected_sum filename; do
-        local file_path="$backup_path/$filename"
-
-        if [[ ! -f "$file_path" ]]; then
-            log_error "Missing file in backup: $filename"
-            ((errors++))
-            continue
-        fi
-
-        local actual_sum
-        actual_sum=$(checksum "$file_path")
-
-        if [[ "$actual_sum" != "$expected_sum" ]]; then
-            log_error "Checksum mismatch: $filename"
-            ((errors++))
-        fi
-    done < "$checksum_file"
-
-    if [[ $errors -eq 0 ]]; then
-        log_debug "Backup verification passed: $timestamp"
-        return 0
-    else
-        log_error "Backup verification failed: $errors error(s)"
-        return 1
-    fi
-}
-
 # Export functions
 export -f backup_init
 export -f backup_has_original
@@ -251,5 +185,3 @@ export -f backup_create_snapshot
 export -f backup_list_snapshots
 export -f backup_prune
 export -f backup_restore
-export -f backup_get_latest
-export -f backup_verify

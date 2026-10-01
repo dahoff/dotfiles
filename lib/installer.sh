@@ -512,59 +512,6 @@ cmd_uninstall() {
     return 0
 }
 
-# Rollback operation
-cmd_rollback() {
-    local target_ts="${1:-}"
-
-    log_info "Rolling back $APP_NAME..."
-
-    # Check if installed
-    if ! state_is_installed "$APP_NAME"; then
-        log_error "$APP_NAME is not installed"
-        return 1
-    fi
-
-    # Get backup directory
-    local backup_dir
-    backup_dir=$(state_get_backup_dir "$APP_NAME")
-
-    # Determine rollback target
-    if [[ -z "$target_ts" ]]; then
-        # Rollback to previous (latest snapshot)
-        target_ts=$(backup_get_latest "$backup_dir")
-        if [[ -z "$target_ts" ]]; then
-            log_error "No snapshots available to rollback to"
-            return 1
-        fi
-        log_info "Rolling back to previous snapshot: $target_ts"
-    elif [[ "$target_ts" == "original" ]]; then
-        log_info "Rolling back to original configuration"
-    else
-        log_info "Rolling back to snapshot: $target_ts"
-    fi
-
-    # Verify backup exists
-    if ! backup_verify "$backup_dir" "$target_ts"; then
-        log_error "Backup verification failed"
-        return 1
-    fi
-
-    # Get files to restore
-    local files
-    mapfile -t files < <(state_get_files "$APP_NAME")
-
-    # Restore files
-    for file in "${files[@]}"; do
-        backup_restore "$backup_dir" "$target_ts" "$file" || log_warn "Failed to restore: $file"
-    done
-
-    # Update version to reflect rollback state so upgrade detects a change
-    state_set_version "$APP_NAME" "rollback_${target_ts}"
-
-    log_success "Rollback complete!"
-    return 0
-}
-
 # Status operation
 cmd_status() {
     log_info "Status for $APP_NAME:"
@@ -608,19 +555,6 @@ cmd_verify() {
         fi
     done
 
-    # Verify backups
-    local backup_dir
-    backup_dir=$(state_get_backup_dir "$APP_NAME")
-
-    if [[ -d "$backup_dir/original" ]]; then
-        log_info "Verifying original backup..."
-        if backup_verify "$backup_dir" "original"; then
-            log_success "Original backup verified"
-        else
-            ((errors++))
-        fi
-    fi
-
     if [[ $errors -eq 0 ]]; then
         log_success "Verification passed!"
         return 0
@@ -628,44 +562,6 @@ cmd_verify() {
         log_error "Verification failed with $errors error(s)"
         return 1
     fi
-}
-
-# List backups operation
-cmd_backups() {
-    log_info "Backups for $APP_NAME:"
-    echo
-
-    if ! state_is_installed "$APP_NAME"; then
-        echo "Not installed"
-        return 0
-    fi
-
-    local backup_dir
-    backup_dir=$(state_get_backup_dir "$APP_NAME")
-
-    # Show original
-    if [[ -d "$backup_dir/original" ]]; then
-        echo "Original backup:"
-        echo "  Location: $backup_dir/original"
-        ls -lh "$backup_dir/original" 2>/dev/null | tail -n +2 | awk '{print "  " $9 " (" $5 ")"}'
-        echo
-    fi
-
-    # Show snapshots
-    local snapshots
-    mapfile -t snapshots < <(backup_list_snapshots "$backup_dir")
-
-    if [[ ${#snapshots[@]} -gt 0 ]]; then
-        echo "Snapshots:"
-        for ts in "${snapshots[@]}"; do
-            echo "  $ts"
-            ls -lh "$backup_dir/$ts" 2>/dev/null | tail -n +2 | awk '{print "    " $9 " (" $5 ")"}'
-        done
-    else
-        echo "No snapshots"
-    fi
-
-    return 0
 }
 
 # Diff operation
@@ -748,10 +644,8 @@ Commands:
   install              Install $APP_NAME configuration
   upgrade              Upgrade existing installation
   uninstall            Uninstall and restore original files
-  rollback [TIMESTAMP] Rollback to previous or specific backup
   status               Show installation status
   verify               Verify installation integrity
-  backups              List available backups
   diff                 Show differences between installed and new
   help                 Show this help message
 
@@ -769,9 +663,6 @@ Options:
 Examples:
   $0 install
   $0 upgrade --no-backup
-  $0 rollback
-  $0 rollback --to 20240225_120000
-  $0 rollback --to original
 
 EOF
     app_usage
@@ -790,10 +681,8 @@ validate_command() {
         "install"
         "upgrade"
         "uninstall"
-        "rollback"
         "status"
         "verify"
-        "backups"
         "diff"
         "help"
         "-h"
@@ -816,10 +705,8 @@ validate_command() {
     echo "  install    - Install configuration" >&2
     echo "  upgrade    - Upgrade to new version" >&2
     echo "  uninstall  - Remove installation" >&2
-    echo "  rollback   - Restore previous version" >&2
     echo "  status     - Show installation status" >&2
     echo "  verify     - Verify installation integrity" >&2
-    echo "  backups    - List available backups" >&2
     echo "  diff       - Show differences" >&2
     echo "  help       - Show usage information" >&2
     return 1
@@ -855,19 +742,6 @@ parse_args() {
             --force)
                 FORCE=true
                 shift
-                ;;
-            --to)
-                if [[ $# -lt 2 || "$2" == --* ]]; then
-                    echo "Error: --to requires a snapshot name" >&2
-                    exit 1
-                fi
-                # Sanitize snapshot name - allow alphanumeric, dash, underscore
-                ROLLBACK_TARGET=$(echo "$2" | tr -cd '[:alnum:]_-')
-                if [[ -z "$ROLLBACK_TARGET" ]]; then
-                    echo "Error: Invalid snapshot name '$2'" >&2
-                    exit 1
-                fi
-                shift 2
                 ;;
             --log)
                 if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -951,17 +825,11 @@ installer_main() {
         uninstall)
             cmd_uninstall
             ;;
-        rollback)
-            cmd_rollback "${ROLLBACK_TARGET:-}"
-            ;;
         status)
             cmd_status
             ;;
         verify)
             cmd_verify
-            ;;
-        backups)
-            cmd_backups
             ;;
         diff)
             cmd_diff

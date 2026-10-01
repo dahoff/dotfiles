@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-core-tests.sh - Core library functionality tests
 #
-# Tests shared lib/ functionality: install, upgrade, uninstall, rollback,
+# Tests shared lib/ functionality: install, upgrade, uninstall,
 # backup management, state tracking, verification, and error handling.
 # Uses tmux as the test application.
 
@@ -148,30 +148,6 @@ else
     fail "Upgrade failed"
 fi
 
-# Test 9: Backups list
-info "Test 9: List backups"
-if ./install.sh backups &>/dev/null; then
-    pass "Backups listed"
-else
-    fail "Backups list failed"
-fi
-
-# Test 10: Rollback
-info "Test 10: Rollback operation"
-if ./install.sh rollback &>/dev/null; then
-    pass "Rollback completed"
-else
-    fail "Rollback failed"
-fi
-
-# Test 11: Verify after rollback
-info "Test 11: Verify after rollback"
-if ./install.sh verify &>/dev/null; then
-    pass "Verify passed after rollback"
-else
-    fail "Verify failed after rollback"
-fi
-
 # Test 12: Uninstall
 info "Test 12: Uninstall operation"
 if ./install.sh uninstall &>/dev/null; then
@@ -203,50 +179,6 @@ else
     fail "Install with backup failed"
 fi
 
-# Test 15: Rollback to original
-info "Test 15: Rollback to original"
-if ./install.sh rollback --to original &>/dev/null; then
-    pass "Rollback to original completed"
-else
-    fail "Rollback to original failed"
-fi
-
-# Test 15b: Rollback sets version to rollback_original
-info "Test 15b: Rollback to original sets version to rollback_original"
-ROLLBACK_VER=$(grep "^  version:" "$STATE_DIR/apps/tmux.yaml" | awk '{print $2}')
-if [[ "$ROLLBACK_VER" == "rollback_original" ]]; then
-    pass "Version set to rollback_original after rollback"
-else
-    fail "Expected version 'rollback_original' but got '$ROLLBACK_VER'"
-fi
-
-# Test 15c: Upgrade works after rollback to original
-info "Test 15c: Upgrade succeeds after rollback (version mismatch detected)"
-if ./install.sh upgrade &>/dev/null; then
-    pass "Upgrade works after rollback to original"
-else
-    fail "Upgrade should succeed after rollback"
-fi
-
-# Test 15d: Rollback to snapshot sets version to rollback_<timestamp>
-info "Test 15d: Rollback to snapshot sets version to rollback_<timestamp>"
-./install.sh upgrade --force &>/dev/null || true
-./install.sh rollback &>/dev/null || true
-ROLLBACK_VER=$(grep "^  version:" "$STATE_DIR/apps/tmux.yaml" | awk '{print $2}')
-if [[ "$ROLLBACK_VER" == rollback_* ]] && [[ "$ROLLBACK_VER" != "rollback_original" ]]; then
-    pass "Version set to rollback_<timestamp> after snapshot rollback"
-else
-    fail "Expected version 'rollback_<timestamp>' but got '$ROLLBACK_VER'"
-fi
-
-# Test 15e: Upgrade works after snapshot rollback
-info "Test 15e: Upgrade succeeds after snapshot rollback"
-if ./install.sh upgrade &>/dev/null; then
-    pass "Upgrade works after snapshot rollback"
-else
-    fail "Upgrade should succeed after snapshot rollback"
-fi
-
 # Test 16: Multiple upgrades (backup pruning)
 info "Test 16: Multiple upgrades (pruning test)"
 ./install.sh install &>/dev/null || true
@@ -254,11 +186,11 @@ for i in 1 2 3 4 5; do
     ./install.sh upgrade --force &>/dev/null || true
     sleep 0.1
 done
-# Just check that backups command works
-if ./install.sh backups &>/dev/null; then
-    pass "Backup pruning works"
+SNAP_COUNT=$(find "$HOME/.bak/tmux" -mindepth 1 -maxdepth 1 -type d ! -name original | wc -l)
+if [[ "$SNAP_COUNT" -ge 1 && "$SNAP_COUNT" -le 3 ]]; then
+    pass "Backup pruning works ($SNAP_COUNT snapshots kept)"
 else
-    fail "Backup pruning failed"
+    fail "Expected 1-3 snapshots after pruning, found $SNAP_COUNT"
 fi
 
 # Test 17: Error - reinstall attempt
@@ -299,14 +231,6 @@ else
     fail "Upgrade should fail when not installed"
 fi
 
-# Test 21: Error - rollback with no backups
-info "Test 21: Error handling (rollback with no backups)"
-if ! ./install.sh rollback &>/dev/null; then
-    pass "Rollback error handling works"
-else
-    fail "Rollback should fail with no backups"
-fi
-
 # Test 22: Error - uninstall when not installed
 info "Test 22: Error handling (uninstall when not installed)"
 if ! ./install.sh uninstall &>/dev/null; then
@@ -340,28 +264,17 @@ else
     fail "Invalid flag should fail"
 fi
 
-# Test 27: Error - verify with checksum mismatch
-info "Test 27: Error handling (checksum mismatch)"
+# Test 27: Error - verify with missing installed file
+info "Test 27: Error handling (verify with missing file)"
 ./install.sh install &>/dev/null || true
-# Modify installed file to break checksum
-echo "# corrupted" >> "$HOME/.tmux.conf"
-OUTPUT=$(./install.sh verify 2>&1)
-if ! ./install.sh verify &>/dev/null || echo "$OUTPUT" | grep -qi "mismatch\|failed\|corrupt"; then
-    pass "Verify detects checksum mismatch"
+rm -f "$HOME/.tmux.conf"
+if ! ./install.sh verify &>/dev/null; then
+    pass "Verify detects missing file"
 else
-    # Verify might not fail but should show warning
-    pass "Verify checks checksums"
+    fail "Verify should fail when an installed file is missing"
 fi
 # Restore
 ./install.sh upgrade --force &>/dev/null || true
-
-# Test 28: Error - rollback to non-existent snapshot
-info "Test 28: Error handling (rollback to invalid snapshot)"
-if ! ./install.sh rollback --to nonexistent_snapshot_12345 &>/dev/null; then
-    pass "Rollback rejects invalid snapshot"
-else
-    fail "Rollback should fail with invalid snapshot"
-fi
 
 # Test 29: Error - source file missing
 info "Test 29: Error handling (source file missing)"
@@ -421,30 +334,65 @@ else
     fail "Malicious command should be rejected"
 fi
 
-# Test 34: Input sanitization - snapshot name
-info "Test 34: Input sanitization (snapshot with special chars)"
+# Test 35: Missing required argument - --log
+info "Test 35: Missing argument (--log without filename)"
+if ! ./install.sh status --log &>/dev/null 2>&1; then
+    pass "--log without filename rejected"
+else
+    fail "--log requires a filename argument"
+fi
+
+# Test R1: upgrade creates a timestamped snapshot
+info "Test R1: Upgrade creates snapshot"
+./install.sh uninstall --quiet &>/dev/null || true
+rm -rf "$HOME/.bak"
 ./install.sh install &>/dev/null || true
 ./install.sh upgrade --force &>/dev/null || true
-if ! ./install.sh rollback --to '../../../etc/passwd' &>/dev/null; then
-    pass "Malicious snapshot name rejected"
+SNAP=$(find "$HOME/.bak/tmux" -mindepth 1 -maxdepth 1 -type d -name "[0-9]*_[0-9]*" | head -1)
+if [[ -n "$SNAP" && -f "$SNAP/.tmux.conf" ]]; then
+    pass "Snapshot created with .tmux.conf"
 else
-    fail "Path traversal should be rejected"
+    fail "No snapshot with .tmux.conf under $HOME/.bak/tmux"
 fi
 
-# Test 35: Missing required argument - --remote
-info "Test 35: Missing argument (--remote without host)"
-if ! ./install.sh status --remote &>/dev/null 2>&1; then
-    pass "--remote without host rejected"
+# Test R2: rollback command removed
+info "Test R2: rollback is an unknown command"
+OUTPUT=$(./install.sh rollback 2>&1); RC=$?
+if [[ $RC -ne 0 ]] && echo "$OUTPUT" | grep -q "Unknown command"; then
+    pass "rollback rejected as unknown command"
 else
-    fail "--remote requires host argument"
+    fail "rollback should fail with Unknown command"
 fi
 
-# Test 36: Missing required argument - --to
-info "Test 36: Missing argument (--to without snapshot)"
-if ! ./install.sh rollback --to &>/dev/null 2>&1; then
-    pass "--to without snapshot rejected"
+# Test R3: backups command removed
+info "Test R3: backups is an unknown command"
+if ! ./install.sh backups &>/dev/null; then
+    pass "backups rejected"
 else
-    fail "--to requires snapshot argument"
+    fail "backups should fail"
+fi
+
+# Test R4: uninstall restores the original file
+info "Test R4: Uninstall restores original"
+./install.sh uninstall --quiet &>/dev/null || true
+rm -rf "$HOME/.bak"
+echo "original" > "$HOME/.tmux.conf"
+./install.sh install &>/dev/null || true
+./install.sh uninstall &>/dev/null || true
+if [[ "$(cat "$HOME/.tmux.conf" 2>/dev/null)" == "original" ]]; then
+    pass "Uninstall restored original content"
+else
+    fail "Original .tmux.conf not restored"
+fi
+
+# Test R5: no checksum files
+info "Test R5: No .checksums files"
+./install.sh install &>/dev/null || true
+./install.sh upgrade --force &>/dev/null || true
+if [[ -z "$(find "$HOME/.bak/tmux" -name .checksums 2>/dev/null)" ]]; then
+    pass "No .checksums files created"
+else
+    fail ".checksums files still created"
 fi
 
 # Test 37: Final cleanup
@@ -458,7 +406,7 @@ cd ..
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 37 core library tests passed!${NC}"
+echo -e "${GREEN}All 34 core library tests passed!${NC}"
 echo "======================================"
 
 # Cleanup at end
