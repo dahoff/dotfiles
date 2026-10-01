@@ -151,7 +151,7 @@ echo
 
 # Test 6: Remote upgrade
 info "Test 6: Testing remote upgrade"
-if test_ssh "cd /tmp/tmux && bash install.sh upgrade" &>/dev/null; then
+if test_ssh "cd /tmp/tmux && bash install.sh upgrade --force" &>/dev/null; then
     pass "Remote upgrade successful"
 else
     fail "Remote upgrade failed"
@@ -262,12 +262,48 @@ rm -rf "$STAGE_TMP" "$PKG14"
 test_ssh "rm -rf /tmp/claude /tmp/claude-installer-* ~/.claude" &>/dev/null || true
 cd "$SCRIPT_DIR"
 
+# Test 15: the real setup.sh --host path with a shipped stage
+info "Test 15: setup.sh --host deploys overlays end to end"
+cd "$ROOT_DIR"
+export DOTFILES_SSH_OPTS="-o Port=$SSH_PORT -o IdentityFile=$SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+test_ssh "rm -rf /tmp/dotfiles-install ~/.claude ~/.config/dotfiles; mkdir -p ~/.claude && echo '{\"liveOnly\":1}' > ~/.claude/settings.json" &>/dev/null
+DEPLOY15=(./setup.sh deploy --no-backup --host "$SSH_USER@$SSH_HOST" --hosts-repo "$SCRIPT_DIR/fixtures/hosts-repo" --hostname testhost)
+if ! OUT15=$("${DEPLOY15[@]}" 2>&1); then
+    echo "$OUT15"
+    fail "setup.sh --host deploy failed"
+    exit 1
+fi
+if [[ "$(test_ssh "jq -r .liveOnly ~/.claude/settings.json")" == 1 ]] \
+   && [[ "$(test_ssh "jq -r .hostKey ~/.claude/settings.json")" == testhost ]] \
+   && [[ "$(test_ssh "cat ~/.claude/statusline-command.sh")" == "# host statusline" ]]; then
+    pass "setup.sh --host merged and replaced correctly on remote"
+else
+    echo "$OUT15"
+    fail "setup.sh --host result wrong on remote"
+    exit 1
+fi
+if ! OUT15=$("${DEPLOY15[@]}" 2>&1); then
+    echo "$OUT15"
+    fail "second setup.sh --host run failed"
+    exit 1
+fi
+if [[ "$OUT15" == *"claude is already up to date on remote"* ]]; then
+    pass "Second run skipped claude via remote stage hash"
+else
+    echo "$OUT15"
+    fail "second run should skip claude on remote"
+    exit 1
+fi
+unset DOTFILES_SSH_OPTS
+test_ssh "rm -rf /tmp/dotfiles-install ~/.claude ~/.config/dotfiles" &>/dev/null || true
+cd "$SCRIPT_DIR"
+
 # Cleanup
 rm -f "$PACKAGE"
 test_ssh "rm -rf /tmp/tmux ~/.config/dotfiles ~/.bak/tmux ~/.tmux*" &>/dev/null || true
 
 echo "======================================"
-echo -e "${GREEN}All 14 remote tests passed!${NC}"
+echo -e "${GREEN}All 15 remote tests passed!${NC}"
 echo "======================================"
 echo
 echo "The remote installation system is working correctly."

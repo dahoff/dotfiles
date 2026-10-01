@@ -2,6 +2,7 @@
 # run-app-tests.sh - Run all application-specific tests
 
 set -euo pipefail
+unset DOTFILES_HOSTS_REPO
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"

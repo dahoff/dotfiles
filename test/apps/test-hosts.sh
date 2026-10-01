@@ -207,6 +207,15 @@ cmp -s "$CL/settings.json" "$HOME/settings.before" || fail "live settings.json m
     || fail "claude version should be incomplete"
 pass "bad layer isolated"
 
+# Test 21
+info "Test 21: --hostname rejects path-like values"
+for bad in "../x" "a/b" "." ".."  ""; do
+    run deploy --dry-run --hostname "$bad"
+    [[ $RC -ne 0 ]] || fail "--hostname '$bad' accepted"
+    [[ "$OUT" == *"invalid --hostname"* || "$OUT" == *"requires a name"* ]] || fail "no message for '$bad': $OUT"
+done
+pass "hostname validated"
+
 rm -rf "$TEST_STATE" "$TEST_HOME" "$HR"
 echo
 echo "======================================"

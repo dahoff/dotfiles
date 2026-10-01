@@ -52,12 +52,14 @@ pass "merge keeps live keys, applies repo keys"
 # Test 3
 info "Test 3: version is a content hash; redeploy is a no-op"
 [[ "$(state_version)" =~ ^[0-9a-f]{12}$ ]] || fail "version: $(state_version)"
-./install.sh deploy --no-backup 2>&1 | grep -q "already up to date" || fail "redeploy should skip"
+out=$(./install.sh deploy --no-backup 2>&1) || fail "redeploy failed"
+[[ "$out" == *"already up to date"* ]] || fail "redeploy should skip"
 pass "content-hash version"
 
 # Test 4
 info "Test 4: diff of a merged file compares against the merge result"
-./install.sh diff 2>&1 | grep -q "No differences found" || fail "diff should be clean after deploy"
+out=$(./install.sh diff 2>&1) || true
+[[ "$out" == *"No differences found"* ]] || fail "diff should be clean after deploy"
 pass "merge-aware diff"
 
 # Test 5

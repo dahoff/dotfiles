@@ -200,11 +200,14 @@ Hosts-repo profiles accept the same `files:` map.
 
 Layers, lowest to highest: `dotfiles/<app>/files/<src>`, each hosts-repo profile in the chain (base-most first), the host directory.
 `replace`: the highest layer that has the file wins. `merge`: live ⊕ all layers in order.
+In practice the repo layers are pre-merged and then merged onto the live file: live ⊕ (dotfiles ⊕ profiles ⊕ host). This differs from strict left-to-right only when a lower layer sets a scalar or null and a higher layer sets an object at the same path; the result then keeps more live data.
+
+Running an app's `install.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `setup.sh` with the hosts repo to keep host overlays.
 Strategy: last declaration among the app `config.yaml`, the hosts-repo profile `files:` maps (base-most first), and `host.yaml` `files:`.
 
 ### Errors
 
-The run aborts before any change if the hosts repo is missing, `host.yaml` lacks `profile:`, a profile isn't found, the `extends` chain cycles, an overlay file or `files:` key names an unknown `src`, or `merge` is set on a non-`.json` file. Overlays for apps not in the package list are ignored with a warning. Invalid JSON during a merge fails only that file, leaves the live file untouched, and is reported in the summary. The app's version is then recorded as `incomplete`, so the next run retries.
+The run aborts before any change if the hosts repo is missing, `host.yaml` lacks `profile:`, a profile isn't found, the `extends` chain cycles, an overlay file or `files:` key names an unknown `src`, `merge` is set on a non-`.json` file, or a strategy other than `replace`/`merge` is used. Overlays for apps not in the package list are ignored with a warning. Invalid JSON during a merge fails only that file, leaves the live file untouched, and is reported in the summary. The app's version is then recorded as `incomplete`, so the next run retries.
 
 ### Removing managed keys
 

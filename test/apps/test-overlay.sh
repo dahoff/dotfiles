@@ -69,6 +69,12 @@ expected=$'a.json\tmerge\nb.txt\treplace\nc.json\treplace'
 [[ "$(overlay_config_entries "$APP/config.yaml")" == "$expected" ]] \
     && pass "config entries parsed" || fail "config entries wrong: $(overlay_config_entries "$APP/config.yaml")"
 
+info "Test 1b: quoted strategy values are accepted"
+printf 'files:\n  - src: q1.json\n    strategy: "merge"\n  - src: q2.json\n    strategy: '"'"'merge'"'"'  # c\n' > "$T/quoted.yaml"
+[[ "$(overlay_config_entries "$T/quoted.yaml")" == $'q1.json\tmerge\nq2.json\tmerge' ]] \
+    || fail "quoted strategies: $(overlay_config_entries "$T/quoted.yaml")"
+pass "quoted strategies"
+
 # Test 2
 info "Test 2: overlay_json_merge merges objects, replaces arrays, later wins"
 overlay_json_merge "$T/m.json" "$APP/files/a.json" "$P1/apps/demo/files/a.json" "$H1/apps/demo/files/a.json"
@@ -143,6 +149,13 @@ echo 'host b2' > "$H1/apps/demo/files/b.txt"
 overlay_stage_app "$APP" "$T/s6" "$NONE" "$P1" "$H1"
 [[ "$(cat "$T/s1/version")" != "$(cat "$T/s6/version")" ]] || fail "layer change did not change version"
 echo 'host b' > "$H1/apps/demo/files/b.txt"
+echo '# installer v1' > "$APP/install.sh"
+overlay_stage_app "$APP" "$T/s8" "$NONE" "$P1" "$H1"
+echo '# installer v2' > "$APP/install.sh"
+overlay_stage_app "$APP" "$T/s9" "$NONE" "$P1" "$H1"
+[[ "$(cat "$T/s8/version")" != "$(cat "$T/s9/version")" ]] || fail "install.sh change did not change version"
+[[ "$(cat "$T/s1/version")" != "$(cat "$T/s8/version")" ]] || fail "install.sh presence did not change version"
+rm -f "$APP/install.sh"
 pass "version behaves"
 
 # Test 11
@@ -217,8 +230,15 @@ printf 'files:\n  settings.json: merge\n' > "$T/badmap.yaml"
 hosts_parse_files_map "$T/badmap.yaml" >/dev/null 2>&1 && fail "key without app/ accepted"
 pass "host.yaml parsing"
 
+info "Test 17: hosts_local_name works without a hostname binary"
+mkdir -p "$T/nobin" && ln -sf "$(command -v uname)" "$T/nobin/uname"
+if PATH="$T/nobin" command -v hostname >/dev/null 2>&1; then fail "test setup: hostname still on PATH"; fi
+nm=$(PATH="$T/nobin" hosts_local_name) || fail "hosts_local_name failed without hostname"
+[[ "$nm" == "$(uname -n | cut -d. -f1)" && -n "$nm" ]] || fail "unexpected name: '$nm'"
+pass "hosts_local_name fallback"
+
 rm -rf "$T"
 echo
 echo "======================================"
-echo -e "${GREEN}All 16 overlay/hosts library tests passed!${NC}"
+echo -e "${GREEN}All 18 overlay/hosts library tests passed!${NC}"
 echo "======================================"

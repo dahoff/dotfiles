@@ -904,7 +904,7 @@ run_all() {
     elif [[ -n "$host" ]]; then
         OVERLAY_HOST=$(hosts_normalize_name "$host")
     else
-        OVERLAY_HOST=$(hostname -s)
+        OVERLAY_HOST=$(hosts_local_name)
     fi
 
     # Load profile-specific package list
@@ -1122,6 +1122,10 @@ parse_args() {
             --hostname)
                 if [[ $# -lt 2 || "$2" == --* ]]; then
                     echo "Error: --hostname requires a name argument" >&2
+                    exit 1
+                fi
+                if [[ -z "$2" || "$2" == */* || "$2" == . || "$2" == .. ]]; then
+                    echo "Error: invalid --hostname '$2' (must be a plain name without '/')" >&2
                     exit 1
                 fi
                 HOSTNAME_ARG="$2"

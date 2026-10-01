@@ -13,6 +13,13 @@ hosts_normalize_name() {
     fi
 }
 
+# Short host name of this machine (no hard dependency on `hostname`)
+hosts_local_name() {
+    local h
+    h=$(hostname -s 2>/dev/null) || h=$(uname -n 2>/dev/null) || h=""
+    echo "${h%%.*}"
+}
+
 # Resolve a profile name: hosts repo first (unless skip_hosts), then dotfiles
 # Usage: hosts_resolve_profile_path profiles_dir hosts_repo name skip_hosts
 hosts_resolve_profile_path() {
@@ -65,6 +72,7 @@ hosts_parse_files_map() {
 }
 
 export -f hosts_normalize_name
+export -f hosts_local_name
 export -f hosts_resolve_profile_path
 export -f hosts_read_scalar
 export -f hosts_parse_files_map

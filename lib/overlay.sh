@@ -30,6 +30,8 @@ overlay_config_entries() {
             strategy=""
         elif [[ "$line" =~ ^[[:space:]]+strategy:[[:space:]]*([^[:space:]#]+) ]]; then
             strategy="${BASH_REMATCH[1]}"
+            strategy="${strategy#[\"\']}"
+            strategy="${strategy%[\"\']}"
         fi
     done < "$config"
 
@@ -174,6 +176,7 @@ overlay_write_version() {
     local app_dir="$1" stage_dir="$2" src strategy
     {
         cat "$app_dir/config.yaml"
+        if [[ -f "$app_dir/install.sh" ]]; then cat "$app_dir/install.sh"; fi
         cat "$stage_dir/strategies" "$stage_dir/skip"
         while read -r src strategy; do
             printf '== %s\n' "$src"

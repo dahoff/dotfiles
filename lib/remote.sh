@@ -23,12 +23,23 @@ remote_parse_host() {
     log_debug "Remote host: $REMOTE_USER@$REMOTE_HOST"
 }
 
+# Extra ssh/scp options from DOTFILES_SSH_OPTS (whitespace-split, e.g.
+# "-o Port=2222 -o IdentityFile=key"); sets the array REMOTE_EXTRA_OPTS
+remote_extra_opts() {
+    REMOTE_EXTRA_OPTS=()
+    if [[ -n "${DOTFILES_SSH_OPTS:-}" ]]; then
+        read -r -a REMOTE_EXTRA_OPTS <<< "$DOTFILES_SSH_OPTS"
+    fi
+}
+
 # Check if remote host is reachable
 # Usage: remote_check_connection
 remote_check_connection() {
     log_info "Testing connection to $REMOTE_USER@$REMOTE_HOST..."
 
-    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" "echo 'Connection test'" &>/dev/null; then
+    remote_extra_opts
+
+    if ssh ${REMOTE_EXTRA_OPTS[@]+"${REMOTE_EXTRA_OPTS[@]}"} -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" "echo 'Connection test'" &>/dev/null; then
         log_success "Connection successful"
         return 0
     else
@@ -42,7 +53,8 @@ remote_check_connection() {
 # Usage: remote_exec [--tty] "command"
 # Use --tty for commands that need interactive input (e.g. sudo password prompt)
 remote_exec() {
-    local ssh_opts=(-o "ConnectTimeout=$REMOTE_TIMEOUT")
+    remote_extra_opts
+    local ssh_opts=(${REMOTE_EXTRA_OPTS[@]+"${REMOTE_EXTRA_OPTS[@]}"} -o "ConnectTimeout=$REMOTE_TIMEOUT")
 
     if [[ "$1" == "--tty" ]]; then
         ssh_opts+=(-t)
@@ -64,7 +76,8 @@ remote_copy_to() {
 
     log_debug "Copying to remote: $local_path -> $remote_path"
 
-    scp -r -o ConnectTimeout=$REMOTE_TIMEOUT "$local_path" "$REMOTE_USER@$REMOTE_HOST:$remote_path" || {
+    remote_extra_opts
+    scp -r ${REMOTE_EXTRA_OPTS[@]+"${REMOTE_EXTRA_OPTS[@]}"} -o ConnectTimeout=$REMOTE_TIMEOUT "$local_path" "$REMOTE_USER@$REMOTE_HOST:$remote_path" || {
         log_error "Failed to copy to remote: $local_path"
         return 1
     }
@@ -80,7 +93,8 @@ remote_copy_from() {
 
     log_debug "Copying from remote: $remote_path -> $local_path"
 
-    scp -r -o ConnectTimeout=$REMOTE_TIMEOUT "$REMOTE_USER@$REMOTE_HOST:$remote_path" "$local_path" || {
+    remote_extra_opts
+    scp -r ${REMOTE_EXTRA_OPTS[@]+"${REMOTE_EXTRA_OPTS[@]}"} -o ConnectTimeout=$REMOTE_TIMEOUT "$REMOTE_USER@$REMOTE_HOST:$remote_path" "$local_path" || {
         log_error "Failed to copy from remote: $remote_path"
         return 1
     }
@@ -236,7 +250,7 @@ remote_get_version() {
     local app_name="$1"
     local state_file="\$HOME/.config/dotfiles/apps/${app_name}.yaml"
 
-    remote_exec "grep '^  version:' '$state_file' 2>/dev/null | head -1 | awk '{print \$2}'" 2>/dev/null
+    remote_exec "grep '^  version:' \"$state_file\" 2>/dev/null | head -1 | awk '{print \$2}'" 2>/dev/null
 }
 
 # Check if remote is already up to date, skip packaging if so
@@ -270,6 +284,7 @@ is_remote_mode() {
 
 # Export functions
 export -f remote_parse_host
+export -f remote_extra_opts
 export -f remote_check_connection
 export -f remote_exec
 export -f remote_copy_to
