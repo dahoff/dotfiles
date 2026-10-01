@@ -59,6 +59,7 @@ declare -a GLOBAL_FLAGS=()
 declare -a RESULTS=()
 EXIT_CODE=0
 SYNC_NO_PULL=false
+SYNC_RECORD=false
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -66,7 +67,7 @@ SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
 # Run a shell command string locally
 # Usage: run_on_target command
 run_on_target() {
-    eval "$@"
+    eval "$@" 9>&-
 }
 
 # Detect package manager
@@ -211,7 +212,7 @@ run_phase_custom_installs() {
                 continue
             fi
 
-            if bash "$script_path"; then
+            if bash "$script_path" 9>&-; then
                 log_success "[$target] Custom install complete: $name"
             else
                 log_error "[$target] Custom install failed: $name"
@@ -297,7 +298,7 @@ run_phase_configs() {
         export DOTFILES_FAILURES_FILE="$STAGE_ROOT/failures"
         : > "$DOTFILES_FAILURES_FILE"
 
-        if bash "$installer" "${cmd_args[@]}"; then
+        if bash "$installer" "${cmd_args[@]}" 9>&-; then
             RESULTS+=("$target|$name|ok")
         else
             log_error "[$target] $name: $INSTALLER_CMD failed"
@@ -380,6 +381,15 @@ print_summary() {
 
     echo
     echo "Total: $total  Passed: $passed  Failed: $failed"
+
+    if [[ ${#SYNC_WARNINGS[@]} -gt 0 ]]; then
+        echo
+        echo "Warnings:"
+        local w
+        for w in "${SYNC_WARNINGS[@]}"; do
+            log_warn "$w"
+        done
+    fi
 
     if [[ $failed -eq 0 ]]; then
         log_success "All operations completed successfully!"
@@ -600,12 +610,12 @@ cleanup() {
         eval "$cmd" || true
     done
     [[ -n "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
+    [[ "$SYNC_RECORD" == true ]] && sync_record
     return 0
 }
 
 # End of a real (non-dry-run) sync: record the run, clear a stale report
 sync_record() {
-    is_dry_run && return 0
     sync_touch_last
     [[ "$SYNC_AUTO" == true ]] || sync_clear_report
     return 0
@@ -615,7 +625,6 @@ sync_record() {
 sync_pull_one() {
     local path="$1" reason
     if ! reason=$(sync_pull_repo "$path"); then
-        RESULTS+=("local|pull $path|FAIL")
         SYNC_WARNINGS+=("$path: pull failed ($reason)")
         log_warn "$path: pull failed ($reason)"
     fi
@@ -645,13 +654,14 @@ main() {
             echo "dotfiles: sync already running" >&2
             exit 1
         fi
+        # From here on the EXIT trap records the run, however it ends
+        SYNC_RECORD=true
     fi
 
     # Validate hosts repo before any changes
     if [[ -n "$HOSTS_REPO" ]]; then
         if [[ ! -d "$HOSTS_REPO" ]]; then
             log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
-            [[ "$COMMAND" == "sync" ]] && sync_record
             exit 1
         fi
         HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
@@ -665,13 +675,9 @@ main() {
         is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
     fi
 
-    if run_all "$PROFILE_ARG"; then
-        print_summary
-    else
-        EXIT_CODE=1
-    fi
+    run_all "$PROFILE_ARG"
 
-    [[ "$COMMAND" == "sync" ]] && sync_record
+    print_summary
 
     exit $EXIT_CODE
 }

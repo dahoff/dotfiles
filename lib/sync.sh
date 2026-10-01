@@ -22,7 +22,10 @@ sync_lock() {
     local dir
     dir=$(sync_state_dir)
     if command -v flock >/dev/null 2>&1; then
-        exec 9>"$dir/lock"
+        if ! { exec 9>"$dir/lock"; } 2>/dev/null; then
+            log_error "cannot open lock file $dir/lock"
+            exit 1
+        fi
         flock -n 9
     else
         # No flock (e.g. macOS): mkdir is atomic
@@ -46,7 +49,8 @@ sync_pull_repo() {
 
     local before after err
     before=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
-    if ! err=$(env "${envs[@]}" git -C "$path" pull --ff-only --quiet 2>&1 >/dev/null); then
+    if ! err=$(env "${envs[@]}" git -C "$path" -c merge.autoStash=false -c rebase.autoStash=false \
+        -c pull.rebase=false pull --ff-only --quiet 9>&- 2>&1 >/dev/null); then
         local line
         line=$(printf '%s\n' "$err" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -m1 -v '^$' || true)
         printf '%s\n' "${line:0:120}"

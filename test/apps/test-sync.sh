@@ -22,6 +22,19 @@ echo "======================================"
 echo
 
 unset DOTFILES_HOSTS_REPO
+HAVE_FLOCK=true
+command -v flock >/dev/null 2>&1 || { HAVE_FLOCK=false; info "flock not found: lock cases will be skipped"; }
+HAVE_RSYNC=true
+command -v rsync >/dev/null 2>&1 || HAVE_RSYNC=false
+# Copy a tree without .git (rsync, or cp fallback)
+copy_tree() {
+    if [[ "$HAVE_RSYNC" == true ]]; then
+        rsync -a --delete --exclude .git "$1"/ "$2"/
+    else
+        mkdir -p "$2"
+        (cd "$1" && tar --exclude=.git -cf - .) | (cd "$2" && tar -xf -)
+    fi
+}
 T="/tmp/dotfiles-test-sync-$$"
 HOLDER=""
 cleanup() {
@@ -52,7 +65,7 @@ for r in dotfiles author; do
     git -C "$WORK/$r" config user.name tester
     git -C "$WORK/$r" config user.email tester@example.com
 done
-rsync -a --delete --exclude .git "$ROOT_DIR"/ "$WORK/dotfiles"/
+copy_tree "$ROOT_DIR" "$WORK/dotfiles"
 git -C "$WORK/dotfiles" add -A
 git -C "$WORK/dotfiles" commit -q --allow-empty -m wip
 git -C "$WORK/dotfiles" push -q origin HEAD
@@ -120,6 +133,7 @@ author_commit OTHER three
 run sync
 [[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
 [[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
+[[ "$OUT" != *"operation(s) failed"* ]] || fail "pull failure counted as failed operation: $OUT"
 [[ "$(git -C "$WORK/dotfiles" rev-parse HEAD)" == "$LOCAL_SHA" ]] || fail "local HEAD moved"
 pass "diverged pull warns, repo untouched"
 
@@ -137,9 +151,26 @@ git -C "$WORK/dotfiles" diff --quiet && fail "git diff is empty"
 git -C "$WORK/dotfiles" checkout -q -- PULLTEST
 pass "dirty tree kept, warning shown"
 
+# Case 5b
+info "Case 5b: user autoStash/rebase config is ignored"
+git -C "$WORK/dotfiles" config merge.autoStash true
+git -C "$WORK/dotfiles" config rebase.autoStash true
+git -C "$WORK/dotfiles" config pull.rebase true
+echo changed-locally > "$WORK/dotfiles/PULLTEST"
+run sync
+[[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
+[[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
+[[ "$(cat "$WORK/dotfiles/PULLTEST")" == "changed-locally" ]] || fail "local modification lost"
+[[ -z "$(git -C "$WORK/dotfiles" stash list)" ]] || fail "a stash entry was created"
+git -C "$WORK/dotfiles" checkout -q -- PULLTEST
+git -C "$WORK/dotfiles" config --unset merge.autoStash
+git -C "$WORK/dotfiles" config --unset rebase.autoStash
+git -C "$WORK/dotfiles" config --unset pull.rebase
+pass "no stash or rebase despite user config"
+
 # Case 6
 info "Case 6: non-git dotfiles repo"
-rsync -a --exclude .git "$WORK/dotfiles"/ "$T/nogit"/
+copy_tree "$WORK/dotfiles" "$T/nogit"
 cat > "$T/config-nogit" <<EOF
 dotfiles_repo=$T/nogit
 hosts_repo=$T/hosts-repo
@@ -153,6 +184,9 @@ pass "non-git repo skipped silently"
 
 # Case 7
 info "Case 7: lock held"
+if [[ "$HAVE_FLOCK" != true ]]; then
+    info "skipped (no flock)"
+else
 mkdir -p "$STATE"
 ( flock 9; exec sleep 30 ) 9>"$STATE/lock" &
 HOLDER=$!
@@ -171,6 +205,7 @@ kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true; HOLDER=""
 run sync
 [[ $RC -eq 0 ]] || fail "sync after release failed: $OUT"
 pass "lock held, then released"
+fi
 
 # Case 8
 info "Case 8: last-sync"
@@ -189,6 +224,34 @@ echo x > "$STATE/report"
 run sync
 [[ ! -e "$STATE/report" ]] || fail "report not cleared"
 pass "report cleared"
+
+# Case 10
+info "Case 10: children do not inherit the lock"
+if [[ "$HAVE_FLOCK" != true ]]; then
+    info "skipped (no flock)"
+else
+    mkdir -p "$WORK/dotfiles/sleeptest"
+    cat > "$WORK/dotfiles/sleeptest/install.sh" <<'EOS'
+#!/usr/bin/env bash
+# Starts a detached long-lived child, like a tmux server would
+(setsid sleep 4711 >/dev/null 2>&1 &)
+exit 0
+EOS
+    cat > "$T/hosts-repo/profiles/sleeper.yaml" <<'EOS'
+packages:
+  - name: sleeptest
+    config:
+      dir: sleeptest
+EOS
+    run sync --profile sleeper --hostname nohost
+    [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
+    pgrep -f "^sleep 4711" >/dev/null || fail "test child was not started"
+    LOCK_FREE=true
+    flock -n "$STATE/lock" true || LOCK_FREE=false
+    pkill -f "^sleep 4711" || true
+    [[ "$LOCK_FREE" == true ]] || fail "lock still held after sync exited (fd leaked to child)"
+    pass "lock free after sync with a detached child"
+fi
 
 echo
 echo "All sync tests passed"

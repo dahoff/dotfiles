@@ -626,7 +626,7 @@ run_post_install() {
                 local cmd
                 cmd=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')
                 log_debug "Running post-install: $cmd"
-                eval "$cmd" &>/dev/null || log_warn "Post-install command failed: $cmd"
+                eval "$cmd" &>/dev/null 9>&- || log_warn "Post-install command failed: $cmd"
             elif [[ "$line" =~ ^[[:alpha:]] ]]; then
                 break
             fi
