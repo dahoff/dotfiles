@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/lib/hosts.sh"
 source "$SCRIPT_DIR/lib/overlay.sh"
 source "$SCRIPT_DIR/lib/profile.sh"
 source "$SCRIPT_DIR/lib/config.sh"
+source "$SCRIPT_DIR/lib/sync.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
@@ -57,6 +58,7 @@ declare -a GLOBAL_FLAGS=()
 # Result tracking: "target|item|ok" or "target|item|FAIL"
 declare -a RESULTS=()
 EXIT_CODE=0
+SYNC_NO_PULL=false
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -392,7 +394,7 @@ usage() {
 Usage: dotfiles <command> [options]
 
 Commands:
-  sync                 Install if new, upgrade if exists (idempotent)
+  sync                 Pull, then install if new, upgrade if exists (idempotent)
   uninstall            Uninstall all configs
   status               Show status for all configs
   verify               Verify all installations
@@ -406,6 +408,10 @@ Hosts repo options:
   --hosts-repo PATH    dotfiles-hosts checkout (default: env DOTFILES_HOSTS_REPO)
                        Profiles are looked up there first, then in profiles/
   --hostname NAME      Host directory hosts/NAME/ to apply (default: hostname -s)
+
+Sync options:
+  --auto               Background mode (used by the login drop-in)
+  --no-pull            Do not git pull the dotfiles and hosts repos
 
 Options (passed through to each app's installer):
   --dry-run            Show what would be done without making changes
@@ -501,6 +507,14 @@ parse_args() {
                 HOSTNAME_ARG="$2"
                 shift 2
                 ;;
+            --auto)
+                SYNC_AUTO=true
+                shift
+                ;;
+            --no-pull)
+                SYNC_NO_PULL=true
+                shift
+                ;;
             --dry-run|--no-backup|--verbose|--quiet|--force)
                 GLOBAL_FLAGS+=("$1")
                 shift
@@ -570,6 +584,43 @@ resolve_settings() {
     AUTO_SYNC_SECONDS=$(config_interval_seconds "$CFG_AUTO_SYNC_INTERVAL")
 }
 
+# True if --dry-run was given
+is_dry_run() {
+    local flag
+    for flag in "${GLOBAL_FLAGS[@]}"; do
+        [[ "$flag" == "--dry-run" ]] && return 0
+    done
+    return 1
+}
+
+# EXIT trap: remove the work dir and run registered cleanup commands
+cleanup() {
+    local cmd
+    for cmd in "${SYNC_CLEANUP[@]}"; do
+        eval "$cmd" || true
+    done
+    [[ -n "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
+    return 0
+}
+
+# End of a real (non-dry-run) sync: record the run, clear a stale report
+sync_record() {
+    is_dry_run && return 0
+    sync_touch_last
+    [[ "$SYNC_AUTO" == true ]] || sync_clear_report
+    return 0
+}
+
+# Pull one repo; a failure is a warning, not a sync failure
+sync_pull_one() {
+    local path="$1" reason
+    if ! reason=$(sync_pull_repo "$path"); then
+        RESULTS+=("local|pull $path|FAIL")
+        SYNC_WARNINGS+=("$path: pull failed ($reason)")
+        log_warn "$path: pull failed ($reason)"
+    fi
+}
+
 # Main
 main() {
     parse_args "$@"
@@ -578,8 +629,7 @@ main() {
     log_init "$@"
 
     WORK_DIR=$(mktemp -d)
-    # shellcheck disable=SC2064
-    trap "rm -rf '$WORK_DIR'" EXIT
+    trap cleanup EXIT
 
     # Handle help
     if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then
@@ -589,19 +639,39 @@ main() {
 
     resolve_settings || exit 1
 
+    if [[ "$COMMAND" == "sync" ]] && ! is_dry_run; then
+        if ! sync_lock; then
+            [[ "$SYNC_AUTO" == true ]] && exit 0
+            echo "dotfiles: sync already running" >&2
+            exit 1
+        fi
+    fi
+
     # Validate hosts repo before any changes
     if [[ -n "$HOSTS_REPO" ]]; then
         if [[ ! -d "$HOSTS_REPO" ]]; then
             log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
+            [[ "$COMMAND" == "sync" ]] && sync_record
             exit 1
         fi
         HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
     fi
 
-    run_all "$PROFILE_ARG"
+    if [[ "$COMMAND" == "sync" ]]; then
+        if [[ "$SYNC_NO_PULL" != true ]] && ! is_dry_run; then
+            sync_pull_one "$DOTFILES_REPO"
+            [[ -z "$HOSTS_REPO" ]] || sync_pull_one "$HOSTS_REPO"
+        fi
+        is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
+    fi
 
-    # Print summary
-    print_summary
+    if run_all "$PROFILE_ARG"; then
+        print_summary
+    else
+        EXIT_CODE=1
+    fi
+
+    [[ "$COMMAND" == "sync" ]] && sync_record
 
     exit $EXIT_CODE
 }
