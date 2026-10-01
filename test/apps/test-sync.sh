@@ -253,5 +253,143 @@ EOS
     pass "lock free after sync with a detached child"
 fi
 
+# Helpers for --auto cases
+LOG="$STATE/last-sync.log"
+age_last_sync() { mkdir -p "$STATE"; touch -d '5 hours ago' "$STATE/last-sync"; }
+FAKEBIN="$T/fakebin"
+mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\ntouch "%s/sudo-called"\nexit 1\n' "$T" > "$FAKEBIN/sudo"
+chmod +x "$FAKEBIN/sudo"
+PATH_ORIG="$PATH"
+cp "$T/config" "$T/config.orig"
+
+# Case 11
+info "Case 11: throttle"
+rm -f "$LOG" "$STATE/report"
+touch "$STATE/last-sync"
+BEFORE=$(stat -c %Y "$STATE/last-sync")
+run sync --auto
+[[ $RC -eq 0 ]] || fail "throttled --auto should exit 0: $OUT"
+[[ ! -e "$LOG" ]] || fail "throttled --auto wrote a log"
+[[ ! -e "$STATE/report" ]] || fail "throttled --auto wrote a report"
+[[ "$(stat -c %Y "$STATE/last-sync")" == "$BEFORE" ]] || fail "throttled --auto touched last-sync"
+age_last_sync
+run sync --auto
+[[ $RC -eq 0 ]] || fail "--auto failed: $OUT"
+[[ -f "$LOG" ]] || fail "no log after --auto"
+[[ "$(head -1 "$LOG")" == "dotfiles sync --auto "* ]] || fail "bad log header: $(head -1 "$LOG")"
+[[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched by --auto"
+pass "throttle skips recent, runs old and logs"
+
+# Case 12
+info "Case 12: auto_sync=off"
+echo "auto_sync=off" >> "$T/config"
+age_last_sync
+OLDSUM=$(cksum < "$LOG")
+OLDTIME=$(stat -c %Y "$STATE/last-sync")
+run sync --auto
+[[ $RC -eq 0 ]] || fail "--auto with auto_sync=off should exit 0: $OUT"
+[[ "$(cksum < "$LOG")" == "$OLDSUM" ]] || fail "log changed with auto_sync=off"
+[[ "$(stat -c %Y "$STATE/last-sync")" == "$OLDTIME" ]] || fail "last-sync touched with auto_sync=off"
+cp "$T/config.orig" "$T/config"
+pass "auto_sync=off leaves everything alone"
+
+# Case 13
+info "Case 13: config-only with pending packages"
+sed -i 's/^hostname=.*/hostname=nohost/' "$T/config"
+echo "profile=pendingtest" >> "$T/config"
+rm -rf "$HOME/.bashrc.d/50-lazygit.sh" "$HOME/.claude" "$STATE/report" "$T/sudo-called"
+age_last_sync
+RC=0
+OUT=$(PATH="$FAKEBIN:$PATH_ORIG" "$WORK/dotfiles/dotfiles" sync --auto --no-backup 2>&1) || RC=$?
+[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
+[[ ! -e "$T/sudo-called" ]] || fail "--auto called sudo"
+{ grep -qx nonexistent-pkg "$STATE/pending" && grep -qx faketool "$STATE/pending"; } \
+    || fail "pending missing entries: $(cat "$STATE/pending")"
+grep -q "^dotfiles: 2 packages pending (nonexistent-pkg, faketool) — run 'dotfiles sync'$" "$STATE/report" \
+    || fail "bad report: $(cat "$STATE/report" 2>&1)"
+[[ -f "$HOME/.bashrc.d/50-lazygit.sh" ]] || fail "custom drop-in not deployed"
+[[ -f "$HOME/.claude/settings.json" ]] || fail "claude configs not deployed"
+pass "config-only, pending recorded, drop-in deployed"
+
+# Case 14
+info "Case 14: updated apps in report"
+cp "$T/config.orig" "$T/config"
+echo "profile=base" >> "$T/config"
+OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STATE="$STATE"
+export HOME="$T/home2" STATE_DIR="$T/state2" XDG_STATE_HOME="$T/xdg-state2"
+mkdir -p "$HOME" "$STATE_DIR/apps"
+STATE="$XDG_STATE_HOME/dotfiles"; LOG="$STATE/last-sync.log"
+run sync --auto
+[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
+grep -q '^dotfiles: updated claude, scripts' "$STATE/report" || fail "bad report: $(cat "$STATE/report" 2>&1)"
+age_last_sync
+run sync --auto
+[[ ! -e "$STATE/report" ]] || fail "report written without changes: $(cat "$STATE/report")"
+echo "# changed" >> "$T/hosts-repo/profiles/base/apps/claude/files/tmux-notify.sh"
+age_last_sync
+run sync --auto
+grep -q '^dotfiles: updated claude$' "$STATE/report" || fail "bad report after change: $(cat "$STATE/report" 2>&1)"
+pass "updated apps reported once"
+
+# Case 15
+info "Case 15: pull failure in report"
+age_last_sync
+git -C "$WORK/dotfiles" fetch -q
+git -C "$WORK/dotfiles" reset -q --hard '@{u}'
+echo local2 > "$WORK/dotfiles/LOCAL2"
+git -C "$WORK/dotfiles" add LOCAL2
+git -C "$WORK/dotfiles" commit -q -m "local commit 2"
+author_commit OTHER2 four
+run sync --auto
+[[ $RC -eq 0 ]] || fail "pull failure changed exit code: $OUT"
+grep -q "^dotfiles: $WORK/dotfiles: pull failed (.*) — see " "$STATE/report" \
+    || fail "no pull failure in report: $(cat "$STATE/report" 2>&1)"
+if grep -q "sync failed" "$STATE/report"; then fail "pull failure reported as sync failed"; fi
+git -C "$WORK/dotfiles" fetch -q
+git -C "$WORK/dotfiles" reset -q --hard '@{u}'
+pass "pull failure reported"
+
+# Case 16
+info "Case 16: validation failure in --auto"
+sed -i 's/^hostname=.*/hostname=typo/' "$T/config"
+age_last_sync
+rm -f "$STATE/report"
+run sync --auto
+[[ $RC -ne 0 ]] || fail "expected failure: $OUT"
+grep -q '^dotfiles: sync failed (' "$STATE/report" || fail "no failure report: $(cat "$STATE/report" 2>&1)"
+[[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched after failure"
+export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
+STATE="$OLD_STATE"
+cp "$T/config.orig" "$T/config"
+pass "validation failure reported, last-sync touched"
+
+# Case 17
+info "Case 17: login drop-in"
+mkdir -p "$WORK/bin" "$STATE"
+printf '#!/bin/sh\necho "$@" >> "%s/calls"\n' "$WORK" > "$WORK/bin/dotfiles"
+chmod +x "$WORK/bin/dotfiles"
+rm -f "$WORK/calls"
+DROPIN="$HOME/.bashrc.d/90-dotfiles.sh"
+[[ -f "$DROPIN" ]] || fail "drop-in not installed at $DROPIN"
+echo "dotfiles: hello" > "$STATE/report"
+LOGIN_OUT=$(PATH="$WORK/bin:$PATH_ORIG" bash --norc --noprofile -i -c "source '$DROPIN'" 2>/dev/null)
+[[ "$LOGIN_OUT" == *"dotfiles: hello"* ]] || fail "report not shown: $LOGIN_OUT"
+[[ ! -e "$STATE/report" ]] || fail "report not deleted"
+for _ in $(seq 1 20); do grep -q 'sync --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
+grep -q 'sync --auto' "$WORK/calls" || fail "background sync not started"
+rm -f "$WORK/calls"
+PATH="$WORK/bin:$PATH_ORIG" DOTFILES_NO_AUTO_SYNC=1 bash --norc --noprofile -i -c "source '$DROPIN'" >/dev/null 2>&1
+sleep 0.5
+[[ ! -e "$WORK/calls" ]] || fail "DOTFILES_NO_AUTO_SYNC ignored"
+echo "dotfiles: hello" > "$STATE/report"
+LOGIN_OUT=$(PATH="$WORK/bin:$PATH_ORIG" bash --norc -c "source '$DROPIN'" 2>&1)
+sleep 0.5
+[[ -z "$LOGIN_OUT" ]] || fail "non-interactive shell printed: $LOGIN_OUT"
+[[ ! -e "$WORK/calls" ]] || fail "non-interactive shell started a sync"
+[[ -e "$STATE/report" ]] || fail "non-interactive shell consumed the report"
+rm -f "$STATE/report"
+pass "login drop-in: report, auto sync, opt-out, non-interactive"
+
 echo
 echo "All sync tests passed"

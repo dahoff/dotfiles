@@ -1,0 +1,19 @@
+# Config-only apps plus one missing OS package and one missing custom tool
+packages:
+  - name: claude
+    config:
+      dir: claude
+  - name: scripts
+    config:
+      dir: scripts
+
+  - name: nonexistent-pkg
+    apt: dotfiles-nonexistent-pkg
+    dnf: dotfiles-nonexistent-pkg
+    brew: dotfiles-nonexistent-pkg
+
+  - name: faketool
+    custom:
+      check: false
+      script: custom/lazygit/install.sh
+      dropin: custom/lazygit/files/50-lazygit.sh

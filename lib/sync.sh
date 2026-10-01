@@ -107,3 +107,80 @@ sync_clear_report() {
     dir=$(sync_state_dir)
     rm -f "$dir/report"
 }
+
+# Modification time of a file in epoch seconds (GNU stat, then BSD stat)
+sync_mtime() {
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# For --auto: succeed if a sync should run now.
+# Fails when auto_sync is off, or last-sync is younger than AUTO_SYNC_SECONDS.
+# Reads globals AUTO_SYNC and AUTO_SYNC_SECONDS.
+sync_should_run_auto() {
+    [[ "${AUTO_SYNC:-on}" == "off" ]] && return 1
+    local dir last now
+    dir=$(sync_state_dir)
+    [[ -e "$dir/last-sync" ]] || return 0
+    last=$(sync_mtime "$dir/last-sync") || return 0
+    now=$(date +%s)
+    (( now - last < AUTO_SYNC_SECONDS )) && return 1
+    return 0
+}
+
+# Join arguments with ", "
+sync_join() {
+    local out="" item
+    for item in "$@"; do
+        out+="${out:+, }$item"
+    done
+    printf '%s' "$out"
+}
+
+# Write <state>/report for --auto, or remove it when there is nothing to say.
+# Usage: sync_write_report LOG UPDATED_CSV PENDING_CSV
+#   LOG          path shown in "see <log>" suffixes
+#   UPDATED_CSV  comma-separated names of updated apps ("" if none)
+#   PENDING_CSV  comma-separated names of pending packages ("" if none)
+# Warnings come from the global SYNC_WARNINGS, failures from FAIL entries in
+# the global RESULTS ("target|item|FAIL"). Lines, in order: updated, pending,
+# warnings, failed. Written to report.tmp, then moved into place.
+sync_write_report() {
+    local log="$1" updated_csv="${2:-}" pending_csv="${3:-}"
+    local dir report tmp
+    dir=$(sync_state_dir)
+    report="$dir/report"
+    tmp="$dir/report.tmp"
+    : > "$tmp"
+
+    local -a items=()
+    if [[ -n "$updated_csv" ]]; then
+        IFS=',' read -r -a items <<< "$updated_csv"
+        printf 'dotfiles: updated %s\n' "$(sync_join "${items[@]}")" >> "$tmp"
+    fi
+    if [[ -n "$pending_csv" ]]; then
+        IFS=',' read -r -a items <<< "$pending_csv"
+        local noun="packages"
+        [[ ${#items[@]} -eq 1 ]] && noun="package"
+        printf "dotfiles: %d %s pending (%s) — run 'dotfiles sync'\n" \
+            "${#items[@]}" "$noun" "$(sync_join "${items[@]}")" >> "$tmp"
+    fi
+    local w
+    for w in "${SYNC_WARNINGS[@]}"; do
+        printf 'dotfiles: %s — see %s\n' "$w" "$log" >> "$tmp"
+    done
+    local -a failed=()
+    local result target item status
+    for result in "${RESULTS[@]}"; do
+        IFS='|' read -r target item status <<< "$result"
+        [[ "$status" == "FAIL" ]] && failed+=("$item")
+    done
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        printf 'dotfiles: sync failed (%s) — see %s\n' "$(sync_join "${failed[@]}")" "$log" >> "$tmp"
+    fi
+
+    if [[ -s "$tmp" ]]; then
+        mv "$tmp" "$report"
+    else
+        rm -f "$tmp" "$report"
+    fi
+}

@@ -16,6 +16,7 @@ source "$SCRIPT_DIR/lib/overlay.sh"
 source "$SCRIPT_DIR/lib/profile.sh"
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/sync.sh"
+source "$SCRIPT_DIR/lib/state.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
@@ -60,6 +61,10 @@ declare -a RESULTS=()
 EXIT_CODE=0
 SYNC_NO_PULL=false
 SYNC_RECORD=false
+CHECK_ONLY=false    # --auto: phases 1 and 2 only check, never install
+# Packages still missing (names from the profile); apps whose state version changed
+declare -a PENDING=()
+declare -a UPDATED_APPS=()
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -119,7 +124,7 @@ run_phase_os_packages() {
     log_info "[$target] Detected package manager: $pkg_manager"
 
     # Collect all OS packages for this manager
-    local -a pkg_list=()
+    local -a pkg_list=() pkg_names=()
     for idx in "${!PKG_NAMES[@]}"; do
         local pkg=""
         case "$pkg_manager" in
@@ -129,6 +134,7 @@ run_phase_os_packages() {
         esac
         if [[ -n "$pkg" ]]; then
             pkg_list+=("$pkg")
+            pkg_names+=("${PKG_NAMES[$idx]}")
         fi
     done
 
@@ -138,10 +144,13 @@ run_phase_os_packages() {
     fi
 
     # Filter to only missing packages 
-    local -a missing=()
-    for pkg in "${pkg_list[@]}"; do
+    local -a missing=() missing_names=()
+    local i
+    for i in "${!pkg_list[@]}"; do
+        pkg="${pkg_list[$i]}"
         if ! is_pkg_installed "$pkg" "$pkg_manager"; then
             missing+=("$pkg")
+            missing_names+=("${pkg_names[$i]}")
         else
             log_debug "Already installed: $pkg"
         fi
@@ -154,6 +163,13 @@ run_phase_os_packages() {
     fi
 
     log_info "[$target] Packages to install: ${missing[*]}"
+
+    # --auto never installs OS packages: report them as pending
+    if [[ "$CHECK_ONLY" == true ]]; then
+        log_info "[$target] Check only: ${#missing[@]} package(s) pending: ${missing_names[*]}"
+        PENDING+=("${missing_names[@]}")
+        return 0
+    fi
 
     if [[ "$dry_run" == true ]]; then
         log_info "[$target] [DRY-RUN] Would install ${#missing[@]} package(s) via $pkg_manager"
@@ -172,6 +188,11 @@ run_phase_os_packages() {
             run_on_target "brew install ${missing[*]}"
             ;;
     esac
+
+    # Whatever is still missing after the install stays pending
+    for i in "${!missing[@]}"; do
+        is_pkg_installed "${missing[$i]}" "$pkg_manager" || PENDING+=("${missing_names[$i]}")
+    done
 
     log_success "[$target] Installed ${#missing[@]} OS package(s)"
     RESULTS+=("$target|os-packages|ok")
@@ -199,6 +220,15 @@ run_phase_custom_installs() {
         # Run install script if tool not already installed 
         if [[ -n "$check" ]] && run_on_target "$check" &>/dev/null; then
             log_info "[$target] $name: already installed"
+        elif [[ "$CHECK_ONLY" == true ]]; then
+            # --auto never runs install scripts. Without a check we cannot tell
+            # whether the tool is missing, so it is not reported as pending.
+            if [[ -n "$check" ]]; then
+                log_info "[$target] $name: not installed (pending, install skipped)"
+                PENDING+=("$name")
+            else
+                log_info "[$target] $name: no check defined, install skipped"
+            fi
         elif [[ "$dry_run" == true ]]; then
             log_info "[$target] [DRY-RUN] Would run: $SCRIPT_DIR/packages/$script"
         else
@@ -207,6 +237,7 @@ run_phase_custom_installs() {
             local script_path="$SCRIPT_DIR/packages/$script"
             if [[ ! -x "$script_path" ]]; then
                 log_error "Custom install script not found or not executable: $script_path"
+                PENDING+=("$name")
                 RESULTS+=("$target|$name|FAIL")
                 EXIT_CODE=1
                 continue
@@ -214,8 +245,12 @@ run_phase_custom_installs() {
 
             if bash "$script_path" 9>&-; then
                 log_success "[$target] Custom install complete: $name"
+                if [[ -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
+                    PENDING+=("$name")
+                fi
             else
                 log_error "[$target] Custom install failed: $name"
+                PENDING+=("$name")
                 RESULTS+=("$target|$name|FAIL")
                 EXIT_CODE=1
                 continue
@@ -298,12 +333,29 @@ run_phase_configs() {
         export DOTFILES_FAILURES_FILE="$STAGE_ROOT/failures"
         : > "$DOTFILES_FAILURES_FILE"
 
+        # State name is app.name from config.yaml (dir name as fallback)
+        local app_name="" ver_before="" ver_after="" had_state=false
+        if [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]]; then
+            yaml_load "$SCRIPT_DIR/$dir/config.yaml"
+            app_name=$(yaml_get app.name)
+        fi
+        [[ -n "$app_name" ]] || app_name=$(basename "$dir")
+        [[ -f "$(state_get_file "$app_name")" ]] && had_state=true
+        ver_before=$(state_get_version "$app_name" 2>/dev/null || true)
+
         if bash "$installer" "${cmd_args[@]}" 9>&-; then
             RESULTS+=("$target|$name|ok")
         else
             log_error "[$target] $name: $INSTALLER_CMD failed"
             RESULTS+=("$target|$name|FAIL")
             EXIT_CODE=1
+        fi
+
+        # A changed version, or a state file that is new, means the app was updated
+        ver_after=$(state_get_version "$app_name" 2>/dev/null || true)
+        if [[ "$ver_after" != "$ver_before" ]] \
+            || { [[ "$had_state" == false && -f "$(state_get_file "$app_name")" ]]; }; then
+            UPDATED_APPS+=("$name")
         fi
 
         # Per-file failures reported by the installer
@@ -327,7 +379,12 @@ run_all() {
     fi
 
     # Load profile-specific package list
-    load_packages_for_profile "$profile" "$OVERLAY_HOST" || return 1
+    # A validation failure aborts run_all; record it first so the report names it
+    if ! load_packages_for_profile "$profile" "$OVERLAY_HOST"; then
+        RESULTS+=("$target|profile|FAIL")
+        EXIT_CODE=1
+        return 1
+    fi
     log_info "[$target] Using profile '$RESOLVED_PROFILE' (${#PKG_NAMES[@]} package(s))"
     if [[ -n "$HOST_YAML" ]]; then
         log_info "[$target] Host directory: hosts/$OVERLAY_HOST"
@@ -337,6 +394,8 @@ run_all() {
     # Validate overlays before any change
     if ! prepare_overlays "$target"; then
         log_error "[$target] Invalid overlay configuration; no changes made"
+        RESULTS+=("$target|overlays|FAIL")
+        EXIT_CODE=1
         return 1
     fi
 
@@ -519,6 +578,7 @@ parse_args() {
                 ;;
             --auto)
                 SYNC_AUTO=true
+                CHECK_ONLY=true
                 shift
                 ;;
             --no-pull)
@@ -617,7 +677,12 @@ cleanup() {
 # End of a real (non-dry-run) sync: record the run, clear a stale report
 sync_record() {
     sync_touch_last
-    [[ "$SYNC_AUTO" == true ]] || sync_clear_report
+    if [[ "$SYNC_AUTO" == true ]]; then
+        sync_write_report "$(sync_state_dir)/last-sync.log" \
+            "$(IFS=,; echo "${UPDATED_APPS[*]}")" "$(IFS=,; echo "${PENDING[*]}")"
+    else
+        sync_clear_report
+    fi
     return 0
 }
 
@@ -654,6 +719,16 @@ main() {
             echo "dotfiles: sync already running" >&2
             exit 1
         fi
+        if [[ "$SYNC_AUTO" == true ]]; then
+            # Throttled or disabled: exit before recording is armed, so
+            # last-sync, the report and the log stay untouched
+            sync_should_run_auto || exit 0
+            local log
+            log="$(sync_state_dir)/last-sync.log"
+            exec >"$log" 2>&1
+            echo "dotfiles sync --auto $(date +%Y-%m-%dT%H:%M:%S%z)"
+            export GIT_SETUP_SKIP=true
+        fi
         # From here on the EXIT trap records the run, however it ends
         SYNC_RECORD=true
     fi
@@ -676,6 +751,8 @@ main() {
     fi
 
     run_all "$PROFILE_ARG"
+
+    is_dry_run || sync_write_pending "${PENDING[@]}"
 
     print_summary
 
