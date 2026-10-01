@@ -186,6 +186,17 @@ cleanup() {
     # Override in main script if needed
 }
 
+# Check whether a value is among the remaining arguments
+# Usage: list_contains needle item...
+list_contains() {
+    local needle="$1" item
+    shift
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
 # Export functions
 export -f command_exists
 export -f file_exists
@@ -205,3 +216,4 @@ export -f is_test_mode
 export -f is_dry_run
 export -f abs_path
 export -f cleanup
+export -f list_contains

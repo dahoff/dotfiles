@@ -108,20 +108,21 @@ else
     pass "Correctly errors for missing hosts file"
 fi
 
-# Test 9: deploy command exists in bash/install.sh
-info "Test 9: deploy command in bash/install.sh"
-if grep -q "cmd_deploy" "$ROOT_DIR/bash/install.sh"; then
-    pass "cmd_deploy exists in bash/install.sh"
-else
-    fail "cmd_deploy missing from bash/install.sh"
-fi
+# Test 9: app installers use the shared core
+info "Test 9: app installers source lib/installer.sh"
+for app in bash claude git packages scripts tmux vim; do
+    if ! grep -q 'lib/installer.sh' "$ROOT_DIR/$app/install.sh"; then
+        fail "$app/install.sh does not source lib/installer.sh"
+    fi
+done
+pass "All app installers source lib/installer.sh"
 
-# Test 10: deploy command exists in tmux/install.sh
-info "Test 10: deploy command in tmux/install.sh"
-if grep -q "cmd_deploy" "$ROOT_DIR/tmux/install.sh"; then
-    pass "cmd_deploy exists in tmux/install.sh"
+# Test 10: shared core provides deploy
+info "Test 10: deploy command in lib/installer.sh"
+if grep -q "^cmd_deploy()" "$ROOT_DIR/lib/installer.sh"; then
+    pass "cmd_deploy exists in lib/installer.sh"
 else
-    fail "cmd_deploy missing from tmux/install.sh"
+    fail "cmd_deploy missing from lib/installer.sh"
 fi
 
 # Test 11: Profile has unified packages format (no separate apps: section)
