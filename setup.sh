@@ -42,6 +42,12 @@ RESOLVED_PROFILE=""
 declare -a HOSTS_PROFILE_CHAIN=()   # hosts-repo profiles in the chain, base-most first
 HOST_YAML=""
 OVERLAY_HOST=""
+
+# Overlay staging (per run_all)
+WORK_DIR=""
+STAGE_ROOT=""
+STRATEGIES_FILE=""
+declare -a LAYER_ROOTS=()
 declare -a GLOBAL_FLAGS=()
 
 # Result tracking: "host|item|ok" or "host|item|FAIL"
@@ -466,6 +472,61 @@ load_packages_for_profile() {
     apply_profile_modifiers "$HOST_YAML" "host $hostname"
 }
 
+# Collect layer roots and the strategies file, then validate every app's
+# overlays. Runs before any change; returns 1 to abort.
+# Usage: prepare_overlays target
+prepare_overlays() {
+    local target="$1"
+    STAGE_ROOT="$WORK_DIR/$target"
+    STRATEGIES_FILE="$STAGE_ROOT/strategies"
+    LAYER_ROOTS=()
+    mkdir -p "$STAGE_ROOT" || return 1
+    : > "$STRATEGIES_FILE"
+
+    local p
+    for p in "${HOSTS_PROFILE_CHAIN[@]}"; do
+        LAYER_ROOTS+=("$HOSTS_REPO/profiles/$p")
+        hosts_parse_files_map "$HOSTS_REPO/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
+    done
+    if [[ -n "$HOST_YAML" ]]; then
+        LAYER_ROOTS+=("$(dirname "$HOST_YAML")")
+        hosts_parse_files_map "$HOST_YAML" >> "$STRATEGIES_FILE" || return 1
+    fi
+
+    local -a dirs=()
+    local idx
+    for idx in "${!PKG_NAMES[@]}"; do
+        [[ -n "${PKG_CONFIG_DIR[$idx]}" ]] && dirs+=("${PKG_CONFIG_DIR[$idx]}")
+    done
+
+    local root app_path app
+    for root in "${LAYER_ROOTS[@]}"; do
+        [[ -d "$root/apps" ]] || continue
+        for app_path in "$root"/apps/*/; do
+            [[ -d "$app_path" ]] || continue
+            app=$(basename "$app_path")
+            if ! list_contains "$app" "${dirs[@]}"; then
+                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$HOSTS_REPO"/}: not in the package list"
+            fi
+        done
+    done
+
+    local key strategy
+    while read -r key strategy; do
+        app="${key%%/*}"
+        if ! list_contains "$app" "${dirs[@]}"; then
+            log_warn "[$target] Ignoring files: entry '$key': '$app' not in the package list"
+        fi
+    done < "$STRATEGIES_FILE"
+
+    local dir ok=0
+    for dir in "${dirs[@]}"; do
+        [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]] || continue
+        overlay_validate_app "$SCRIPT_DIR/$dir" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" || ok=1
+    done
+    return $ok
+}
+
 # Load hosts from hosts file
 # Outputs lines of "host|profile" (profile empty when not given)
 load_hosts() {
@@ -778,6 +839,19 @@ run_phase_configs() {
             continue
         fi
 
+        # Compose this app's files from all layers
+        local -a stage_args=()
+        if [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]]; then
+            local stage="$STAGE_ROOT/apps/$dir"
+            if ! overlay_stage_app "$SCRIPT_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}"; then
+                log_error "[$target] $name: could not stage files"
+                RESULTS+=("$target|$name|FAIL")
+                EXIT_CODE=1
+                continue
+            fi
+            stage_args=(--stage "$stage")
+        fi
+
         # Build command
         local cmd_args=("$COMMAND")
 
@@ -785,6 +859,7 @@ run_phase_configs() {
         if [[ -n "$host" ]]; then
             cmd_args+=("--remote" "$host")
         fi
+        cmd_args+=("${stage_args[@]}")
 
         # Add per-package config flags
         if [[ -n "$flags" ]]; then
@@ -798,6 +873,9 @@ run_phase_configs() {
         log_info "[$target] $name: $COMMAND"
         log_debug "Running: $installer ${cmd_args[*]}"
 
+        export DOTFILES_FAILURES_FILE="$STAGE_ROOT/failures"
+        : > "$DOTFILES_FAILURES_FILE"
+
         if bash "$installer" "${cmd_args[@]}"; then
             RESULTS+=("$target|$name|ok")
         else
@@ -805,6 +883,12 @@ run_phase_configs() {
             RESULTS+=("$target|$name|FAIL")
             EXIT_CODE=1
         fi
+
+        # Per-file failures reported by the installer
+        local failed
+        while IFS= read -r failed; do
+            [[ -n "$failed" ]] && RESULTS+=("$target|$failed|FAIL")
+        done < "$DOTFILES_FAILURES_FILE"
     done
 }
 
@@ -830,6 +914,12 @@ run_all() {
         log_info "[$target] Host directory: hosts/$OVERLAY_HOST"
     fi
     log_info "[$target] Packages: ${PKG_NAMES[*]}"
+
+    # Validate overlays before any change
+    if ! prepare_overlays "$target"; then
+        log_error "[$target] Invalid overlay configuration; no changes made"
+        return 1
+    fi
 
     # For remote hosts, check connectivity first
     if [[ -n "$host" ]]; then
@@ -1086,6 +1176,10 @@ main() {
 
     # Initialize logging
     log_init "$@"
+
+    WORK_DIR=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$WORK_DIR'" EXIT
 
     # Handle help
     if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then

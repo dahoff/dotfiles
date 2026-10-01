@@ -1,0 +1,6 @@
+{
+  "model": "profile-model",
+  "profileKey": true,
+  "permissions": { "defaultMode": "plan" },
+  "list": [1, 2]
+}

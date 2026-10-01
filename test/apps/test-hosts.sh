@@ -128,7 +128,84 @@ run deploy --hosts-file /tmp/x.yaml --hostname a
 [[ $RC -ne 0 ]] || fail "should reject --hostname with --hosts-file"
 pass "--hostname/--hosts-file exclusive"
 
-# (Task 6 adds overlay tests here)
+CL="$HOME/.claude"
+seed_settings() {
+    mkdir -p "$CL"
+    echo '{"model":"live-model","liveOnly":1,"list":[0],"permissions":{"deny":["Bash(rm)"]}}' > "$CL/settings.json"
+    echo '{"permissions":{"allow":["Live"]},"liveLocal":1}' > "$CL/settings.local.json"
+}
+
+# Test 14
+info "Test 14: unknown overlay src aborts before changes"
+run deploy --no-backup --hosts-repo "$HR" --hostname typo
+[[ $RC -ne 0 && "$OUT" == *"setings.json"* ]] || fail "typo overlay not rejected"
+[[ ! -d "$CL" ]] || fail "changes were made"
+pass "typo overlay aborts"
+
+# Test 15
+info "Test 15: merge on a non-JSON file aborts before changes"
+run deploy --no-backup --hosts-repo "$HR" --hostname mergetxt
+[[ $RC -ne 0 && "$OUT" == *"requires a .json file"* ]] || fail "merge on .sh not rejected"
+[[ ! -d "$CL" ]] || fail "changes were made"
+pass "merge on non-JSON aborts"
+
+# Test 16
+info "Test 16: overlays for an excluded app warn and are ignored"
+run deploy --dry-run --hosts-repo "$HR" --hostname excludehost
+[[ $RC -eq 0 && "$OUT" == *"Ignoring overlays for 'scripts'"* ]] || fail "no warning for excluded app overlay"
+pass "excluded-app overlay warned"
+
+# Test 17
+info "Test 17: three-layer replace and merge with live file"
+seed_settings
+run deploy --no-backup --hosts-repo "$HR" --hostname testhost
+[[ $RC -eq 0 ]] || fail "deploy failed: $(echo "$OUT" | tail -20)"
+[[ "$(cat "$CL/statusline-command.sh")" == "# host statusline" ]] || fail "host layer should win"
+[[ "$(cat "$CL/tmux-notify.sh")" == "# profile notify" ]] || fail "profile layer should win over dotfiles"
+S="$CL/settings.json"
+[[ "$(jq -r .model "$S")" == profile-model ]] || fail "repo key should override live"
+[[ "$(jq -r .liveOnly "$S")" == 1 ]] || fail "unmanaged live key lost"
+[[ "$(jq -r .profileKey "$S")" == true ]] || fail "profile key missing"
+[[ "$(jq -r .hostKey "$S")" == testhost ]] || fail "host key missing"
+[[ "$(jq -c .list "$S")" == "[9]" ]] || fail "arrays should be replaced: $(jq -c .list "$S")"
+[[ "$(jq -c -S .permissions "$S")" == '{"allow":["Bash(ls)"],"defaultMode":"plan","deny":["Bash(rm)"]}' ]] \
+    || fail "objects should merge recursively: $(jq -c -S .permissions "$S")"
+[[ "$(jq -r .statusLine.type "$S")" == command ]] || fail "dotfiles key missing"
+cmp -s "$CL/settings.local.json" "$ROOT_DIR/claude/files/settings.local.json" \
+    || fail "host.yaml replace should override the profile's merge for settings.local.json"
+pass "layers and merge correct"
+
+# Test 18
+info "Test 18: unchanged inputs skip; a hosts-repo change upgrades only that app"
+run deploy --no-backup --hosts-repo "$HR" --hostname testhost
+[[ "$OUT" == *"claude is already up to date"* ]] || fail "claude should be up to date"
+echo "# host statusline v2" > "$HR/hosts/testhost/apps/claude/files/statusline-command.sh"
+run deploy --no-backup --hosts-repo "$HR" --hostname testhost
+[[ "$OUT" == *"claude upgraded successfully"* ]] || fail "hosts-repo change should upgrade claude"
+[[ "$OUT" == *"scripts is already up to date"* ]] || fail "scripts should be untouched"
+[[ "$(cat "$CL/statusline-command.sh")" == "# host statusline v2" ]] || fail "new overlay not deployed"
+pass "content-hash upgrades"
+
+# Test 19
+info "Test 19: profile files: strategy applies when the host doesn't override it"
+echo '{"liveLocal":1}' > "$CL/settings.local.json"
+run deploy --no-backup --hosts-repo "$HR" --hostname mergelocal
+[[ $RC -eq 0 ]] || fail "deploy failed"
+[[ "$(jq -r .liveLocal "$CL/settings.local.json")" == 1 ]] || fail "profile merge strategy not applied"
+pass "profile strategy"
+
+# Test 20
+info "Test 20: invalid JSON in a layer fails that file only, reported in summary"
+seed_settings
+cp "$CL/settings.json" "$HOME/settings.before"
+run deploy --no-backup --hosts-repo "$HR" --hostname badjson
+[[ $RC -ne 0 ]] || fail "deploy should report failure"
+[[ "$OUT" == *"claude/settings.json: deploy FAILED"* ]] || fail "summary should name the file"
+cmp -s "$CL/settings.json" "$HOME/settings.before" || fail "live settings.json modified"
+[[ "$(cat "$CL/statusline-command.sh")" == "# profile statusline" ]] || fail "other claude files should deploy"
+[[ "$(grep '^  version:' "$STATE_DIR/apps/claude.yaml" | awk '{print $2}')" == incomplete ]] \
+    || fail "claude version should be incomplete"
+pass "bad layer isolated"
 
 rm -rf "$TEST_STATE" "$TEST_HOME" "$HR"
 echo

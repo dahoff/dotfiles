@@ -1,0 +1,1 @@
+{ "hostKey": "testhost", "permissions": { "allow": ["Bash(ls)"] }, "list": [9] }
