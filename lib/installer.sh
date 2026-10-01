@@ -55,6 +55,8 @@ app_after_load_config() { :; }
 app_pre_install() { :; }
 # install|upgrade ($1): after backups, before files are deployed
 app_pre_deploy() { :; }
+# install|upgrade ($1): after files are deployed, before state is written
+app_post_deploy() { :; }
 # install|upgrade ($1): after files are deployed and state is written
 app_post_files() { :; }
 # install|upgrade ($1): after post_install commands ran
@@ -271,6 +273,7 @@ cmd_install() {
 
     log_info "Installing configuration files..."
     deploy_all_files install || return 1
+    app_post_deploy install || return 1
 
     # Create state file
     if ! is_dry_run; then
@@ -344,6 +347,7 @@ cmd_upgrade() {
 
     log_info "Updating configuration files..."
     deploy_all_files upgrade || return 1
+    app_post_deploy upgrade || return 1
 
     # Update state file (version + file list)
     if ! is_dry_run; then

@@ -146,7 +146,8 @@ deploy_file() {
     fi
 }
 
-app_post_files() {
+# Supplements install before state is written, so a failure leaves no state behind
+app_post_deploy() {
     install_supplements
 }
 
