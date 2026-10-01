@@ -466,7 +466,7 @@ Usage: dotfiles <command> [options]
 Commands:
   sync                 Pull, then install if new, upgrade if exists (idempotent)
   uninstall            Uninstall all configs
-  status               Show status for all configs
+  status               Show repos, host, last sync, pending packages and app state (read-only)
   verify               Verify all installations
   help                 Show this help message
 
@@ -704,6 +704,134 @@ sync_pull_one() {
     fi
 }
 
+# Describe a repo for status: git branch/sha/dirty, a pushed copy, or neither
+# Usage: status_describe_repo PATH
+status_describe_repo() {
+    local path="$1" top branch sha dirty=""
+    top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null || true)
+    if [[ -n "$top" && "$(cd "$top" && pwd -P)" == "$(cd "$path" && pwd -P)" ]]; then
+        branch=$(git -C "$path" symbolic-ref --short -q HEAD 2>/dev/null || echo "detached")
+        sha=$(git -C "$path" rev-parse --short HEAD 2>/dev/null || echo "no commits")
+        [[ -z "$(git --no-optional-locks -C "$path" status --porcelain 2>/dev/null)" ]] || dirty=", dirty"
+        printf '%s  (git %s @ %s%s)' "$path" "$branch" "$sha" "$dirty"
+    elif [[ -f "$path/PUSHED" ]]; then
+        printf '%s  (pushed: %s)' "$path" "$(head -n1 "$path/PUSHED")"
+    else
+        printf '%s  (not a git checkout)' "$path"
+    fi
+}
+
+# Seconds as "just now", "<n>m ago", "<n>h ago" or "<n>d ago" (rounded down)
+status_age() {
+    local s="$1"
+    if (( s < 60 )); then printf 'just now'
+    elif (( s < 3600 )); then printf '%dm ago' $((s / 60))
+    elif (( s < 86400 )); then printf '%dh ago' $((s / 3600))
+    else printf '%dd ago' $((s / 86400))
+    fi
+}
+
+# dotfiles status: read-only summary. Takes no lock, never pulls, installs or
+# writes state (SYNC_RECORD stays false). Resolution errors are printed and
+# the command still exits 0.
+cmd_status() {
+    local config_file="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
+    # Not sync_state_dir: that creates the directory
+    local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles"
+    local ok=true
+
+    resolve_settings || ok=false
+
+    printf '%-17s%s\n' "dotfiles repo:" "$(status_describe_repo "$SCRIPT_DIR")"
+    if [[ -z "$HOSTS_REPO" ]]; then
+        printf '%-17s%s\n' "hosts repo:" "none"
+    elif [[ -d "$HOSTS_REPO" ]]; then
+        HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
+        printf '%-17s%s\n' "hosts repo:" "$(status_describe_repo "$HOSTS_REPO")"
+    else
+        printf '%-17s%s\n' "hosts repo:" "$HOSTS_REPO  (not found)"
+        log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
+        ok=false
+    fi
+    if [[ -f "$config_file" ]]; then
+        printf '%-17s%s\n' "config:" "$config_file"
+    else
+        printf '%-17s%s\n' "config:" "$config_file (not found, using defaults)"
+    fi
+
+    # Host and profile
+    local host host_note="(no host directory)" profile_note=""
+    host="${HOSTNAME_ARG:-$(hosts_local_name)}"
+    [[ -n "$HOSTS_REPO" && -f "$HOSTS_REPO/hosts/$host/host.yaml" ]] && host_note="(hosts/$host/host.yaml)"
+    if [[ "$ok" == true ]]; then
+        if load_packages_for_profile "$PROFILE_ARG" "$host"; then
+            profile_note="   profile: $RESOLVED_PROFILE"
+        else
+            ok=false
+        fi
+    fi
+    printf '%-17s%s\n' "host:" "$host  $host_note$profile_note"
+
+    # Auto sync
+    local auto_line="off" last now
+    if [[ "$AUTO_SYNC" != "off" ]]; then
+        auto_line="on, every ${CFG_AUTO_SYNC_INTERVAL:-4h}"
+        if [[ -e "$state_dir/last-sync" ]] && last=$(sync_mtime "$state_dir/last-sync"); then
+            now=$(date +%s)
+            auto_line+=" — last run $(status_age $(( now > last ? now - last : 0 )))"
+        else
+            auto_line+=" — never run"
+        fi
+    fi
+    printf '%-17s%s\n' "auto sync:" "$auto_line"
+
+    # Pending packages
+    local pending=""
+    if [[ -f "$state_dir/pending" ]]; then
+        pending=$(grep -v '^$' "$state_dir/pending" | paste -sd, - | sed 's/,/, /g' || true)
+    fi
+    printf '%-17s%s\n' "pending:" "${pending:-none}"
+
+    # Apps: installed state version against a fresh stage
+    if [[ "$ok" == true ]]; then
+        OVERLAY_HOST="$host"
+        if ! prepare_overlays "status"; then
+            log_error "Invalid overlay configuration"
+            ok=false
+        fi
+    fi
+    if [[ "$ok" == true ]]; then
+        echo "apps:"
+        local idx dir name app_name stage ver_fresh ver_state state_file state
+        for idx in "${!PKG_NAMES[@]}"; do
+            dir="${PKG_CONFIG_DIR[$idx]}"
+            [[ -n "$dir" && -f "$SCRIPT_DIR/$dir/config.yaml" ]] || continue
+            name="${PKG_NAMES[$idx]}"
+            yaml_load "$SCRIPT_DIR/$dir/config.yaml"
+            app_name=$(yaml_get app.name)
+            [[ -n "$app_name" ]] || app_name=$(basename "$dir")
+            stage="$STAGE_ROOT/apps/$dir"
+            ver_fresh=""
+            if overlay_stage_app "$SCRIPT_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
+                ver_fresh=$(cat "$stage/version" 2>/dev/null || true)
+            fi
+            state_file=$(state_get_file "$app_name")
+            if [[ ! -f "$state_file" ]]; then
+                state="not installed"
+            else
+                ver_state=$(state_get_version "$app_name" 2>/dev/null || true)
+                if [[ -n "$ver_fresh" && "$ver_state" == "$ver_fresh" && "$ver_state" != "incomplete" ]]; then
+                    state="up to date"
+                else
+                    state="update available"
+                fi
+            fi
+            printf '  %-9s %s\n' "$name" "$state"
+        done
+    fi
+    return 0
+}
+
 # Main
 main() {
     parse_args "$@"
@@ -717,6 +845,11 @@ main() {
     # Handle help
     if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then
         usage
+        exit 0
+    fi
+
+    if [[ "$COMMAND" == "status" ]]; then
+        cmd_status
         exit 0
     fi
 

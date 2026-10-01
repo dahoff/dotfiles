@@ -210,8 +210,8 @@ fi
 info "Test 19: dotfiles status"
 cd "$ROOT_DIR"
 if output=$(./dotfiles status 2>&1) && \
-   echo "$output" | grep -q "Installed"; then
-    pass "dotfiles status shows installed configs"
+   echo "$output" | grep -q "^  bash .*up to date"; then
+    pass "dotfiles status shows app state"
 else
     fail "dotfiles status failed"
 fi
