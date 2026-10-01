@@ -78,6 +78,20 @@ else
     fail "help command failed"
 fi
 
+# Test 4b: help lists the commands and sync flags
+info "Test 4b: help mentions sync, push, status, --auto and --no-pull"
+output=$(cd "$ROOT_DIR" && ./dotfiles help 2>&1)
+missing=""
+for word in sync push status uninstall verify -- --auto --no-pull; do
+    [[ "$word" == "--" ]] && continue
+    echo "$output" | grep -q -- "$word" || missing+=" $word"
+done
+if [[ -z "$missing" ]]; then
+    pass "help lists all commands and sync flags"
+else
+    fail "help is missing:$missing"
+fi
+
 # Test 5: No args exits non-zero
 info "Test 5: no args exits non-zero"
 if cd "$ROOT_DIR" && ./dotfiles &>/dev/null 2>&1; then
