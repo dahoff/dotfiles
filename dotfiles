@@ -334,16 +334,16 @@ run_phase_configs() {
         : > "$DOTFILES_FAILURES_FILE"
 
         # State name is app.name from config.yaml (dir name as fallback)
-        local app_name="" ver_before="" ver_after="" had_state=false
+        local app_name="" ver_before="" ver_after="" installed_ok=false
         if [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]]; then
             yaml_load "$SCRIPT_DIR/$dir/config.yaml"
             app_name=$(yaml_get app.name)
         fi
         [[ -n "$app_name" ]] || app_name=$(basename "$dir")
-        [[ -f "$(state_get_file "$app_name")" ]] && had_state=true
         ver_before=$(state_get_version "$app_name" 2>/dev/null || true)
 
         if bash "$installer" "${cmd_args[@]}" 9>&-; then
+            installed_ok=true
             RESULTS+=("$target|$name|ok")
         else
             log_error "[$target] $name: $INSTALLER_CMD failed"
@@ -351,10 +351,11 @@ run_phase_configs() {
             EXIT_CODE=1
         fi
 
-        # A changed version, or a state file that is new, means the app was updated
+        # Updated = installer succeeded and the version changed (a new state file
+        # has an empty "before"). A failed run or "incomplete" is not an update.
         ver_after=$(state_get_version "$app_name" 2>/dev/null || true)
-        if [[ "$ver_after" != "$ver_before" ]] \
-            || { [[ "$had_state" == false && -f "$(state_get_file "$app_name")" ]]; }; then
+        if [[ "$installed_ok" == true && "$ver_after" != "incomplete" \
+            && "$ver_after" != "$ver_before" ]]; then
             UPDATED_APPS+=("$name")
         fi
 
@@ -665,12 +666,20 @@ is_dry_run() {
 
 # EXIT trap: remove the work dir and run registered cleanup commands
 cleanup() {
+    local status=$?
     local cmd
     for cmd in "${SYNC_CLEANUP[@]}"; do
         eval "$cmd" || true
     done
     [[ -n "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
-    [[ "$SYNC_RECORD" == true ]] && sync_record
+    if [[ "$SYNC_RECORD" == true ]]; then
+        # An abort outside run_all leaves no FAIL item: add one so --auto does
+        # not fail silently. The pending file is left as it was (not refreshed).
+        if [[ $status -ne 0 ]] && ! printf '%s\n' "${RESULTS[@]}" | grep -q '|FAIL$'; then
+            RESULTS+=("local|setup|FAIL")
+        fi
+        sync_record
+    fi
     return 0
 }
 

@@ -123,7 +123,8 @@ sync_should_run_auto() {
     [[ -e "$dir/last-sync" ]] || return 0
     last=$(sync_mtime "$dir/last-sync") || return 0
     now=$(date +%s)
-    (( now - last < AUTO_SYNC_SECONDS )) && return 1
+    # A negative age (mtime in the future, clock skew) runs the sync
+    (( now >= last && now - last < AUTO_SYNC_SECONDS )) && return 1
     return 0
 }
 

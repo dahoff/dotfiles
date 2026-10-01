@@ -364,6 +364,42 @@ STATE="$OLD_STATE"
 cp "$T/config.orig" "$T/config"
 pass "validation failure reported, last-sync touched"
 
+# Case 16b
+info "Case 16b: failed installer is not reported as updated"
+cp -R "$TEST_DIR/fixtures/hosts-repo" "$T/hosts-bad"
+sed -i "s#^hosts_repo=.*#hosts_repo=$T/hosts-bad#; s/^hostname=.*/hostname=badjson/" "$T/config"
+export HOME="$T/home3" STATE_DIR="$T/state3" XDG_STATE_HOME="$T/xdg-state3"
+mkdir -p "$HOME" "$STATE_DIR/apps"
+STATE="$XDG_STATE_HOME/dotfiles"
+run sync --auto
+grep -q 'sync failed (' "$STATE/report" || fail "no failure report: $(cat "$STATE/report" 2>&1) / $OUT"
+if grep -q 'updated claude' "$STATE/report"; then fail "failed app reported as updated: $(cat "$STATE/report")"; fi
+export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
+STATE="$OLD_STATE"
+cp "$T/config.orig" "$T/config"
+pass "failed installer: failure reported, not updated"
+
+# Case 16c
+info "Case 16c: early abort still reports a failure"
+sed -i "s#^hosts_repo=.*#hosts_repo=/nonexistent#" "$T/config"
+age_last_sync
+rm -f "$STATE/report"
+run sync --auto
+[[ $RC -ne 0 ]] || fail "expected failure: $OUT"
+grep -q 'sync failed (setup)' "$STATE/report" || fail "no setup failure report: $(cat "$STATE/report" 2>&1)"
+[[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched"
+cp "$T/config.orig" "$T/config"
+pass "early abort reported as setup failure"
+
+# Case 16d
+info "Case 16d: last-sync in the future does not throttle"
+LOG="$STATE/last-sync.log"
+touch -d '+2 days' "$STATE/last-sync"
+rm -f "$LOG"
+run sync --auto
+[[ -f "$LOG" ]] || fail "future last-sync throttled the run"
+pass "clock skew runs the sync"
+
 # Case 17
 info "Case 17: login drop-in"
 mkdir -p "$WORK/bin" "$STATE"
