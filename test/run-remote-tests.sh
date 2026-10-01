@@ -235,12 +235,39 @@ fi
 
 echo
 
+# Test 14: Overlays staged on the workstation ship with the app and merge remotely
+info "Test 14: Remote deploy with staged overlays"
+cd "$ROOT_DIR"
+STAGE_TMP=$(mktemp -d)
+PKG14=$(
+    source lib/logging.sh; source lib/utils.sh; source lib/remote.sh; source lib/overlay.sh
+    : > "$STAGE_TMP/strategies"
+    overlay_stage_app "$ROOT_DIR/claude" "$STAGE_TMP/stage" "$STAGE_TMP/strategies" \
+        "$SCRIPT_DIR/fixtures/hosts-repo/profiles/base" \
+        "$SCRIPT_DIR/fixtures/hosts-repo/hosts/testhost" >/dev/null 2>&1
+    remote_package_installer "$ROOT_DIR/claude" "$(cat "$STAGE_TMP/stage/version")" "$STAGE_TMP/stage" 2>/dev/null
+)
+scp $SSH_OPTS -i "$SSH_KEY" -P "$SSH_PORT" "$PKG14" "$SSH_USER@$SSH_HOST:/tmp/" &>/dev/null || { fail "copy failed"; exit 1; }
+test_ssh "rm -rf /tmp/claude ~/.claude ~/.config/dotfiles/apps/claude.yaml; mkdir -p ~/.claude && echo '{\"liveOnly\":1}' > ~/.claude/settings.json && cd /tmp && tar -xzf $(basename "$PKG14")" &>/dev/null
+if test_ssh "cd /tmp/claude && bash install.sh deploy --no-backup --stage /tmp/claude/.stage" &>/dev/null \
+   && [[ "$(test_ssh "jq -r .liveOnly ~/.claude/settings.json")" == 1 ]] \
+   && [[ "$(test_ssh "jq -r .hostKey ~/.claude/settings.json")" == testhost ]] \
+   && [[ "$(test_ssh "cat ~/.claude/statusline-command.sh")" == "# host statusline" ]]; then
+    pass "Remote overlay deploy merged and replaced correctly"
+else
+    fail "Remote overlay deploy failed"
+    exit 1
+fi
+rm -rf "$STAGE_TMP" "$PKG14"
+test_ssh "rm -rf /tmp/claude /tmp/claude-installer-* ~/.claude" &>/dev/null || true
+cd "$SCRIPT_DIR"
+
 # Cleanup
 rm -f "$PACKAGE"
 test_ssh "rm -rf /tmp/tmux ~/.config/dotfiles ~/.bak/tmux ~/.tmux*" &>/dev/null || true
 
 echo "======================================"
-echo -e "${GREEN}All 13 remote tests passed!${NC}"
+echo -e "${GREEN}All 14 remote tests passed!${NC}"
 echo "======================================"
 echo
 echo "The remote installation system is working correctly."
