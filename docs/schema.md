@@ -194,13 +194,13 @@ The run aborts before any change if the hosts repo is missing, `host.yaml` lacks
 
 ## Config file
 
-`${DOTFILES_CONFIG:-~/.config/dotfiles/config}` holds per-host settings. It is optional. It is made of `key=value` lines and is parsed, never sourced. Blank lines and `#` comments are ignored, and one pair of surrounding quotes is stripped from a value. A leading `~` is expanded. Unknown or malformed lines are ignored with a warning. An invalid `auto_sync` or `auto_sync_interval` aborts the command.
+`${DOTFILES_CONFIG:-~/.config/dotfiles/config}` holds per-host settings. It is optional. It is made of `key=value` lines and is parsed, never sourced. Blank lines and `#` comments are ignored, and one pair of surrounding quotes is stripped from a value. A leading `~` is expanded. Unknown or malformed lines are ignored with a warning. An invalid `auto_sync`, `auto_sync_interval` or `hostname` aborts the command (in `--auto` it is reported, see Report).
 
 | Key | Default | Meaning |
 |---|---|---|
 | `dotfiles_repo` | the directory of the running `dotfiles` | dotfiles checkout. It must exist. The running code is always `SCRIPT_DIR`; a different value only produces a warning (it matters for `push` and `init`). |
 | `hosts_repo` | `~/.local/share/dotfiles/dotfiles-hosts` if that directory exists, else none | dotfiles-hosts checkout |
-| `hostname` | `hostname -s`, then `uname -n` | selects `hosts/<name>/` |
+| `hostname` | `hostname -s`, then `uname -n` | selects `hosts/<name>/`. Same rules as `--hostname`: non-empty, no `/`, not `.` or `..`. |
 | `profile` | `complete` | used when there is no `host.yaml`; with one, it overrides it with a warning (same as `--profile`) |
 | `auto_sync` | `on` | `off` disables the background sync |
 | `auto_sync_interval` | `4h` | minimum gap between background syncs: `<n>m`, `<n>h` or `<n>d` |
@@ -237,7 +237,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_REPO` (hosts repo only) > co
 
 - Sends `git archive HEAD` of the dotfiles repo (and the hosts repo, if one is in use), so only committed state is shipped; uncommitted changes are not. If the source is not a git work tree, the plain directory is sent. Each snapshot gets a `PUSHED` file recording the source host, commit and time.
 - The remote repo paths come from the remote config file (`dotfiles_repo`, `hosts_repo`), parsed the same way as `config_load`, else the default paths. A relative path there is ignored with a warning.
-- A remote target that is a git checkout is refused (run `dotfiles sync` there instead). An existing pushed copy is replaced by swapping the directory, and the old copy is restored if the swap fails.
+- A remote target that is a git checkout is refused (run `dotfiles sync` there instead). An existing target is replaced only if it holds a `PUSHED` marker or is an empty directory; anything else is refused with `<host>:<path> exists and is not a pushed dotfiles copy; refusing to replace it`, so a wrong remote config line cannot delete user data. An existing pushed copy is replaced by swapping the directory, and the old copy is restored if the swap fails.
 - It then runs `<remote dotfiles_repo>/dotfiles sync --no-pull` with `ssh -t`, so prompts such as sudo work. The remote exit status is the push result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed.
 - `--dry-run` reports what would be sent and, if the remote already has dotfiles, runs a remote `sync --no-pull --dry-run`. Nothing is copied.
 - `push --init` (bootstrapping a host that has no dotfiles yet) is not available.
@@ -246,8 +246,8 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_REPO` (hosts repo only) > co
 
 A real `sync` (not `--dry-run`) installs two things, so the checkout becomes the installed command:
 
-- `~/.local/bin/dotfiles`, a symlink to `<dotfiles_repo>/dotfiles`.
-- `<shell scripts dir>/90-dotfiles.sh` (default `~/.bashrc.d/`), a copy of `lib/login.sh`. It is managed by dotfiles; do not edit it.
+- `~/.local/bin/dotfiles`, a symlink to `<dotfiles_repo>/dotfiles` when the config sets `dotfiles_repo` and that checkout has a `dotfiles` script. Only when no `dotfiles_repo` is configured does it point at the running checkout. Running a sync from another checkout (a worktree, say) therefore never re-points the installed command; it only warns.
+- `<shell scripts dir>/90-dotfiles.sh` (default `~/.bashrc.d/`), a copy of `lib/login.sh` taken from the same repo as the symlink target. It is managed by dotfiles; do not edit it.
 
 `~/.local/bin` must be on `PATH`.
 
@@ -258,10 +258,11 @@ A real `sync` (not `--dry-run`) installs two things, so the checkout becomes the
 The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new terminal it:
 
 1. Prints the report left by the previous background sync (if any), then deletes it.
-2. Unless `DOTFILES_NO_AUTO_SYNC` is set to a non-empty value, or `dotfiles` is not on `PATH`, starts `dotfiles sync --auto` detached in the background (`setsid`, no terminal output).
+2. Unless `DOTFILES_NO_AUTO_SYNC` is set to a non-empty value, or `dotfiles` is not on `PATH`, starts `dotfiles sync --auto` detached in the background (`setsid` when available, else a plain background subshell). Its output goes to `launch.log` in the state directory (overwritten each time), so failures before `last-sync.log` exists are visible.
 
 `sync --auto` then:
 
+- Pulls with a bounded git: ssh `ConnectTimeout=10`, `ServerAliveInterval=15`, `ServerAliveCountMax=2` (plus `BatchMode=yes`) unless `GIT_SSH_COMMAND` is set, `http.lowSpeedLimit=1000`/`http.lowSpeedTime=30`, and `timeout 300` where available. A timeout is a pull failure (warning). Only a repo whose top level is the path itself is pulled; a pushed copy inside a tracked directory is skipped.
 - Exits at once, changing nothing, if `auto_sync=off` or the last sync is younger than `auto_sync_interval` (default `4h`). `auto_sync_interval=0m` means always sync. A `last-sync` timestamp in the future (clock skew) does not throttle.
 - Otherwise pulls both repos, then applies configs only. It never installs OS packages or runs custom install scripts, and never prompts. Missing packages are recorded as pending instead.
 - Writes its output to `last-sync.log`, touches `last-sync` even when it fails (so a broken sync does not retry in every terminal), and writes the report.
@@ -275,7 +276,7 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 | `dotfiles: updated a, b` | Apps whose config was successfully updated. |
 | `dotfiles: N package(s) pending (a, b) — run 'dotfiles sync'` | Packages or custom tools not installed, left for a manual sync. |
 | `dotfiles: <path>: pull failed (<reason>) — see <log>` | A pull failed; the repo was left as it was. |
-| `dotfiles: sync failed (<items>) — see <log>` | Items that failed. An early abort before any app ran (bad config, missing hosts repo, ...) reports `sync failed (setup)`. |
+| `dotfiles: sync failed (<items>) — see <log>` | Items that failed. An early abort before any app ran (missing hosts repo, ...) reports `sync failed (setup)`. An unusable config file (bad `auto_sync`, `auto_sync_interval` or `hostname`, missing `dotfiles_repo`) reports `sync failed (config)` with the error text in the log. The config cannot supply the interval then, so the default `4h` throttle applies: the error is reported at most once per 4 hours. |
 
 `<log>` is `last-sync.log`. A manual (non-`--auto`) sync removes a stale report.
 
@@ -288,6 +289,7 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 | `lock` | Lock held while a sync runs (a `lock.d/` directory where `flock` is unavailable). |
 | `last-sync` | Empty file; its modification time is the last sync and drives the throttle. |
 | `last-sync.log` | Output of the last `--auto` run. |
+| `launch.log` | Output of the login drop-in's launch of `dotfiles sync --auto`; overwritten each time. |
 | `report` | Message shown at the next terminal, removed once shown. |
 | `pending` | Packages still to install, one per line. Shown by `dotfiles status`. Refreshed by each real sync. |
 

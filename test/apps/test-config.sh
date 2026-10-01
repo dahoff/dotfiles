@@ -112,6 +112,18 @@ load
 [[ $LOAD_RC -eq 1 ]] || fail "interval 10x should return 1"
 pass "invalid values rejected"
 
+# Unit 8b
+info "Unit 8b: invalid hostname value"
+for bad in 'a/b' '.' '..' ''; do
+    printf 'hostname=%s\n' "$bad" > "$CFG"
+    load
+    [[ $LOAD_RC -eq 1 ]] || fail "hostname='$bad' should return 1"
+done
+printf 'hostname=good-name\n' > "$CFG"
+load
+[[ $LOAD_RC -eq 0 && "$CFG_HOSTNAME" == good-name ]] || fail "valid hostname rejected"
+pass "invalid hostname rejected"
+
 # Unit 9
 info "Unit 9: config_interval_seconds"
 [[ "$(config_interval_seconds 30m)" == 1800 && "$(config_interval_seconds 4h)" == 14400 \

@@ -427,5 +427,111 @@ sleep 0.5
 rm -f "$STATE/report"
 pass "login drop-in: report, auto sync, opt-out, non-interactive"
 
+# Case 18
+info "Case 18: command works through symlinks (absolute, relative, PATH)"
+OUT=$("$HOME/.local/bin/dotfiles" status 2>&1) || fail "symlinked status failed: $OUT"
+[[ "$OUT" == *"dotfiles repo:"* ]] || fail "symlinked status output: $OUT"
+mkdir -p "$T/rel/bin"
+ln -s ../../work/dotfiles/dotfiles "$T/rel/bin/dotfiles"
+OUT=$("$T/rel/bin/dotfiles" status 2>&1) || fail "relative symlink status failed: $OUT"
+[[ "$OUT" == *"dotfiles repo:"* ]] || fail "relative symlink output: $OUT"
+ln -s rel/bin/dotfiles "$T/chain"
+OUT=$("$T/chain" status 2>&1) || fail "chained symlink status failed: $OUT"
+[[ "$OUT" == *"dotfiles repo:"* ]] || fail "chained symlink output: $OUT"
+OUT=$(PATH="$HOME/.local/bin:$PATH_ORIG" dotfiles status 2>&1) || fail "PATH status failed: $OUT"
+[[ "$OUT" == *"dotfiles repo:"* ]] || fail "PATH status output: $OUT"
+pass "symlinked command resolves its repo"
+
+# Case 19
+info "Case 19: self-install links the configured repo"
+cp -R "$WORK/dotfiles" "$WORK/other"
+OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STATE="$STATE"
+export HOME="$T/home4" STATE_DIR="$T/state4" XDG_STATE_HOME="$T/xdg-state4"
+mkdir -p "$HOME" "$STATE_DIR/apps"
+OUT=$("$WORK/other/dotfiles" sync --no-pull --no-backup --skip-git-setup 2>&1) || fail "sync from other checkout failed: $OUT"
+[[ "$(readlink "$HOME/.local/bin/dotfiles")" == "$WORK/dotfiles/dotfiles" ]] \
+    || fail "symlink re-pointed to the running checkout: $(readlink "$HOME/.local/bin/dotfiles")"
+[[ "$OUT" == *"config dotfiles_repo is"* ]] || fail "mismatch warning lost: $OUT"
+rm -rf "$HOME/.local/bin"
+printf 'hostname=testhost\nhosts_repo=%s\n' "$T/hosts-repo" > "$T/config-norepo"
+OUT=$(DOTFILES_CONFIG="$T/config-norepo" "$WORK/other/dotfiles" sync --no-pull --no-backup --skip-git-setup 2>&1) || fail "sync failed: $OUT"
+[[ "$(readlink "$HOME/.local/bin/dotfiles")" == "$WORK/other/dotfiles" ]] \
+    || fail "no dotfiles_repo: expected the running checkout: $(readlink "$HOME/.local/bin/dotfiles")"
+export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
+STATE="$OLD_STATE"
+pass "link follows dotfiles_repo, else the running checkout"
+
+# Case 20
+info "Case 20: --auto with a bad config reports it, throttled by the default interval"
+cp "$T/config.orig" "$T/config"
+echo "auto_sync=maybe" >> "$T/config"
+rm -f "$STATE/report" "$STATE/last-sync"
+run sync --auto
+[[ $RC -ne 0 ]] || fail "bad config --auto should fail: $OUT"
+grep -q 'sync failed (config)' "$STATE/report" || fail "no config report: $(cat "$STATE/report" 2>&1)"
+grep -q 'auto_sync must be' "$STATE/last-sync.log" || fail "error text not in log: $(cat "$STATE/last-sync.log")"
+[[ -e "$STATE/last-sync" ]] || fail "last-sync not touched"
+rm -f "$STATE/report"
+run sync --auto
+[[ $RC -eq 0 ]] || fail "second --auto should be throttled (exit 0): $OUT"
+[[ ! -e "$STATE/report" ]] || fail "throttled run wrote a report"
+cp "$T/config.orig" "$T/config"
+echo "hostname=a/b" >> "$T/config"
+age_last_sync
+run sync --auto
+grep -q 'sync failed (config)' "$STATE/report" || fail "bad hostname not reported: $(cat "$STATE/report" 2>&1)"
+rm -f "$STATE/report"
+cp "$T/config.orig" "$T/config"
+echo "auto_sync=maybe" >> "$T/config"
+run sync
+[[ $RC -eq 1 && "$OUT" == *"auto_sync must be"* ]] || fail "interactive bad config: rc=$RC $OUT"
+cp "$T/config.orig" "$T/config"
+pass "config error reported once per default interval; interactive still errors"
+
+# Case 21
+info "Case 21: pull helper: toplevel check and stall bounds"
+REALGIT=$(command -v git)
+mkdir -p "$T/gitbin"
+printf '#!/bin/sh\necho "GSC=${GIT_SSH_COMMAND:-} $*" >> "%s/gitcalls"\nexec "%s" "$@"\n' "$T" "$REALGIT" > "$T/gitbin/git"
+chmod +x "$T/gitbin/git"
+git clone -q "$ORIGIN" "$T/outer"
+mkdir -p "$T/outer/nested"; echo x > "$T/outer/nested/f"
+rm -f "$T/gitcalls"
+PULL_OUT=$(PATH="$T/gitbin:$PATH_ORIG" bash -c "
+    source '$ROOT_DIR/lib/logging.sh'; source '$ROOT_DIR/lib/sync.sh'
+    sync_pull_repo '$T/outer/nested'; echo rc=\$?") || true
+[[ "$PULL_OUT" == "rc=0" ]] || fail "nested non-git dir produced output: $PULL_OUT"
+if grep -q ' pull ' "$T/gitcalls"; then fail "pull attempted in a non-root directory"; fi
+rm -f "$T/gitcalls"
+PATH="$T/gitbin:$PATH_ORIG" bash -c "
+    source '$ROOT_DIR/lib/logging.sh'; source '$ROOT_DIR/lib/sync.sh'
+    SYNC_AUTO=true; sync_pull_repo '$T/outer' >/dev/null 2>&1"
+CALL=$(grep ' pull ' "$T/gitcalls") || fail "no pull recorded"
+for want in 'http.lowSpeedLimit=1000' 'http.lowSpeedTime=30' 'ConnectTimeout=10' 'ServerAliveInterval=15' 'ServerAliveCountMax=2' 'BatchMode=yes'; do
+    [[ "$CALL" == *"$want"* ]] || fail "pull lacks $want: $CALL"
+done
+rm -f "$T/gitcalls"
+PATH="$T/gitbin:$PATH_ORIG" bash -c "
+    source '$ROOT_DIR/lib/logging.sh'; source '$ROOT_DIR/lib/sync.sh'
+    SYNC_AUTO=false; sync_pull_repo '$T/outer' >/dev/null 2>&1"
+CALL=$(grep ' pull ' "$T/gitcalls") || fail "no pull recorded"
+[[ "$CALL" == *ConnectTimeout=10* && "$CALL" != *BatchMode* ]] || fail "interactive ssh options wrong: $CALL"
+pass "non-root dirs skipped; pull is bounded"
+
+# Case 22
+info "Case 22: login drop-in without setsid"
+NOSETSID="$T/nosetsid"
+mkdir -p "$NOSETSID"
+for tool in bash cat rm mkdir sleep; do ln -sf "$(command -v $tool)" "$NOSETSID/$tool"; done
+cp "$WORK/bin/dotfiles" "$NOSETSID/dotfiles"
+rm -f "$WORK/calls" "$STATE/launch.log"
+echo "dotfiles: hello" > "$STATE/report"
+LOGIN_OUT=$(PATH="$NOSETSID" bash --norc --noprofile -i -c "source '$DROPIN'" 2>/dev/null)
+[[ "$LOGIN_OUT" == *"dotfiles: hello"* ]] || fail "report not shown: $LOGIN_OUT"
+for _ in $(seq 1 20); do grep -q 'sync --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
+grep -q 'sync --auto' "$WORK/calls" || fail "background sync not started without setsid"
+[[ -e "$STATE/launch.log" ]] || fail "launch.log not written"
+pass "drop-in falls back when setsid is missing"
+
 echo
 echo "All sync tests passed"

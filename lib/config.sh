@@ -24,7 +24,7 @@ config_interval_seconds() {
 }
 
 # Parse FILE into the CFG_* globals (defaults when missing).
-# Returns 1 for an invalid auto_sync or auto_sync_interval value.
+# Returns 1 for an invalid auto_sync, auto_sync_interval or hostname value.
 # Usage: config_load FILE
 config_load() {
     local file="$1"
@@ -71,7 +71,14 @@ config_load() {
         case "$key" in
             dotfiles_repo) CFG_DOTFILES_REPO="$value" ;;
             hosts_repo) CFG_HOSTS_REPO="$value" ;;
-            hostname) CFG_HOSTNAME="$value" ;;
+            hostname)
+                if [[ -z "$value" || "$value" == */* || "$value" == . || "$value" == .. ]]; then
+                    log_error "$file:$n: hostname must be a plain name without '/': $value"
+                    rc=1
+                else
+                    CFG_HOSTNAME="$value"
+                fi
+                ;;
             profile) CFG_PROFILE="$value" ;;
             auto_sync)
                 if [[ "$value" == on || "$value" == off ]]; then

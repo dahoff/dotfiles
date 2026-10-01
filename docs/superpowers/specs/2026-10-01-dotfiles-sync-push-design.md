@@ -82,12 +82,13 @@ dotfiles help
 3. **Throttle** (`--auto` only): if `auto_sync=off`, or `<state>/last-sync` is younger than the
    interval, exit 0 silently.
 4. **Pull** (skipped with `--no-pull`): for each repo that is a git work tree with an upstream,
-   `git -C <repo> pull --ff-only --quiet`. On failure the repo is left untouched (no stash/reset/
+   `git -C <repo> pull --ff-only --quiet`. Only a repo whose top level is the path itself counts. The pull is bounded so it cannot hold the lock forever: `GIT_SSH_COMMAND="ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"` when unset, `-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30`, and `timeout 300` when available (a timeout is a pull failure). On failure the repo is left untouched (no stash/reset/
    merge) and a warning is recorded: `<path>: pull failed (<first line of git stderr>)`. Repos that
    aren't git work trees (pushed copies) are skipped silently. In `--auto`, git runs with
-   `GIT_TERMINAL_PROMPT=0` and `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` so it can never prompt.
-5. **Self-install**: ensure `~/.local/bin/dotfiles` → `<dotfiles_repo>/dotfiles` and copy
-   `lib/login.sh` to `<shell_scripts_dir>/90-dotfiles.sh` (0644) if different. Skipped in
+   `GIT_TERMINAL_PROMPT=0` and `BatchMode=yes` added to the ssh options so it can never prompt.
+5. **Self-install**: ensure `~/.local/bin/dotfiles` → the configured `<dotfiles_repo>/dotfiles`
+   (the running checkout only when no `dotfiles_repo` is configured, so a run from a worktree never
+   re-points it) and copy that repo's `lib/login.sh` to `<shell_scripts_dir>/90-dotfiles.sh` (0644) if different. Skipped in
    `--dry-run`.
 6. **Resolve + validate** (sub-project 1 logic). Validation error → abort, recorded.
 7. **Apply**:
@@ -132,14 +133,21 @@ _dotfiles_login() {
     fi
     [[ -n "${DOTFILES_NO_AUTO_SYNC:-}" ]] && return 0
     command -v dotfiles >/dev/null 2>&1 || return 0
-    (setsid dotfiles sync --auto </dev/null >/dev/null 2>&1 &)
+    mkdir -p "$state" 2>/dev/null
+    if command -v setsid >/dev/null 2>&1; then
+        (setsid dotfiles sync --auto </dev/null >"$state/launch.log" 2>&1 &)
+    else
+        (dotfiles sync --auto </dev/null >"$state/launch.log" 2>&1 &)
+    fi
 }
 [[ $- == *i* ]] && _dotfiles_login
 unset -f _dotfiles_login
 ```
 
 All throttling/lock/config logic lives in `dotfiles sync --auto`, so the drop-in stays trivial.
-`setsid` is used when available (fallback: plain `&` + `disown`). **[assumed]**
+`setsid` is used when available; otherwise the call runs in a plain background subshell. Output goes
+to `<state>/launch.log` (overwritten each time) so failures before the sync log exists are visible.
+A config error in `--auto` is reported as `sync failed (config)` (default 4h throttle applies).
 
 ### `dotfiles push HOST...`
 
@@ -155,6 +163,8 @@ For each HOST (sequentially; `user@host` accepted; ssh options from `~/.ssh/conf
    **[assumed]** A tiny inline POSIX-sh snippet does this (remote may not have the repo yet).
 3. Refuse if a remote target directory is a git work tree (contains `.git`): "HOST:<path> is a git
    checkout; run 'dotfiles sync' there instead" (that host can pull itself). Counts as failure.
+   Likewise refuse an existing target that has no `PUSHED` marker and is not an empty directory:
+   "HOST:<path> exists and is not a pushed dotfiles copy; refusing to replace it".
 4. Copy the payload (`scp`), then on the remote: unpack each tarball into `<path>.new`, then
    replace atomically-ish: `rm -rf <path>.old; mv <path> <path>.old (if exists); mv <path>.new
    <path>; rm -rf <path>.old`. Remove the remote temp dir.

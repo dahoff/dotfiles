@@ -39,18 +39,26 @@ sync_lock() {
 # and prints the reason (first line of git's stderr, max 120 chars) on stdout.
 sync_pull_repo() {
     local path="$1"
-    git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    # Only a repo rooted at PATH itself (a pushed copy inside a tracked $HOME is not)
+    local top
+    top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 0
+    [[ "$(cd "$top" && pwd -P)" == "$(cd "$path" && pwd -P)" ]] || return 0
     git -C "$path" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || return 0
 
+    # Bound a stalled pull so it cannot hold the lock forever
     local -a envs=(GIT_TERMINAL_PROMPT=0)
-    if [[ "$SYNC_AUTO" == true && -z "${GIT_SSH_COMMAND:-}" ]]; then
-        envs+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+    if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
+        local ssh_cmd="ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
+        [[ "$SYNC_AUTO" == true ]] && ssh_cmd+=" -o BatchMode=yes"
+        envs+=("GIT_SSH_COMMAND=$ssh_cmd")
     fi
+    local -a wrap=()
+    command -v timeout >/dev/null 2>&1 && wrap=(timeout 300)
 
     local before after err
     before=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
-    if ! err=$(env "${envs[@]}" git -C "$path" -c merge.autoStash=false -c rebase.autoStash=false \
-        -c pull.rebase=false pull --ff-only --quiet 9>&- 2>&1 >/dev/null); then
+    if ! err=$(env "${envs[@]}" ${wrap[@]+"${wrap[@]}"} git -C "$path" -c merge.autoStash=false -c rebase.autoStash=false \
+        -c pull.rebase=false -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 pull --ff-only --quiet 9>&- 2>&1 >/dev/null); then
         local line
         line=$(printf '%s\n' "$err" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -m1 -v '^$' || true)
         printf '%s\n' "${line:0:120}"

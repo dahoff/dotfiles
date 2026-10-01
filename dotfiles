@@ -5,7 +5,15 @@
 set -euo pipefail
 
 # Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the symlink chain (no readlink -f: macOS lacks it)
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    [[ $_src != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_src")" && pwd)
+unset _src _dir
 
 # Source libraries
 source "$SCRIPT_DIR/lib/logging.sh"
@@ -884,7 +892,22 @@ main() {
         exit 0
     fi
 
-    resolve_settings || exit 1
+    if ! resolve_settings; then
+        if [[ "$COMMAND" == "sync" && "$SYNC_AUTO" == true ]] && ! is_dry_run; then
+            # A config error must not silence the background sync: report it.
+            # The config is unusable, so the default throttle (4h) applies.
+            sync_lock || exit 0
+            AUTO_SYNC=on
+            AUTO_SYNC_SECONDS=14400
+            sync_should_run_auto || exit 0
+            exec >"$(sync_state_dir)/last-sync.log" 2>&1
+            echo "dotfiles sync --auto $(date +%Y-%m-%dT%H:%M:%S%z)"
+            resolve_settings || true
+            RESULTS+=("local|config|FAIL")
+            SYNC_RECORD=true
+        fi
+        exit 1
+    fi
 
     if [[ "$COMMAND" == "sync" ]] && ! is_dry_run; then
         if ! sync_lock; then
@@ -922,7 +945,13 @@ main() {
             sync_pull_one "$DOTFILES_REPO"
             [[ -z "$HOSTS_REPO" ]] || sync_pull_one "$HOSTS_REPO"
         fi
-        is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
+        # Link to the configured repo (not whichever checkout ran last); fall
+        # back to the running checkout when none is configured
+        local install_repo="$DOTFILES_REPO"
+        if [[ -n "$CFG_DOTFILES_REPO" && -x "$CFG_DOTFILES_REPO/dotfiles" ]]; then
+            install_repo="$CFG_DOTFILES_REPO"
+        fi
+        is_dry_run || sync_self_install "$install_repo" "$SHELL_SCRIPTS_DIR"
     fi
 
     run_all "$PROFILE_ARG"
