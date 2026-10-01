@@ -34,6 +34,7 @@ setup_test() {
 
     export STATE_DIR="$TEST_STATE"
     export HOME="$TEST_HOME"
+    export XDG_STATE_HOME="$TEST_HOME/.xdg-state"
     export DOTFILES_CONFIG="$TEST_HOME/nonexistent-config"
 }
 

@@ -4,6 +4,7 @@
 set -euo pipefail
 unset DOTFILES_HOSTS_REPO
 export DOTFILES_CONFIG="/tmp/dotfiles-test-no-config"
+export XDG_STATE_HOME="/tmp/dotfiles-test-no-xdg-state"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"

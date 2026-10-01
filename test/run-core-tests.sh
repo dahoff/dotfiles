@@ -35,6 +35,7 @@ setup_test() {
     # Override state and backup directories
     export STATE_DIR="$TEST_STATE"
     export HOME="$TEST_HOME"
+    export XDG_STATE_HOME="$TEST_HOME/.xdg-state"
 
     # Debug
     #echo "STATE_DIR=$STATE_DIR"
