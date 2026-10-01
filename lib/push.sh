@@ -143,6 +143,12 @@ push_host() {
     for i in "${!targets[@]}"; do
         check+="[ -e $(push_quote "${targets[$i]}/.git") ] && echo $(push_quote "git ${targets[$i]}"); "
     done
+    # An existing non-git target may only be replaced if it is a pushed copy or empty
+    local q
+    for i in "${!targets[@]}"; do
+        q=$(push_quote "${targets[$i]}")
+        check+="if [ -e $q ] && [ ! -e $q/.git ] && [ ! -f $q/PUSHED ] && { [ ! -d $q ] || [ -n \"\$(ls -A $q 2>/dev/null)\" ]; }; then echo $(push_quote "foreign ${targets[$i]}"); fi; "
+    done
     check+="[ -x $(push_quote "$rdot/dotfiles") ] && echo exists; true"
     if ! state=$(push_ssh "$host" "$check"); then
         log_error "[$host] ssh failed"
@@ -152,6 +158,9 @@ push_host() {
     while IFS= read -r line; do
         if [[ "$line" == "git "* ]]; then
             log_error "$host:${line#git } is a git checkout; run 'dotfiles sync' there instead"
+            refused=true
+        elif [[ "$line" == "foreign "* ]]; then
+            log_error "$host:${line#foreign } exists and is not a pushed dotfiles copy; refusing to replace it"
             refused=true
         elif [[ "$line" == "exists" ]]; then
             exists=true

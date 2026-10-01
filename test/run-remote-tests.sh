@@ -153,6 +153,21 @@ OUT=$(DOTFILES_SSH_OPTS="-o Port=1 -o StrictHostKeyChecking=no -o UserKnownHosts
 printf '%s\n' "$OUT" | grep -qF "push FAILED" || fail "P5: no FAILED summary: $OUT"
 pass "P5: unreachable host fails with a summary"
 
+info "P6: refuses to replace a foreign (non-pushed, non-git) directory"
+push "$TARGET"
+[[ $RC -eq 0 ]] || fail "P6: setup push exited $RC: $OUT"
+test_ssh 'rm -rf ~/dh-custom && mkdir -p ~/dh-custom && echo precious > ~/dh-custom/keep.txt'
+push "$TARGET"
+[[ $RC -eq 1 ]] || fail "P6: expected exit 1, got $RC: $OUT"
+printf '%s\n' "$OUT" | grep -qF "exists and is not a pushed dotfiles copy; refusing to replace it" || fail "P6: no refusal message: $OUT"
+test_ssh 'test -f ~/dh-custom/keep.txt' || fail "P6: keep.txt was destroyed"
+push --dry-run "$TARGET"
+[[ $RC -eq 1 ]] || fail "P6: dry-run should refuse too, got $RC: $OUT"
+test_ssh 'rm -rf ~/dh-custom'
+push "$TARGET"
+[[ $RC -eq 0 ]] || fail "P6: push after cleanup exited $RC: $OUT"
+pass "P6: foreign directory refused and left intact"
+
 echo
 echo "======================================"
 echo -e "${GREEN}All push tests passed${NC}"
