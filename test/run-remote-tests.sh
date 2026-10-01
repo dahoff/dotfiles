@@ -80,9 +80,11 @@ WORKTREE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
 # The remote profile is config-only (base: claude + scripts), so the sync that
 # push runs never needs sudo
 reset_remote() {
-    test_ssh 'rm -rf ~/.local/share/dotfiles ~/.local/bin/dotfiles ~/.bashrc.d ~/.config/dotfiles ~/.claude ~/.local/state/dotfiles
+    # The config uses comments, spaces, tabs, quotes and CRLF line ends, and puts
+    # the hosts repo at a non-default path: push must read it like config_load
+    test_ssh 'rm -rf ~/.local/share/dotfiles ~/dh-custom ~/.local/bin/dotfiles ~/.bashrc.d ~/.config/dotfiles ~/.claude ~/.local/state/dotfiles
         mkdir -p ~/.config/dotfiles ~/.claude
-        printf "hostname=testhost\n" > ~/.config/dotfiles/config
+        printf "# hosts_repo=/nope\r\n\r\n  hostname = \"testhost\"\r\nhosts_repo\t=\t\"~/dh-custom\"\r\n" > ~/.config/dotfiles/config
         printf "{\"liveOnly\":1}\n" > ~/.claude/settings.json'
 }
 
@@ -91,9 +93,10 @@ reset_remote
 push "$TARGET"
 [[ $RC -eq 0 ]] || fail "P1: push exited $RC: $OUT"
 test_ssh 'test -x ~/.local/share/dotfiles/dotfiles/dotfiles' || fail "P1: remote dotfiles missing"
-test_ssh 'test -f ~/.local/share/dotfiles/dotfiles-hosts/hosts/testhost/host.yaml' || fail "P1: remote hosts repo missing"
+test_ssh 'test -f ~/dh-custom/hosts/testhost/host.yaml' || fail "P1: hosts repo not at the path from the spaced/quoted/CRLF config"
+test_ssh 'test ! -e ~/.local/share/dotfiles/dotfiles-hosts' || fail "P1: hosts repo also at the default path"
 test_ssh 'grep -q "commit='"$WORKTREE_COMMIT"'" ~/.local/share/dotfiles/dotfiles/PUSHED' || fail "P1: PUSHED has no commit"
-test_ssh 'grep -q "^source=" ~/.local/share/dotfiles/dotfiles-hosts/PUSHED' || fail "P1: hosts PUSHED missing"
+test_ssh 'grep -q "^source=" ~/dh-custom/PUSHED' || fail "P1: hosts PUSHED missing"
 [[ "$(test_ssh 'jq .liveOnly ~/.claude/settings.json')" == "1" ]] || fail "P1: live key lost"
 [[ "$(test_ssh 'jq -r .hostKey ~/.claude/settings.json')" == "testhost" ]] || fail "P1: host overlay not applied"
 [[ "$(test_ssh 'cat ~/.claude/statusline-command.sh')" == "# host statusline" ]] || fail "P1: host statusline not deployed"

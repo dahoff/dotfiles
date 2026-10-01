@@ -469,7 +469,7 @@ Commands:
   sync                 Pull, then install if new, upgrade if exists (idempotent)
   push HOST...         Copy committed repo snapshots to HOST over ssh and sync there
   uninstall            Uninstall all configs
-  status              Show repos, host, last sync, pending packages and app state (read-only)
+  status               Show repos, host, last sync, pending packages and app state (read-only)
   verify               Verify all installations
   help                 Show this help message
 
@@ -859,7 +859,7 @@ cmd_push() {
             failed=1
         fi
     done
-    [[ "$dry" == true ]] || print_summary
+    print_summary
     exit $failed
 }
 

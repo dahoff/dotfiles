@@ -62,5 +62,29 @@ info "Case 3: push takes no lock and writes no local state"
 [[ ! -e "$T/home/.local/bin/dotfiles" ]] || fail "push self-installed locally"
 pass "no local state"
 
+info "Case 4: the remote config snippet reads config like config_load"
+# shellcheck source=../../lib/push.sh
+source "$ROOT_DIR/lib/push.sh"
+SH=sh
+command -v dash >/dev/null 2>&1 && SH=dash
+snippet() {
+    # $1 = config file content (printf format); prints the snippet's stdout+stderr
+    printf "$1" > "$T/snip-cfg"
+    push_remote_snippet | DOTFILES_CONFIG="$T/snip-cfg" $SH 2>&1
+}
+D="$HOME/.local/share/dotfiles"
+EXP=$(printf 'dotfiles_repo=%s/dotfiles\nhosts_repo=%s/dotfiles-hosts' "$D" "$D")
+[[ "$(snippet '')" == "$EXP" ]] || fail "defaults wrong: $(snippet '')"
+OUT=$(snippet '# hosts_repo=/nope\n\n  hosts_repo = "~/h one"  \r\ndotfiles_repo\t=\t'"'"'/srv/d'"'"'\r\n')
+[[ "$OUT" == "dotfiles_repo=/srv/d
+hosts_repo=$HOME/h one" ]] || fail "spaced/quoted/CRLF config wrong: $OUT"
+OUT=$(snippet 'hosts_repo=/a\nhosts_repo=/b\n')
+[[ "$OUT" == "dotfiles_repo=$D/dotfiles
+hosts_repo=/b" ]] || fail "last occurrence should win: $OUT"
+OUT=$(snippet 'hosts_repo=relative/path\n')
+printf '%s\n' "$OUT" | grep -qF "non-absolute hosts_repo" || fail "no warning for a relative path: $OUT"
+printf '%s\n' "$OUT" | grep -qF "hosts_repo=$D/dotfiles-hosts" || fail "relative path should fall back to the default: $OUT"
+pass "snippet matches config_load rules ($SH)"
+
 echo
 echo -e "${GREEN}All push tests passed${NC}"

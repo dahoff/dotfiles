@@ -49,21 +49,46 @@ push_build_payload() {
 # Usage: push_remote_paths HOST
 push_remote_paths() {
     local host="$1"
-    push_ssh "$host" "sh -s" <<'SNIPPET'
+    push_remote_snippet | push_ssh "$host" "sh -s"
+}
+
+# Print the POSIX sh snippet that reads the remote config. It applies the same
+# rules as config_load (lib/config.sh): strip CR, skip blanks and comments,
+# split on the first '=', trim whitespace, strip one pair of matching quotes,
+# last occurrence wins, expand a leading ~. A value that is not absolute falls
+# back to the default with a warning on stderr. Plain sh (dash) only: the
+# remote may not have dotfiles yet.
+push_remote_snippet() {
+    cat <<'SNIPPET'
 cfg="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
 d=; h=
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
 if [ -f "$cfg" ]; then
     while IFS= read -r l || [ -n "$l" ]; do
-        case "$l" in
-            dotfiles_repo=*) d=${l#*=} ;;
-            hosts_repo=*) h=${l#*=} ;;
+        l=$(printf '%s' "$l" | tr -d '\r')
+        case "$l" in *=*) ;; *) continue ;; esac
+        k=$(trim "${l%%=*}")
+        case "$k" in dotfiles_repo|hosts_repo) ;; *) continue ;; esac
+        v=$(trim "${l#*=}")
+        case "$v" in
+            \"?*\") v=${v#?}; v=${v%?} ;;
+            \'?*\') v=${v#?}; v=${v%?} ;;
         esac
+        case "$v" in
+            "~") v=$HOME ;;
+            "~/"*) v="$HOME/${v#"~/"}" ;;
+        esac
+        if [ "$k" = dotfiles_repo ]; then d=$v; else h=$v; fi
     done < "$cfg"
+fi
+if [ -n "$d" ]; then
+    case "$d" in /*) ;; *) echo "dotfiles: ignoring non-absolute dotfiles_repo in $cfg: $d" >&2; d= ;; esac
+fi
+if [ -n "$h" ]; then
+    case "$h" in /*) ;; *) echo "dotfiles: ignoring non-absolute hosts_repo in $cfg: $h" >&2; h= ;; esac
 fi
 [ -n "$d" ] || d="$HOME/.local/share/dotfiles/dotfiles"
 [ -n "$h" ] || h="$HOME/.local/share/dotfiles/dotfiles-hosts"
-case "$d" in "~") d=$HOME ;; "~/"*) d="$HOME/${d#"~/"}" ;; esac
-case "$h" in "~") h=$HOME ;; "~/"*) h="$HOME/${h#"~/"}" ;; esac
 printf 'dotfiles_repo=%s\nhosts_repo=%s\n' "$d" "$h"
 SNIPPET
 }
@@ -151,6 +176,13 @@ push_host() {
         log_error "[$host] could not create a remote temp dir"
         return 1
     fi
+    # scp's remote side is parsed by the remote (or sftp), so it is not quoted:
+    # require the mktemp path to be plain characters instead
+    if [[ "$rtmp" != /* || "$rtmp" == *[!A-Za-z0-9/._-]* ]]; then
+        log_error "[$host] unsupported remote temp dir '$rtmp' (set TMPDIR to a plain path)"
+        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
+        return 1
+    fi
     if ! push_scp "${tars[@]}" "$host:$rtmp/"; then
         log_error "[$host] scp failed"
         push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
@@ -161,8 +193,15 @@ push_host() {
     for i in "${!tars[@]}"; do
         p=$(push_quote "${targets[$i]}")
         t=$(push_quote "$rtmp/$(basename "${tars[$i]}")")
-        unpack+="mkdir -p \"\$(dirname $p)\" && rm -rf $p.new && mkdir $p.new && tar -xf $t -C $p.new"
-        unpack+=" && rm -rf $p.old && { [ -e $p ] && mv $p $p.old || true; } && mv $p.new $p && rm -rf $p.old || exit 1; "
+        unpack+="mkdir -p \"\$(dirname $p)\" && rm -rf $p.new && mkdir $p.new && tar -xf $t -C $p.new || { rm -rf $p.new; exit 1; }
+rm -rf $p.old
+if [ -e $p ]; then mv $p $p.old || { rm -rf $p.new; exit 1; }; fi
+if ! mv $p.new $p; then
+    if [ -e $p.old ]; then mv $p.old $p; fi
+    rm -rf $p.new; exit 1
+fi
+rm -rf $p.old
+"
     done
     unpack+="rm -rf $(push_quote "$rtmp")"
     if ! push_ssh "$host" "$unpack"; then
