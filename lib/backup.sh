@@ -62,14 +62,15 @@ backup_create_original() {
 }
 
 # Create timestamped backup
-# Usage: backup_create_snapshot source_file backup_dir
+# Usage: backup_create_snapshot source_file backup_dir [timestamp]
+# Pass the same timestamp for every file of one upgrade so they share a snapshot dir.
 backup_create_snapshot() {
     local source_file="$1"
     local backup_dir="$2"
-    local ts
+    local ts="${3:-}"
     local filename
 
-    ts=$(timestamp)
+    [[ -n "$ts" ]] || ts=$(timestamp)
     filename=$(basename "$source_file")
 
     # Skip if source file doesn't exist

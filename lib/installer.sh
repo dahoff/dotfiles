@@ -424,10 +424,11 @@ cmd_upgrade() {
     # Create snapshot backup
     if [[ "$NO_BACKUP" != true ]]; then
         log_info "Creating backup snapshot..."
-        local ts
+        local ts="" snap_ts
+        snap_ts=$(timestamp)
         for dest in "${CONFIG_DESTS[@]}"; do
             if [[ -f "$dest" ]]; then
-                ts=$(backup_create_snapshot "$dest" "$BACKUP_DIR")
+                ts=$(backup_create_snapshot "$dest" "$BACKUP_DIR" "$snap_ts")
             fi
         done
 

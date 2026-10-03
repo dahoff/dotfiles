@@ -355,6 +355,12 @@ if [[ -n "$SNAP" && -f "$SNAP/.tmux.conf" ]]; then
 else
     fail "No snapshot with .tmux.conf under $HOME/.bak/tmux"
 fi
+SNAPS=$(find "$HOME/.bak/tmux" -mindepth 1 -maxdepth 1 -type d -name "[0-9]*_[0-9]*" | wc -l)
+if [[ "$SNAPS" -eq 1 ]]; then
+    pass "One upgrade makes one snapshot dir"
+else
+    fail "Expected 1 snapshot dir after one upgrade, found $SNAPS"
+fi
 
 # Test R2: rollback command removed
 info "Test R2: rollback is an unknown command"
