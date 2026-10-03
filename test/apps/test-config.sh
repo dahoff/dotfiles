@@ -91,6 +91,12 @@ load
 printf 'profile: a#b\n' > "$CFG"
 load
 [[ "$CFG_PROFILE" == 'a#b' ]] || fail "# without leading space is not a comment: [$CFG_PROFILE]"
+printf 'profile: a # b # c\n' > "$CFG"
+load
+[[ "$CFG_PROFILE" == a ]] || fail "comment must start at the first ' #': [$CFG_PROFILE]"
+printf 'auto_sync_interval: 4h  # every 4h # was 1h\n' > "$CFG"
+load
+[[ $LOAD_RC -eq 0 && "$CFG_AUTO_SYNC_INTERVAL" == 4h ]] || fail "interval with two # comments: rc=$LOAD_RC"
 pass "comments ignored, # in quotes kept"
 
 # Unit 4b

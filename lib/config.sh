@@ -28,7 +28,7 @@ config_interval_seconds() {
 config_load() {
     local file="$1"
     CFG_FILE="$file"
-        CFG_HOSTS_DIR=""
+    CFG_HOSTS_DIR=""
     CFG_HOSTNAME=""
     CFG_PROFILE=""
     CFG_AUTO_SYNC="on"
@@ -70,8 +70,8 @@ config_load() {
             value="${value:1:${#value}-2}"
         else
             # Unquoted: a trailing ' #...' is a comment
-            if [[ "$value" =~ ^(.*[^[:space:]])?[[:space:]]+#.*$ ]]; then
-                value="${BASH_REMATCH[1]}"
+            if [[ "$value" == *[[:space:]]"#"* ]]; then
+                value="${value%%[[:space:]]#*}"
             elif [[ "$value" == "#"* ]]; then
                 value=""
             fi
