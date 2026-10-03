@@ -113,5 +113,27 @@ OUT=$(cat "$ROOT_DIR/bootstrap.sh" | bash -s -- --repo "$URL" --dir "$HOME/df2" 
 [[ -f "$DOTFILES_CONFIG" ]] || fail "6: config not written"
 pass "piped run falls back to --yes"
 
+# 7. piped run where git drains stdin (as a credential helper or debconf might)
+REALGIT=$(command -v git)
+mkdir -p "$T/drain"
+cat > "$T/drain/git" <<EOS
+#!/bin/sh
+case "\$*" in *clone*) cat >/dev/null ;; esac
+exec "$REALGIT" "\$@"
+EOS
+chmod +x "$T/drain/git"
+rm -f "$DOTFILES_CONFIG"
+RC=0
+OUT=$(cat "$ROOT_DIR/bootstrap.sh" | PATH="$T/drain:$PATH" bash -s -- --repo "$URL" --dir "$HOME/df3" --no-sync --hosts-dir none 2>&1) || RC=$?
+[[ $RC -eq 0 ]] || fail "7: exit $RC: $OUT"
+[[ -f "$DOTFILES_CONFIG" ]] || fail "7: config not written (script swallowed?): $OUT"
+pass "piped run survives a child that reads stdin"
+
+# 8. plain dir inside another checkout is not a checkout
+mkdir -p "$HOME/df/sub"
+run --repo "$URL" --dir "$HOME/df/sub" -- --no-sync --hosts-dir none
+[[ $RC -eq 1 && "$OUT" == *"$HOME/df/sub"* ]] || fail "8: expected exit 1 naming dir, got $RC: $OUT"
+pass "subdirectory of a checkout is refused"
+
 echo
 echo "All bootstrap tests passed"
