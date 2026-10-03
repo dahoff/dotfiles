@@ -72,6 +72,10 @@ run_interactive() {
         "$DF/dotfiles" init --no-sync 2>&1) || RC=$?
 }
 has() { grep -qxF -- "$1" "$CFG"; }
+# Same config content, ignoring the header date line
+same_body() {
+    cmp -s <(grep -v '^# Written by dotfiles init on ' "$1") <(grep -v '^# Written by dotfiles init on ' "$2")
+}
 
 # Case 1
 info "Case 1: no tty and no --yes"
@@ -132,11 +136,11 @@ cp "$CFG" "$T/first.yaml"
 run_init --yes --no-sync --hosts-dir "$HD" --hostname testhost
 [[ $RC -eq 0 ]] || fail "re-run failed: $OUT"
 [[ ! -e "$CFG.bak" ]] || fail ".bak created for identical content"
-cmp -s "$CFG" "$T/first.yaml" || fail "content changed on re-run"
+same_body "$CFG" "$T/first.yaml" || fail "content changed on re-run"
 [[ ! -e "$CFG.tmp" ]] || fail ".tmp left behind"
 run_init --yes --no-sync --hosts-dir "$HD" --hostname testhost --interval 1h
 [[ $RC -eq 0 ]] || fail "init --interval 1h failed: $OUT"
-cmp -s "$CFG.bak" "$T/first.yaml" || fail ".bak does not hold the old content"
+same_body "$CFG.bak" "$T/first.yaml" || fail ".bak does not hold the old content"
 has "auto_sync_interval: 1h" || fail "new interval missing"
 [[ "$OUT" == *"previous config saved as $CFG.bak"* ]] || fail "backup not reported: $OUT"
 pass ".bak only when content differs"
@@ -150,7 +154,35 @@ run_init --yes --no-sync --hosts-dir none
 has "profile: minimal" || fail "profile not kept: $(cat "$CFG")"
 has "hostname: nohost" || fail "hostname not kept"
 has "auto_sync_interval: 3h" || fail "interval not kept"
-pass "existing config keeps profile and hostname"
+# An explicit profile with a host.yaml is kept uncommented (it overrides host.yaml)
+rm -f "$CFG.bak"
+printf 'hosts_dir: %s\nhostname: testhost\nprofile: minimal\n' "$HD" > "$CFG"
+run_init --yes --no-sync
+[[ $RC -eq 0 ]] || fail "init failed ($RC): $OUT"
+has "profile: minimal" || fail "explicit profile commented or lost: $(cat "$CFG")"
+[[ "$OUT" == *"profile 'minimal' overrides profile 'base'"* ]] || fail "override not warned: $OUT"
+cp "$CFG" "$T/override.yaml"
+rm -f "$CFG.bak"
+run_init --yes --no-sync
+[[ $RC -eq 0 ]] || fail "re-run failed ($RC): $OUT"
+has "profile: minimal" || fail "explicit profile not kept on re-run"
+same_body "$CFG" "$T/override.yaml" || fail "re-run changed the config"
+[[ ! -e "$CFG.bak" ]] || fail ".bak created on unchanged re-run"
+# --profile with a host.yaml is written uncommented too
+rm -f "$CFG" "$CFG.bak"
+run_init --yes --no-sync --hosts-dir "$HD" --hostname testhost --profile minimal
+[[ $RC -eq 0 ]] && has "profile: minimal" || fail "--profile with host.yaml not written: $OUT"
+# Values with ' #' are quoted and read back whole
+rm -f "$CFG"
+run_init --yes --no-sync --hosts-dir none --hostname 'a #b'
+[[ $RC -eq 0 ]] || fail "init failed ($RC): $OUT"
+(
+    source "$ROOT_DIR/lib/logging.sh"
+    source "$ROOT_DIR/lib/config.sh"
+    config_load "$CFG"
+    [[ "$CFG_HOSTNAME" == 'a #b' ]]
+) || fail "hostname with ' #' does not round-trip: $(cat "$CFG")"
+pass "existing config keeps profile and hostname; explicit profile overrides host.yaml"
 
 # Case 6
 info "Case 6: URL clones to the default path; re-run pulls"
@@ -228,7 +260,7 @@ cp "$CFG" "$T/interactive.yaml"
 run_interactive "" "" "" ""
 [[ $RC -eq 0 ]] || fail "defaults re-run failed ($RC): $OUT"
 [[ "$OUT" == *"[$HD]: "* && "$OUT" == *"[testhost]: "* ]] || fail "defaults not from config: $OUT"
-cmp -s "$CFG" "$T/interactive.yaml" || fail "accepting defaults changed the config"
+same_body "$CFG" "$T/interactive.yaml" || fail "accepting defaults changed the config"
 [[ ! -e "$CFG.bak" ]] || fail ".bak created when nothing changed"
 # A bad hostname is rejected like --hostname, then re-prompted
 rm -f "$CFG"

@@ -196,11 +196,11 @@ init_write_config() {
         else
             echo "# hosts_dir:"
         fi
-        echo "hostname: $INIT_HOSTNAME"
+        echo "hostname: $(init_yaml_value "$INIT_HOSTNAME")"
         if [[ "$INIT_PROFILE_COMMENTED" == true ]]; then
-            echo "# profile: $INIT_PROFILE  # hosts/$INIT_HOSTNAME/host.yaml selects the profile"
+            echo "# profile: $(init_yaml_value "$INIT_PROFILE")  # hosts/$INIT_HOSTNAME/host.yaml selects the profile"
         else
-            echo "profile: $INIT_PROFILE"
+            echo "profile: $(init_yaml_value "$INIT_PROFILE")"
         fi
         echo "auto_sync: $INIT_AUTO_SYNC"
         echo "auto_sync_interval: $INIT_INTERVAL"
@@ -290,12 +290,18 @@ init_main() {
         fi
     fi
 
-    # Profile: only when no host.yaml selects it
+    # Profile: asked only when no host.yaml selects it. With a host.yaml, an
+    # explicit profile (--profile, or an uncommented profile: in the existing
+    # config) still overrides it at sync time, so it is kept uncommented.
     if [[ -n "$host_yaml" ]]; then
-        INIT_PROFILE_COMMENTED=true
-        INIT_PROFILE="$d_profile"
-        if [[ "$g_profile" == true ]]; then
-            log_warn "--profile $f_profile not written: hosts/$INIT_HOSTNAME/host.yaml selects the profile"
+        if [[ "$g_profile" == true || -n "$CFG_PROFILE" ]]; then
+            INIT_PROFILE_COMMENTED=false
+            init_choose INIT_PROFILE "${f_profile:-$CFG_PROFILE}" true "Profile" "" init_validate_profile
+            log_warn "profile '$INIT_PROFILE' overrides profile '$(hosts_read_scalar "$host_yaml" profile)'" \
+                "from hosts/$INIT_HOSTNAME/host.yaml"
+        else
+            INIT_PROFILE_COMMENTED=true
+            INIT_PROFILE="$d_profile"
         fi
     else
         INIT_PROFILE_COMMENTED=false
