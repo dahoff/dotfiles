@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add three ways to set up a host:
-- `dotfiles init`: guided per-host setup that writes `~/.config/dotfiles/config` and runs the first sync.
+- `dotfiles init`: guided per-host setup that writes `~/.config/dotfiles/config.yaml` and runs the first sync.
 - `bootstrap.sh`: a one-command setup for a fresh machine. It installs git, clones dotfiles and runs `init`.
 - `dotfiles push --init HOST`: first-time setup of a host without git.
 
@@ -11,11 +11,13 @@
 
 **Tech Stack:** Bash 4+, git, the existing test harness, and Docker for `push --init`.
 
+**Order:** implement this plan only after `docs/superpowers/plans/2026-10-02-dotfiles-sync-revisions.md` (R1–R3) is done: it changes the config format (YAML `config.yaml`), renames `--hosts-repo`/`hosts_repo` to `--hosts-dir`/`hosts_dir`, and removes `dotfiles_repo`, all of which this plan already assumes.
+
 **Spec:** `docs/superpowers/specs/2026-10-01-dotfiles-bootstrap-init-design.md`. It builds on `docs/superpowers/specs/2026-10-01-dotfiles-sync-push-design.md`.
 
 ## Global Constraints
 
-- **Config file**: written to `${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}`, using the same keys and format as `lib/config.sh` reads: `dotfiles_repo`, `hosts_repo`, `hostname`, `profile`, `auto_sync`, `auto_sync_interval`.
+- **Config file**: written to `${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config.yaml}`, using the same keys and format as `lib/config.sh` reads: `hosts_dir`, `hostname`, `profile`, `auto_sync`, `auto_sync_interval`.
   - Header comment: `# Written by dotfiles init on <date -u +%Y-%m-%d>`.
   - If an existing file differs from the new content, it is kept as `<config>.bak`.
   - The new file is written to `<config>.tmp` and then moved into place.
@@ -23,7 +25,7 @@
   - Hosts repo clone target: `~/.local/share/dotfiles/dotfiles-hosts`.
   - Bootstrap clone target: `~/.local/share/dotfiles/dotfiles`.
 - **Default bootstrap repo URL**: `https://github.com/dahoff/dotfiles.git`.
-- **`init` flags**: `--hosts-repo URL|PATH|none`, `--hostname NAME`, `--profile NAME`, `--auto-sync on|off`, `--interval <n>m|h|d`, `--yes`, `--no-sync`.
+- **`init` flags**: `--hosts-dir URL|PATH|none`, `--hostname NAME`, `--profile NAME`, `--auto-sync on|off`, `--interval <n>m|h|d`, `--yes`, `--no-sync`.
 - **Non-interactive runs**: if init isn't interactive and `--yes` isn't given, it exits 1 with `init is interactive; pass --yes to accept defaults`. "Interactive" means `[ -t 0 ]` or `DOTFILES_INIT_ASSUME_TTY=1`; prompts read `/dev/tty`.
 - **Hosts repo values**: an argument is a URL if it contains `://` or matches `^[^/[:space:]]+@[^:/[:space:]]+:`. `none` means no hosts repo. Anything else is a path, which must be an existing directory.
 - **Clone failure**: exit 1 and write nothing.
@@ -35,7 +37,7 @@
 ## Review Focus
 
 1. **Re-running `init` on a configured host.** Each prompt's default must be the current config value, and nothing else changes when every answer is accepted. The `.bak` file is created only when the content differs. Tested in Task 1.
-2. **`init --hosts-repo <URL>` when the default hosts path already holds a pushed (non-git) copy.** That is an error that names the path. It must never delete the copy. Tested in Task 1.
+2. **`init --hosts-dir <URL>` when the default hosts path already holds a pushed (non-git) copy.** That is an error that names the path. It must never delete the copy. Tested in Task 1.
 3. **`bootstrap.sh` piped from curl (`curl … | bash`).** Stdin is the script, so init must read answers from `/dev/tty`. When there is no tty, it must fall back to `--yes` instead of hanging. Tested in Task 2 via `DOTFILES_BOOTSTRAP_NO_TTY=1` and `</dev/null`.
 4. **The hostname prompt receiving a value containing `/` or `..`.** It must be rejected exactly as `--hostname` is. Tested in Task 1.
 5. **`push --init` to a host that already has a config.** Remote init must keep the existing values as defaults, so `--yes` doesn't wipe a hand-set `profile`. Tested in Task 3.
@@ -67,16 +69,15 @@
   - Under `--yes`, it sets VAR to DEFAULT.
   - Otherwise it prints `PROMPT [DEFAULT]: ` to stderr and reads one line, from stdin if `DOTFILES_INIT_ASSUME_TTY=1`, else from `/dev/tty`. An empty answer means DEFAULT. EOF means exit 1 with `init: no answer for '<PROMPT>'`.
 - `init_validate_hostname NAME`: the same rules as `--hostname` in `dotfiles` `parse_args`: non-empty, no `/`, not `.` or `..`.
-- `init_write_config FILE`: uses the globals `INIT_HOSTS_REPO`, `INIT_HOSTNAME`, `INIT_PROFILE`, `INIT_PROFILE_COMMENTED`, `INIT_AUTO_SYNC`, `INIT_INTERVAL` and `DOTFILES_REPO`. It writes this layout, with the dotfiles repo always set:
+- `init_write_config FILE`: uses the globals `INIT_HOSTS_DIR`, `INIT_HOSTNAME`, `INIT_PROFILE`, `INIT_PROFILE_COMMENTED`, `INIT_AUTO_SYNC`, `INIT_INTERVAL`. It writes this YAML layout (no `dotfiles_repo` key — the dotfiles repo is always the running checkout):
 
-```
+```yaml
 # Written by dotfiles init on 2026-10-01
-dotfiles_repo=/abs/path
-hosts_repo=/abs/path            # or: # hosts_repo=   (when none)
-hostname=koi
-profile=complete                # or: # profile=complete  (host.yaml selects the profile)
-auto_sync=on
-auto_sync_interval=4h
+hosts_dir: /abs/path            # or: # hosts_dir:   (when none)
+hostname: koi
+profile: complete               # or: # profile: complete  (host.yaml selects the profile)
+auto_sync: on
+auto_sync_interval: 4h
 ```
 
 **Flow:**
@@ -93,7 +94,7 @@ auto_sync_interval=4h
    - `none` leaves it empty.
    - A URL clones to the default path. If the target already exists:
      - a git checkout whose `remote.origin.url` matches the URL is pulled with `--ff-only`; a failure is only a warning
-     - any other existing target is an error naming the path, telling the user to pass `--hosts-repo <path>` or `none`. Nothing is deleted.
+     - any other existing target is an error naming the path, telling the user to pass `--hosts-dir <path>` or `none`. Nothing is deleted.
 
      Clone with `GIT_TERMINAL_PROMPT=0` when `--yes`. A clone failure exits 1.
    - A path must be a directory. Store it as an absolute path.
@@ -110,20 +111,20 @@ auto_sync_interval=4h
 
 - [ ] **Step 1:** Write `test/apps/test-init.sh` with a sandbox and a /tmp copy of the fixture hosts repo. Also create a bare git repo of the fixture (`git init`, commit, `git clone --bare`) for URL tests. Cases:
   1. Without a tty, run `dotfiles init </dev/null`. Expect exit 1 and the message from the Global Constraints.
-  2. `init --yes --no-sync --hosts-repo <fixture path> --hostname testhost`. Expect:
+  2. `init --yes --no-sync --hosts-dir <fixture path> --hostname testhost`. Expect:
      - exit 0
-     - the config contains `hosts_repo=<abs>`, `hostname=testhost`, `auto_sync=on` and `auto_sync_interval=4h`
-     - a commented `# profile=` line
-     - `dotfiles_repo=<worktree>`
+     - the config contains `hosts_dir: <abs>`, `hostname: testhost`, `auto_sync: on` and `auto_sync_interval: 4h`
+     - a commented `# profile:` line
+     - no `dotfiles_repo` key
      - the output mentions `host.yaml found (profile: base)`
-  3. `--hosts-repo none --profile minimal --auto-sync off --interval 2h`. Expect `# hosts_repo=`, `profile=minimal`, `auto_sync=off` and `auto_sync_interval=2h`.
+  3. `--hosts-dir none --profile minimal --auto-sync off --interval 2h`. Expect `# hosts_dir:`, `profile: minimal`, `auto_sync: off` and `auto_sync_interval: 2h`.
   4. Re-run case 2's command. Expect no `.bak` (the content is the same apart from the header date, which is the same day). Then re-run with `--interval 1h`. Expect a `.bak` holding the old content.
-  5. With an existing config containing `profile=minimal` and `hostname=nohost`, run `init --yes --no-sync --hosts-repo none`. Expect the new config keeps `profile=minimal` and `hostname=nohost`.
-  6. Run with `--hosts-repo file:///<bare>.git` against an empty default path. Expect the clone at `$HOME/.local/share/dotfiles/dotfiles-hosts` with `hosts/testhost/host.yaml` present, and `hosts_repo` set to that path. Re-run it and expect a pull, exit 0.
-  7. Put a non-git dir with a `PUSHED` file at the default path, then run `--hosts-repo file:///<bare>.git`. Expect exit 1, the path named in the error, the dir untouched, and no config written.
-  8. Expect exit 1 for each of `--hostname ../x`, `--interval 10x`, `--profile nope` (with no host.yaml) and `--hosts-repo /nonexistent`.
-  9. Without `--no-sync`: `init --yes --hosts-repo <fixture> --hostname testhost`. Expect exit 0 and `~/.claude/settings.json` deployed in the sandbox HOME (the base profile is config-only).
-  10. Interactive via stdin: run `DOTFILES_INIT_ASSUME_TTY=1 dotfiles init --no-sync` and feed answers with `printf '%s\n' "<fixture>" "testhost" "" ""`, accepting the defaults for auto sync and interval. Expect exit 0, `hostname=testhost`, and the prompts (on stderr) to contain `[4h]`. Feed `"../bad"` and then `"testhost"` for the hostname and expect a re-prompt that succeeds. Short input (EOF) gives exit 1.
+  5. With an existing config containing `profile: minimal` and `hostname: nohost`, run `init --yes --no-sync --hosts-dir none`. Expect the new config keeps `profile: minimal` and `hostname: nohost`.
+  6. Run with `--hosts-dir file:///<bare>.git` against an empty default path. Expect the clone at `$HOME/.local/share/dotfiles/dotfiles-hosts` with `hosts/testhost/host.yaml` present, and `hosts_dir` set to that path. Re-run it and expect a pull, exit 0.
+  7. Put a non-git dir with a `PUSHED` file at the default path, then run `--hosts-dir file:///<bare>.git`. Expect exit 1, the path named in the error, the dir untouched, and no config written.
+  8. Expect exit 1 for each of `--hostname ../x`, `--interval 10x`, `--profile nope` (with no host.yaml) and `--hosts-dir /nonexistent`.
+  9. Without `--no-sync`: `init --yes --hosts-dir <fixture> --hostname testhost`. Expect exit 0 and `~/.claude/settings.json` deployed in the sandbox HOME (the base profile is config-only).
+  10. Interactive via stdin: run `DOTFILES_INIT_ASSUME_TTY=1 dotfiles init --no-sync` and feed answers with `printf '%s\n' "<fixture>" "testhost" "" ""`, accepting the defaults for auto sync and interval. Expect exit 0, `hostname: testhost`, and the prompts (on stderr) to contain `[4h]`. Feed `"../bad"` and then `"testhost"` for the hostname and expect a re-prompt that succeeds. Short input (EOF) gives exit 1.
 - [ ] **Step 2:** Run it. Expect a FAIL (`init` is an unknown command).
 - [ ] **Step 3:** Implement `lib/init.sh` and the dispatch.
 - [ ] **Step 4:** Run `bash test/apps/test-init.sh`, then the full suites. Everything should pass.
@@ -156,12 +157,12 @@ auto_sync_interval=4h
 - The script starts with `set -euo pipefail` and prints `bootstrap: ...` progress lines to stderr.
 
 - [ ] **Step 1:** Write `test/apps/test-bootstrap.sh`. Use a sandbox, a bare origin made from the worktree with the code currently on disk (rsync into a clone, then commit "wip" and push, as in `test-sync.sh`), and `DOTFILES_BOOTSTRAP_NO_TTY=1`. Cases:
-  1. `bash bootstrap.sh --repo file://<bare> --dir $HOME/df -- --no-sync --hosts-repo none`. Expect exit 0, `$HOME/df/dotfiles` executable, and a config with `dotfiles_repo=$HOME/df`.
+  1. `bash bootstrap.sh --repo file://<bare> --dir $HOME/df -- --no-sync --hosts-dir none`. Expect exit 0, `$HOME/df/dotfiles` executable, a config file written, and `~/.local/bin/dotfiles` linking to `$HOME/df/dotfiles` (created by init's sync; with `--no-sync`, assert only the config).
   2. Re-run the same command. Expect exit 0 and output containing `pull` (no re-clone).
   3. A `--dir` that exists but isn't a checkout. Expect exit 1 naming the dir.
-  4. Arguments without `--` are passed through. `bash bootstrap.sh --repo … --dir … --no-sync --hosts-repo none --hostname bt` should produce `hostname=bt`.
+  4. Arguments without `--` are passed through. `bash bootstrap.sh --repo … --dir … --no-sync --hosts-dir none --hostname bt` should produce `hostname: bt`.
   5. No git: build a PATH dir with symlinks to everything in `/usr/bin` and `/bin` except `git`, then run `DOTFILES_BOOTSTRAP_DRY=1 PATH=<dir> bash bootstrap.sh`. Expect exit 0 and output containing `would run:` plus `install` and `git`.
-  6. Piped stdin: `cat bootstrap.sh | DOTFILES_BOOTSTRAP_NO_TTY=1 bash -s -- --repo … --dir $HOME/df2 --no-sync --hosts-repo none` should exit 0 and write a config (the `--yes` fallback).
+  6. Piped stdin: `cat bootstrap.sh | DOTFILES_BOOTSTRAP_NO_TTY=1 bash -s -- --repo … --dir $HOME/df2 --no-sync --hosts-dir none` should exit 0 and write a config (the `--yes` fallback).
 - [ ] **Step 2:** Run it and expect a FAIL. **Step 3:** Implement. **Step 4:** Run the test and the full suites. **Step 5:** Commit with the message "Add bootstrap.sh: install git, clone dotfiles, run init".
 
 ---
@@ -172,15 +173,15 @@ auto_sync_interval=4h
 
 **Behavior:**
 - `dotfiles push --init [--yes] [--hostname N] [--profile P] [--auto-sync on|off] [--interval I] HOST...`. The init flags are accepted only together with `--init`; otherwise they are a usage error.
-- `push_host HOST true` runs the normal payload, refusal and unpack steps. It then runs `push_ssh -t HOST "<rdot>/dotfiles init --hosts-repo <rhosts|none> <forwarded flags>"`. Every value is quoted with `push_quote`. `<rhosts>` is used only when a hosts payload was shipped; otherwise pass `none`.
+- `push_host HOST true` runs the normal payload, refusal and unpack steps. It then runs `push_ssh -t HOST "<rdot>/dotfiles init --hosts-dir <rhosts|none> <forwarded flags>"`. Every value is quoted with `push_quote`. `<rhosts>` is used only when a hosts payload was shipped; otherwise pass `none`.
 - `--dry-run --init` prints `Would run dotfiles init on HOST`.
 
 **Docker tests:**
 - **PI1:** Fresh container (`rm -rf ~/.local/share/dotfiles ~/.config/dotfiles ~/.claude ~/.bashrc.d/90-dotfiles.sh ~/.local/bin/dotfiles`). Run `./dotfiles push --init --yes --hostname testhost testuser@localhost` and expect exit 0. On the remote:
-  - the config has `hostname=testhost`, `hosts_repo=/home/testuser/.local/share/dotfiles/dotfiles-hosts`, `dotfiles_repo=/home/testuser/.local/share/dotfiles/dotfiles` and `auto_sync=on`
+  - the config has `hostname: testhost`, `hosts_dir: /home/testuser/.local/share/dotfiles/dotfiles-hosts` and `auto_sync: on`, and `~/.local/bin/dotfiles` links into `/home/testuser/.local/share/dotfiles/dotfiles`
   - `~/.claude/statusline-command.sh` is `# host statusline`, which shows the sync ran
   - `~/.bashrc.d/90-dotfiles.sh` exists
-- **PI2:** Re-run with only `--init --yes` and no `--hostname`. The remote config still has `hostname=testhost` (existing values are kept as defaults), and `config.bak` is absent or identical to the config apart from the header.
+- **PI2:** Re-run with only `--init --yes` and no `--hostname`. The remote config still has `hostname: testhost` (existing values are kept as defaults), and `config.bak` is absent or identical to the config apart from the header.
 - **PI3:** `--init` with `--yes` but an invalid `--interval 10x` exits 1, and the remote config is unchanged.
 - **Local (test-push.sh):** `dotfiles push --hostname x HOST`, without `--init`, gives a usage error.
 
@@ -193,7 +194,7 @@ auto_sync_interval=4h
 **Files:** modify `docs/schema.md` and `dotfiles` usage. The test-setup help assertion should also check `init`.
 
 - [ ] **Step 1:** Add a "Setting up a new machine" section to `docs/schema.md`. Cover:
-  - the bootstrap one-liner, with `--hosts-repo` passed through
+  - the bootstrap one-liner, with `--hosts-dir` passed through
   - running `dotfiles init` again later
   - `push --init` for hosts without git
   - what init writes

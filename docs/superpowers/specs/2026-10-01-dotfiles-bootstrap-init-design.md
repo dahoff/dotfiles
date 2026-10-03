@@ -1,7 +1,8 @@
 # Design: `bootstrap.sh`, `dotfiles init`, `dotfiles push --init`
 
 Date: 2026-10-01
-Status: user delegated the design ("make reasonable assumptions about the rest"); every decision
+Status: user delegated the design; revised 2026-10-02 for the YAML config (`config.yaml`), `hosts_dir`
+naming and no `dotfiles_repo` key (see sub-project 2 spec, "Revisions"). Every other decision
 here is an assumption for review.
 Scope: sub-project 3 of 3. Builds on sub-project 2 (`2026-10-01-dotfiles-sync-push-design.md`):
 the `dotfiles` command, config file, default repo paths, `push`.
@@ -21,7 +22,7 @@ Usage on a new machine:
 ```
 curl -fsSL https://raw.githubusercontent.com/dahoff/dotfiles/main/bootstrap.sh | bash
 # or, with options:
-curl -fsSL .../bootstrap.sh | bash -s -- --hosts-repo git@github.com:me/dotfiles-hosts.git
+curl -fsSL .../bootstrap.sh | bash -s -- --hosts-dir git@github.com:me/dotfiles-hosts.git
 ```
 
 Steps:
@@ -42,7 +43,7 @@ Bootstrap options it consumes: `--repo URL`, `--dir PATH`. Everything else is pa
 ## `dotfiles init`
 
 ```
-dotfiles init [--hosts-repo URL|PATH|none] [--hostname NAME] [--profile NAME]
+dotfiles init [--hosts-dir URL|PATH|none] [--hostname NAME] [--profile NAME]
               [--auto-sync on|off] [--interval 4h] [--yes] [--no-sync]
 ```
 
@@ -55,7 +56,7 @@ Prompts, in order:
 1. **Hosts repo** — `none`, a git URL, or a local path.
    - URL: clone into `~/.local/share/dotfiles/dotfiles-hosts` (if that's already a checkout of the
      same URL: `git pull --ff-only`; a checkout of a different URL → error asking for a path or
-     `--hosts-repo none`). Clone failure (e.g. no SSH key for the work GitHub) → error that tells
+     `--hosts-dir none`). Clone failure (e.g. no SSH key for the work GitHub) → error that tells
      the user to fix access or use `dotfiles push --init` from a machine that has it.
    - Path: must exist (checkout or pushed copy).
    - Default: the configured value; else the default path if it exists (e.g. a pushed copy);
@@ -71,10 +72,11 @@ Prompts, in order:
 
 Then:
 
-- Write `~/.config/dotfiles/config` (or `$DOTFILES_CONFIG`). If one exists and differs, the old
+- Write `~/.config/dotfiles/config.yaml` (or `$DOTFILES_CONFIG`). If one exists and differs, the old
   file is kept as `config.bak`. Values that equal the built-in default are still written
-  explicitly, with a header comment `# Written by dotfiles init on <date>`. `dotfiles_repo` is
-  the repo containing the running script.
+  explicitly, as flat YAML (`key: value`), with a header comment `# Written by dotfiles init on
+  <date>`. There is no `dotfiles_repo` key: the dotfiles repo is the checkout `init` runs from,
+  and `~/.local/bin/dotfiles` (created by the first sync) records it.
 - Unless `--no-sync`: run `dotfiles sync` (interactive full sync: packages + configs, sudo
   prompts). With `--yes` and no terminal, run `dotfiles sync` anyway (sudo may fail → reported;
   configs still deploy).
@@ -86,7 +88,7 @@ Init does not delete anything and never touches the repos beyond clone/pull of t
 ## `dotfiles push --init HOST...`
 
 Same as `dotfiles push` (sub-project 2) through the copy step, then runs
-`ssh -t HOST '<dotfiles_repo>/dotfiles init --hosts-repo <remote hosts path or none>'` instead of
+`ssh -t HOST '<remote dotfiles dir>/dotfiles init --hosts-dir <remote hosts path or none>'` instead of
 `sync --no-pull`. Because the hosts repo was just unpacked at the remote's default path, init's
 hosts-repo default is that pushed copy; the user answers the remaining prompts on the remote
 terminal. Init's sync runs with `--no-pull` when the dotfiles repo is not a git checkout (always

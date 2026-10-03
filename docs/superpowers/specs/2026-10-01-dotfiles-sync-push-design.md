@@ -273,3 +273,33 @@ Existing harness (`test/`), sandboxed HOME/STATE_DIR/XDG_STATE_HOME/DOTFILES_CON
 `dotfiles init`, `bootstrap.sh`, `push --init` (sub-project 3); drift detection and
 `dotfiles commit` (deferred notes); systemd/cron triggers; Windows/macOS-specific work beyond the
 `flock` fallback.
+
+## Revisions (2026-10-02, user-reviewed — overrides earlier sections)
+
+After reviewing the assumptions, the user decided:
+
+1. **Config file is YAML**: `~/.config/dotfiles/config.yaml` (env `DOTFILES_CONFIG` overrides),
+   a flat mapping of `key: value` lines. Full-line `#` comments and trailing ` # …` comments on
+   unquoted values; one pair of matching quotes stripped; leading `~` expanded; CRLF tolerated;
+   nested/list lines warn and are ignored; unknown keys warn. `auto_sync` accepts
+   `on/off/true/false/yes/no` (normalized to on/off).
+2. **No `dotfiles_repo` setting.** The dotfiles repo is always the checkout the running script is in.
+   - Self-install creates `~/.local/bin/dotfiles` only when missing or dangling. A valid link to a
+     different checkout is left alone with a warning (remove the link to switch). The drop-in is
+     copied from the repo the link resolves to.
+   - `push` finds the remote's dotfiles location by following the remote's `~/.local/bin/dotfiles`
+     link; default `~/.local/share/dotfiles/dotfiles`.
+3. **`hosts_repo` → `hosts_dir`** everywhere (key, `--hosts-dir`, env `DOTFILES_HOSTS_DIR`, status
+   label `hosts dir:`). It's a directory; if it's a git checkout, sync pulls it.
+4. **Packages needing sudo (option A):**
+   - The one-time report no longer has a pending line. Instead the drop-in prints, at **every**
+     interactive terminal while `<state>/pending` is non-empty:
+     `dotfiles: <a, b> not installed (needs sudo) — run 'dotfiles sync'`.
+     An interactive `dotfiles sync` that installs them empties `pending`, ending the reminder.
+   - `sync --auto` installs packages itself (phases 1–2 for real) when `sudo -n true` succeeds
+     (passwordless sudo); otherwise it stays check-only. Never prompts.
+   - A custom tool's drop-in (e.g. `50-lazygit.sh`) is deployed only once the tool's `check`
+     passes (both interactive and `--auto`), so aliases never arrive before their tool.
+     Existing copies are not removed.
+
+Implementation plan: `docs/superpowers/plans/2026-10-02-dotfiles-sync-revisions.md`.
