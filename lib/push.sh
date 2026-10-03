@@ -115,14 +115,12 @@ printf 'dotfiles_repo=%s\nhosts_dir=%s\n' "$d" "$h"
 SNIPPET
 }
 
-# Push both repos to HOST and run the sync there. Returns the remote exit code.
-# Usage: push_host HOST INIT(true|false) [DRY_RUN(true|false)]
+# Push both repos to HOST and run the sync there, or with INIT=true the remote
+# 'dotfiles init' with INIT_FLAGS. Returns the remote exit code.
+# Usage: push_host HOST INIT(true|false) [DRY_RUN(true|false) [INIT_FLAG...]]
 push_host() {
     local host="$1" init="$2" dry_run="${3:-false}"
-    if [[ "$init" == true ]]; then
-        log_error "[$host] push --init is not available yet"
-        return 1
-    fi
+    local -a init_flags=("${@:4}")
 
     local dir="$WORK_DIR/push"
     mkdir -p "$dir"
@@ -194,7 +192,9 @@ push_host() {
         for i in "${!tars[@]}"; do
             echo "Would push $(basename "${tars[$i]}") ($(du -h "${tars[$i]}" | cut -f1)) to $host:${targets[$i]}"
         done
-        if [[ "$exists" == true ]]; then
+        if [[ "$init" == true ]]; then
+            echo "Would run dotfiles init on $host"
+        elif [[ "$exists" == true ]]; then
             push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") sync --no-pull --dry-run"
         else
             echo "Would run dotfiles sync on $host"
@@ -239,6 +239,23 @@ rm -rf $p.old
         log_error "[$host] could not unpack the payload"
         push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
         return 1
+    fi
+
+    if [[ "$init" == true ]]; then
+        # The hosts dir is the one just shipped; with none shipped there is none
+        local cmd f
+        cmd="$(push_quote "$rdot/dotfiles") init --hosts-dir "
+        if [[ -f "$dir/hosts.tar" ]]; then
+            cmd+=$(push_quote "$rhosts")
+        else
+            cmd+=$(push_quote none)
+        fi
+        for f in ${init_flags[@]+"${init_flags[@]}"}; do
+            cmd+=" $(push_quote "$f")"
+        done
+        log_info "[$host] Running dotfiles init"
+        push_ssh -t "$host" "$cmd"
+        return $?
     fi
 
     log_info "[$host] Running dotfiles sync"

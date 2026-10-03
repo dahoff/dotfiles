@@ -70,6 +70,9 @@ declare -a GLOBAL_FLAGS=()
 declare -a RESULTS=()
 declare -a PUSH_HOSTS=()
 declare -a INIT_ARGS=()
+# push --init: run the remote 'dotfiles init' with PUSH_INIT_ARGS
+PUSH_INIT=false
+declare -a PUSH_INIT_ARGS=()
 EXIT_CODE=0
 SYNC_NO_PULL=false
 SYNC_RECORD=false
@@ -493,6 +496,7 @@ Commands:
   init                 Guided per-host setup: write the config file, then sync
   sync                 Pull, then install if new, upgrade if exists (idempotent)
   push HOST...         Copy committed repo snapshots to HOST over ssh and sync there
+  push --init HOST...  Push, then run 'dotfiles init' there instead of sync (first-time setup)
   uninstall            Uninstall all configs
   status               Show repos, host, last sync, pending packages and app state (read-only)
   verify               Verify all installations
@@ -517,8 +521,13 @@ Init options:
   --yes                Accept defaults and flags without prompting
   --no-sync            Write the config only; do not run the first sync
 
+Push options:
+  --init               Run 'dotfiles init' on HOST instead of sync, forwarding
+                       --yes, --hostname, --profile, --auto-sync and --interval
+                       (with push, these are valid only together with --init)
+
 Sync options:
-  --auto               Background mode (used by the login drop-in)
+  --auto              Background mode (used by the login drop-in)
   --no-pull            Do not git pull the dotfiles and hosts dirs
 
 Options (passed through to each app's installer):
@@ -537,6 +546,7 @@ Examples:
   dotfiles sync --profile minimal    # Sync with the minimal profile
   dotfiles sync --dry-run            # Preview what would happen
   dotfiles push user@host            # Ship the repos to a host without git, sync there
+  dotfiles push --init user@host     # First-time setup of a host without git
   dotfiles status                    # Check all configs
   dotfiles uninstall --no-backup     # Remove all configs
 
@@ -596,6 +606,30 @@ parse_args() {
     fi
 
     while [[ $# -gt 0 ]]; do
+        # push: --init and the init flags it forwards to the remote
+        if [[ "$COMMAND" == "push" ]]; then
+            case $1 in
+                --init)
+                    PUSH_INIT=true
+                    shift
+                    continue
+                    ;;
+                --yes)
+                    PUSH_INIT_ARGS+=("$1")
+                    shift
+                    continue
+                    ;;
+                --hostname|--profile|--auto-sync|--interval)
+                    if [[ $# -lt 2 || "$2" == --* ]]; then
+                        echo "Error: $1 requires a value" >&2
+                        exit 1
+                    fi
+                    PUSH_INIT_ARGS+=("$1" "$2")
+                    shift 2
+                    continue
+                    ;;
+            esac
+        fi
         case $1 in
             --profile)
                 if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -671,6 +705,12 @@ parse_args() {
                 ;;
         esac
     done
+
+    if [[ "$COMMAND" == "push" && "$PUSH_INIT" != true && ${#PUSH_INIT_ARGS[@]} -gt 0 ]]; then
+        echo "Error: ${PUSH_INIT_ARGS[0]} is only valid with --init" >&2
+        echo "Usage: dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST..." >&2
+        exit 1
+    fi
 }
 
 # Fill in settings from flags, env, the config file and defaults.
@@ -878,14 +918,14 @@ cmd_status() {
 # dotfiles push HOST...: no local sync, no lock, no local state
 cmd_push() {
     if [[ ${#PUSH_HOSTS[@]} -eq 0 ]]; then
-        echo "Usage: dotfiles push [--dry-run] HOST..." >&2
+        echo "Usage: dotfiles push [--dry-run] [--init [init flags]] HOST..." >&2
         exit 1
     fi
     local dry=false host failed=0
     is_dry_run && dry=true
     for host in "${PUSH_HOSTS[@]}"; do
         log_info "[$host] Pushing"
-        if push_host "$host" false "$dry"; then
+        if push_host "$host" "$PUSH_INIT" "$dry" ${PUSH_INIT_ARGS[@]+"${PUSH_INIT_ARGS[@]}"}; then
             RESULTS+=("$host|push|ok")
         else
             RESULTS+=("$host|push|FAIL")

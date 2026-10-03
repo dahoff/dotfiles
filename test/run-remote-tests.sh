@@ -183,6 +183,44 @@ test_ssh 'test ! -e ~/.local/share/dotfiles/dotfiles' || fail "P7: dotfiles also
 test_ssh 'test -f ~/dh-custom/hosts/testhost/host.yaml' || fail "P7: hosts dir not at the config.yaml path"
 pass "P7: pushed into the checkout the link points to"
 
+# push --init: a fresh host with no config at all
+info "PI1: push --init sets up a fresh host"
+test_ssh 'rm -rf ~/.local/share/dotfiles ~/.config/dotfiles ~/.claude ~/.bashrc.d/90-dotfiles.sh ~/.local/bin/dotfiles'
+push --dry-run --init --yes --hostname testhost "$TARGET"
+[[ $RC -eq 0 ]] || fail "PI1: dry-run exited $RC: $OUT"
+printf '%s\n' "$OUT" | grep -qF "Would run dotfiles init on $TARGET" || fail "PI1: no 'Would run dotfiles init' line: $OUT"
+test_ssh 'test ! -e ~/.local/share/dotfiles && test ! -e ~/.config/dotfiles' || fail "PI1: dry-run changed the remote"
+push --init --yes --hostname testhost "$TARGET"
+[[ $RC -eq 0 ]] || fail "PI1: push --init exited $RC: $OUT"
+CFG=$(test_ssh 'cat ~/.config/dotfiles/config.yaml') || fail "PI1: no remote config"
+grep -qx 'hostname: testhost' <<< "$CFG" || fail "PI1: config hostname wrong: $CFG"
+grep -qx 'hosts_dir: /home/testuser/.local/share/dotfiles/dotfiles-hosts' <<< "$CFG" || fail "PI1: config hosts_dir wrong: $CFG"
+grep -qx 'auto_sync: on' <<< "$CFG" || fail "PI1: config auto_sync wrong: $CFG"
+[[ "$(test_ssh 'readlink -f ~/.local/bin/dotfiles')" == /home/testuser/.local/share/dotfiles/dotfiles/* ]] \
+    || fail "PI1: ~/.local/bin/dotfiles does not link into the pushed checkout"
+[[ "$(test_ssh 'cat ~/.claude/statusline-command.sh')" == "# host statusline" ]] || fail "PI1: sync did not run (host statusline missing)"
+test_ssh 'test -f ~/.bashrc.d/90-dotfiles.sh' || fail "PI1: remote login drop-in missing"
+pass "PI1: config written, self-installed, synced"
+
+info "PI2: push --init again keeps the existing config values as defaults"
+push --init --yes "$TARGET"
+[[ $RC -eq 0 ]] || fail "PI2: push --init exited $RC: $OUT"
+CFG2=$(test_ssh 'cat ~/.config/dotfiles/config.yaml')
+grep -qx 'hostname: testhost' <<< "$CFG2" || fail "PI2: hostname not kept: $CFG2"
+if test_ssh 'test -e ~/.config/dotfiles/config.yaml.bak'; then
+    BAK=$(test_ssh 'cat ~/.config/dotfiles/config.yaml.bak')
+    [[ "$(grep -v '^# Written by dotfiles init on ' <<< "$BAK")" == "$(grep -v '^# Written by dotfiles init on ' <<< "$CFG2")" ]] \
+        || fail "PI2: config changed: was $BAK, now $CFG2"
+fi
+pass "PI2: existing values kept"
+
+info "PI3: push --init with an invalid --interval leaves the config alone"
+push --init --yes --interval 10x "$TARGET"
+[[ $RC -eq 1 ]] || fail "PI3: expected exit 1, got $RC: $OUT"
+printf '%s\n' "$OUT" | grep -qF "interval must be <n>m, <n>h or <n>d: 10x" || fail "PI3: not refused by the remote init: $OUT"
+[[ "$(test_ssh 'cat ~/.config/dotfiles/config.yaml')" == "$CFG2" ]] || fail "PI3: remote config changed"
+pass "PI3: invalid flag refused by the remote init, config unchanged"
+
 echo
 echo "======================================"
 echo -e "${GREEN}All push tests passed${NC}"

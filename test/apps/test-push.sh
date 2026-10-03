@@ -48,6 +48,15 @@ run push
 printf '%s\n' "$OUT" | grep -qF "Usage: dotfiles push" || fail "no usage message: $OUT"
 pass "push without HOST: usage error"
 
+info "Case 1b: init flags without --init are a usage error"
+for args in "--hostname x" "--profile p" "--yes" "--auto-sync on" "--interval 4h"; do
+    # shellcheck disable=SC2086
+    run push $args testuser@localhost
+    [[ $RC -eq 1 ]] || fail "push $args: expected exit 1, got $RC: $OUT"
+    printf '%s\n' "$OUT" | grep -qF "only valid with --init" || fail "push $args: no usage message: $OUT"
+done
+pass "init flags without --init: usage error"
+
 info "Case 2: unreachable hosts fail and are summarized; the next host still runs"
 export DOTFILES_SSH_OPTS="-o Port=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 run push testuser@localhost otheruser@localhost
