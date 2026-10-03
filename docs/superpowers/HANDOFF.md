@@ -1,4 +1,4 @@
-# Handoff — dotfiles-hosts / sync / bootstrap work (state as of 2026-10-02)
+# Handoff — dotfiles-hosts / sync / bootstrap work (state as of 2026-10-02, evening)
 
 Read this first when resuming. Everything below is on branch `dotfiles-sync-init`.
 
@@ -7,8 +7,8 @@ Read this first when resuming. Everything below is on branch `dotfiles-sync-init
 | What | Where |
 |---|---|
 | Main checkout | `/home/david/git/dotfiles` — branch `main` at `10aa592`. 11 commits ahead of `origin/main`. **Not pushed.** User has an uncommitted WIP edit to `claude/files/settings.json` there; leave it alone. |
-| Work branch | `dotfiles-sync-init`. Worktree at `/home/david/git/dotfiles/.claude/worktrees/sync-init`. 18+ commits on top of `main`. **Not merged, not pushed.** |
-| SDD workspaces (git-ignored scratch) | `<worktree>/.superpowers/sdd/2026-10-01-dotfiles-sync-push/` holds sub-project 2's ledger `progress.md`, briefs, reports and reviews. `<worktree>/.superpowers/sdd/2026-10-01-dotfiles-bootstrap-init/` holds sub-project 3's instructions; nothing has started there. |
+| Work branch | `dotfiles-sync-init`. Worktree at `/home/david/git/dotfiles/.claude/worktrees/sync-init`. 30+ commits on top of `main`; all work complete and reviewed. **Not merged, not pushed.** |
+| SDD workspaces (git-ignored scratch) | `<worktree>/.superpowers/sdd/2026-10-01-dotfiles-sync-push/` holds sub-project 2's ledger. The revisions and sub-project 3 workspaces were deleted after a clean final review; their rulings and parked items are recorded at the end of this file. |
 
 ## The three sub-projects
 
@@ -17,22 +17,14 @@ Read this first when resuming. Everything below is on branch `dotfiles-sync-init
 2. **Sub-project 2: the `dotfiles` command (sync, `--auto` background sync, push, status).** DONE on the branch. It passed per-task reviews, a final review (opus) and a fix wave. Core tests 34/34, app tests 14/14, and the Docker push suite pass.
    - Spec: `docs/superpowers/specs/2026-10-01-dotfiles-sync-push-design.md`. Its **"Revisions (2026-10-02)"** section at the end overrides earlier text.
    - Plan (executed): `docs/superpowers/plans/2026-10-01-dotfiles-sync-push.md`
-3. **Sub-project 3: `bootstrap.sh`, `dotfiles init`, `dotfiles push --init`.** NOT STARTED. Spec and plan are written and were revised for the 2026-10-02 decisions.
+3. **Sub-project 3: `bootstrap.sh`, `dotfiles init`, `dotfiles push --init`.** DONE on the branch (Tasks 1–4), after the revisions plan R1–R3 (`docs/superpowers/plans/2026-10-02-dotfiles-sync-revisions.md`, also DONE). Final review of `763c17e..aab5003` (opus) plus one fix wave (`e990448`). Core 34/34, apps 16/16, Docker P1–P7 and PI1–PI4 pass.
    - Spec: `docs/superpowers/specs/2026-10-01-dotfiles-bootstrap-init-design.md`
    - Plan: `docs/superpowers/plans/2026-10-01-dotfiles-bootstrap-init.md` (Tasks 1–4)
 
 ## Next steps, in order
 
-1. **Execute `docs/superpowers/plans/2026-10-02-dotfiles-sync-revisions.md`** (Tasks R1–R3) with subagent-driven development. These apply the user's 2026-10-02 decisions to the already-built sub-project 2:
-   - **R1:** config becomes YAML at `~/.config/dotfiles/config.yaml`. Drop the `dotfiles_repo` setting. Rename `hosts_repo` / `--hosts-repo` / `DOTFILES_HOSTS_REPO` to `hosts_dir` / `--hosts-dir` / `DOTFILES_HOSTS_DIR`. Self-install never re-points a valid `~/.local/bin/dotfiles` link.
-   - **R2:** `push` finds the remote's dotfiles dir by following its `~/.local/bin/dotfiles` link, and reads `hosts_dir` from the remote `config.yaml`.
-   - **R3:** "option A" for packages that need sudo:
-     - a reminder at **every** terminal while anything is pending: `dotfiles: a, b not installed (needs sudo) — run 'dotfiles sync'`
-     - the one-time report drops its pending line
-     - `sync --auto` installs packages itself when `sudo -n true` works (passwordless sudo)
-     - custom-tool drop-ins (e.g. `50-lazygit.sh`) are deployed only once their tool is installed
-2. **Execute the sub-project 3 plan** (Tasks 1–4).
-3. **Run the final whole-branch review**, then present the merge options to the user. Only the user decides whether to merge or push.
+1. **The user decides** whether to merge `dotfiles-sync-init` into `main` and whether to push. Nothing is merged or pushed.
+2. Optional follow-ups (parked, non-blocking): see "Rulings made 2026-10-02 (evening)" at the end of this file.
 
 ## Decisions the user made (2026-10-01/02)
 
@@ -76,3 +68,24 @@ Read this first when resuming. Everything below is on branch `dotfiles-sync-init
 - **Test isolation:** tests must never touch the real HOME. Set `HOME`, `XDG_STATE_HOME`, `STATE_DIR` and `DOTFILES_CONFIG` to temp paths, and unset the hosts env var.
 - **Commits:** never add a `Co-Authored-By` or any Claude attribution trailer (user preference). Use `git add <explicit paths>`.
 - **Suites:** run from `test/`: `./run-core-tests.sh`, `./run-app-tests.sh`, and `./run-remote-tests.sh` (Docker).
+
+## Rulings made 2026-10-02 (evening: revisions R1–R3 and sub-project 3)
+
+- **`push --init` and `--hosts-dir`:** it omits `--hosts-dir` when no hosts payload is shipped; the spec said to forward `none`. This keeps a remote's configured `hosts_dir`. Cost: clearing a remote hosts_dir needs an interactive init.
+- **`init` and the profile line:** `init` keeps an uncommented configured profile, or `--profile`, even when host.yaml exists, because an explicit profile overrides host.yaml at sync time (`lib/profile.sh`). The line is commented only otherwise.
+- **`sync --auto` and sudo:**
+  - It installs only when `sudo -n true` works **and** `/dev/tty` can't be opened.
+  - apt and dnf use `sudo -n`, and custom installers get a `sudo -n` shim.
+  - `DOTFILES_TEST_HAS_TTY=1` is a test hook. It can only force check-only mode.
+  - Consequence: without `setsid` (e.g. macOS) background sync never installs; it only reminds.
+- **Background apt:** it runs `sudo -n DEBIAN_FRONTEND=noninteractive apt-get`. A sudoers rule that grants NOPASSWD for apt-get without SETENV refuses it. That fails closed: the packages stay pending.
+- **Test-only package:** `packages/custom/testtool` and `files/50-testtool.sh` live in the real package tree. Only the `pendingtest` fixture profile references them.
+- **Remote snippet:** its internal output key stays `dotfiles_repo=`.
+- **Final review scope:** it covered `763c17e..aab5003` only, since SP2 was reviewed earlier.
+- **Parked:**
+  - `init` doesn't re-prompt for a hostname with no `hosts/<name>/`; it lists the available ones instead.
+  - The push snippet parses `#a #b` differently from `config_load`; the difference only affects a warning.
+  - A dangling link target is accepted when its directory has `lib/`; the refusal guard still protects it.
+  - The payload is unpacked before the remote init validates flags.
+  - test-sync Case 25 is skipped on hosts without `setsid` when run from a terminal.
+- **Running tests:** the suites share `/tmp/home-test-localtest`. Never run two suites at the same time.
