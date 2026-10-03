@@ -26,6 +26,7 @@ source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/sync.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 source "$SCRIPT_DIR/lib/push.sh"
+source "$SCRIPT_DIR/lib/init.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
@@ -68,6 +69,7 @@ declare -a GLOBAL_FLAGS=()
 # Result tracking: "target|item|ok" or "target|item|FAIL"
 declare -a RESULTS=()
 declare -a PUSH_HOSTS=()
+declare -a INIT_ARGS=()
 EXIT_CODE=0
 SYNC_NO_PULL=false
 SYNC_RECORD=false
@@ -488,6 +490,7 @@ usage() {
 Usage: dotfiles <command> [options]
 
 Commands:
+  init                 Guided per-host setup: write the config file, then sync
   sync                 Pull, then install if new, upgrade if exists (idempotent)
   push HOST...         Copy committed repo snapshots to HOST over ssh and sync there
   uninstall            Uninstall all configs
@@ -504,6 +507,16 @@ Hosts dir options:
                        Profiles are looked up there first, then in profiles/
   --hostname NAME      Host directory hosts/NAME/ to apply (default: hostname -s)
 
+Init options:
+  --hosts-dir URL|PATH|none  Hosts repo: a git URL (cloned to
+                       ~/.local/share/dotfiles/dotfiles-hosts), a path, or none
+  --hostname NAME      Host directory hosts/NAME/ to apply
+  --profile NAME       Profile, when no hosts/NAME/host.yaml selects one
+  --auto-sync on|off   Background sync from new terminals (default: on)
+  --interval <n>m|h|d  Background sync interval (default: 4h)
+  --yes                Accept defaults and flags without prompting
+  --no-sync            Write the config only; do not run the first sync
+
 Sync options:
   --auto               Background mode (used by the login drop-in)
   --no-pull            Do not git pull the dotfiles and hosts dirs
@@ -519,6 +532,7 @@ Options (passed through to each app's installer):
   --log FILE           Log to file
 
 Examples:
+  dotfiles init                      # Set up this host (prompts), then sync
   dotfiles sync                      # Sync (uses profiles/complete.yaml)
   dotfiles sync --profile minimal    # Sync with the minimal profile
   dotfiles sync --dry-run            # Preview what would happen
@@ -536,6 +550,7 @@ validate_command() {
     cmd=$(echo "$cmd" | tr -cd '[:alnum:]-')
 
     local valid_commands=(
+        "init"
         "sync"
         "push"
         "uninstall"
@@ -555,7 +570,7 @@ validate_command() {
 
     echo "Error: Unknown command '$1'" >&2
     echo "" >&2
-    echo "Valid commands: sync, push, uninstall, status, verify, help" >&2
+    echo "Valid commands: init, sync, push, uninstall, status, verify, help" >&2
     return 1
 }
 
@@ -573,6 +588,12 @@ parse_args() {
         sync) INSTALLER_CMD="deploy" ;;
         *) INSTALLER_CMD="$COMMAND" ;;
     esac
+
+    # init parses its own flags (lib/init.sh)
+    if [[ "$COMMAND" == "init" ]]; then
+        INIT_ARGS=("$@")
+        return 0
+    fi
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -884,6 +905,9 @@ main() {
 
     WORK_DIR=$(mktemp -d)
     trap cleanup EXIT
+
+    # init: its own settings flow (no resolve_settings); exits with its code
+    [[ "$COMMAND" != "init" ]] || init_main ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
 
     # Handle help
     if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then
