@@ -77,7 +77,8 @@ EXIT_CODE=0
 SYNC_NO_PULL=false
 SYNC_RECORD=false
 CHECK_ONLY=false    # --auto without passwordless sudo: phases 1 and 2 only check, never install
-SYNC_CAN_SUDO=false # --auto: sudo -n works, so phases 1 and 2 install with stdin closed
+SYNC_CAN_SUDO=false # --auto: sudo -n works and there is no terminal, so phases 1 and 2 install
+SYNC_SUDO_SHIM=""   # --auto with SYNC_CAN_SUDO: directory of the sudo -n shim
 # Packages still missing (names from the profile); apps whose state version changed
 declare -a PENDING=()
 declare -a UPDATED_APPS=()
@@ -91,14 +92,43 @@ run_on_target() {
     eval "$@" 9>&-
 }
 
-# Run an install command; in --auto its stdin is /dev/null so nothing can prompt
+# Run an install command. In --auto it runs only when SYNC_CAN_SUDO (the probe
+# found passwordless sudo and no terminal), with stdin /dev/null and a sudo shim
+# first on PATH that always passes -n, so no install command can prompt.
 # Usage: run_install command [args...]
 run_install() {
     if [[ "$SYNC_AUTO" == true ]]; then
-        "$@" </dev/null
+        [[ "$SYNC_CAN_SUDO" == true ]] || return 1
+        PATH="$SYNC_SUDO_SHIM:$PATH" "$@" </dev/null
     else
         "$@"
     fi
+}
+
+# --auto: write a sudo shim that runs the real sudo with -n, so sudo inside a
+# custom install script fails instead of prompting. Prints the shim's directory.
+# Usage: sync_make_sudo_shim
+sync_make_sudo_shim() {
+    local real dir
+    real="$(command -v sudo)" || return 1
+    dir="$(sync_state_dir)/sudo-shim"
+    mkdir -p "$dir" || return 1
+    {
+        echo '#!/usr/bin/env bash'
+        echo '# Written by dotfiles sync --auto: sudo never prompts'
+        echo '[[ "${1:-}" == -n ]] && shift'
+        printf 'exec %q -n "$@"\n' "$real"
+    } > "$dir/sudo" || return 1
+    chmod 0755 "$dir/sudo" || return 1
+    echo "$dir"
+}
+
+# Can sudo prompt on a terminal? sudo reads passwords from /dev/tty, not stdin.
+# DOTFILES_TEST_HAS_TTY=1 is a test hook that forces yes (it can only make --auto
+# check-only, never the reverse).
+sync_has_tty() {
+    [[ "${DOTFILES_TEST_HAS_TTY:-}" == 1 ]] && return 0
+    { : </dev/tty; } 2>/dev/null
 }
 
 # Detect package manager
@@ -203,12 +233,18 @@ run_phase_os_packages() {
         return 0
     fi
 
+    # --auto: sudo -n never prompts, and neither does apt's debconf
+    local sudo="sudo" apt_env=""
+    if [[ "$SYNC_AUTO" == true ]]; then
+        sudo="sudo -n"
+        apt_env="DEBIAN_FRONTEND=noninteractive "
+    fi
     case "$pkg_manager" in
         apt)
-            run_install run_on_target "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
+            run_install run_on_target "$sudo ${apt_env}apt-get update -qq && $sudo ${apt_env}apt-get install -y -qq ${missing[*]}"
             ;;
         dnf)
-            run_install run_on_target "sudo dnf install -y -q ${missing[*]}"
+            run_install run_on_target "$sudo dnf install -y -q ${missing[*]}"
             ;;
         brew)
             run_install run_on_target "brew install ${missing[*]}"
@@ -711,6 +747,17 @@ parse_args() {
         echo "Usage: dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST..." >&2
         exit 1
     fi
+    # One hostname cannot name several hosts
+    if [[ "$COMMAND" == "push" && ${#PUSH_HOSTS[@]} -gt 1 ]]; then
+        local a
+        for a in ${PUSH_INIT_ARGS[@]+"${PUSH_INIT_ARGS[@]}"}; do
+            if [[ "$a" == --hostname ]]; then
+                echo "Error: --hostname is only valid with a single HOST" >&2
+                echo "Usage: dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST..." >&2
+                exit 1
+            fi
+        done
+    fi
 }
 
 # Fill in settings from flags, env, the config file and defaults.
@@ -992,9 +1039,13 @@ main() {
             exec >"$log" 2>&1
             echo "dotfiles sync --auto $(date +%Y-%m-%dT%H:%M:%S%z)"
             export GIT_SETUP_SKIP=true
-            # Install for real only if sudo works without a password. stdin is
-            # /dev/null and fd 9 (the lock) closed, so the probe can never prompt or hang.
-            if command -v sudo >/dev/null 2>&1 && sudo -n true </dev/null >/dev/null 2>&1 9>&-; then
+            # Install for real only if sudo works without a password and there is
+            # no terminal sudo could prompt on (without setsid the run keeps the
+            # login terminal). stdin is /dev/null and fd 9 (the lock) closed, so
+            # the probe can never prompt or hang.
+            if command -v sudo >/dev/null 2>&1 && ! sync_has_tty \
+                && sudo -n true </dev/null >/dev/null 2>&1 9>&- \
+                && SYNC_SUDO_SHIM="$(sync_make_sudo_shim)"; then
                 SYNC_CAN_SUDO=true
                 CHECK_ONLY=false
                 log_info "passwordless sudo: installing packages"

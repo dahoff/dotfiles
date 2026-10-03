@@ -240,7 +240,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 - Pull is `git pull --ff-only` and nothing else. A failed pull (diverged, no network, no access) is a warning, not a failure: the repo is left untouched, the sync continues with what is checked out, and the exit code stays 0. A repo that is not a git work tree, or has no upstream branch, is skipped silently.
 - `--no-pull` skips the pull of both repos.
-- `--auto` is the background mode used by the login drop-in (see Background sync). It never prompts. It installs OS packages and runs custom install scripts only when sudo works without a password; otherwise it only checks them and applies configs.
+- `--auto` is the background mode used by the login drop-in (see Background sync). It never prompts. It installs OS packages and runs custom install scripts only when sudo works without a password and the run has no terminal; otherwise it only checks them and applies configs.
 - A sync takes a lock in the state directory. A second concurrent sync exits with `dotfiles: sync already running` (an `--auto` run exits silently).
 - `--dry-run` previews without changing anything: no lock, no pull, no self-install, and the state files are not touched.
 - The other flags (`--profile`, `--hosts-dir`, `--hostname`, `--no-backup`, `--verbose`, `--quiet`, `--force`, `--skip-git-setup`, `--shell-scripts-dir`, `--log`) are listed in `dotfiles help`.
@@ -286,7 +286,7 @@ Pass init flags after `bash -s --`, for example the hosts repo:
     dotfiles init [--hosts-dir URL|PATH|none] [--hostname NAME] [--profile NAME]
                   [--auto-sync on|off] [--interval <n>m|h|d] [--yes] [--no-sync]
 
-Init asks for the hosts repo, hostname, profile, auto sync and interval, writes the config file and runs a sync. A flag answers its question without asking.
+Init asks for the hosts repo, hostname, profile, auto sync and interval, writes the config file and runs a sync. A flag answers its question without asking. Before the profile question it lists the profile names found in the hosts repo, then the dotfiles repo. It ends with a summary and a reminder to open a new terminal.
 
 - `--hosts-dir`: a URL (contains `://`, or looks like `user@host:path`) is cloned to `~/.local/share/dotfiles/dotfiles-hosts`; a path must be an existing directory; `none` means no hosts repo. A failed clone exits 1 and writes nothing. If the default hosts path already holds a pushed (non-checkout) copy, a URL is refused with an error naming the path; the copy is never deleted.
 - `--hostname`: same rules as everywhere else (no `/`, not `.` or `..`); the prompt applies them too.
@@ -302,7 +302,7 @@ Re-running init is safe. The defaults offered are the values already in the conf
 
     dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST...
 
-For a host that cannot reach the repos. It ships the repos as `push` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `sync --no-pull`. The flags above are forwarded to the remote init and are valid only with `--init`. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
+For a host that cannot reach the repos. It ships the repos as `push` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `sync --no-pull`. The flags above are forwarded to the remote init and are valid only with `--init`; `--hostname` also needs exactly one HOST. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
 
 ---
 
@@ -321,9 +321,9 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 `sync --auto` then:
 
 - Pulls with a bounded git: ssh `ConnectTimeout=10`, `ServerAliveInterval=15`, `ServerAliveCountMax=2` (plus `BatchMode=yes`) unless `GIT_SSH_COMMAND` is set, `http.lowSpeedLimit=1000`/`http.lowSpeedTime=30`, and `timeout 300` where available. A timeout is a pull failure (warning). Only a repo whose top level is the path itself is pulled; a pushed copy inside a tracked directory is skipped.
-- Exits at once, changing nothing, if `auto_sync: off` or the last sync is younger than `auto_sync_interval` (default `4h`). `auto_sync_interval=0m` means always sync. A `last-sync` timestamp in the future (clock skew) does not throttle.
-- Otherwise pulls both repos, then probes `sudo -n true` (stdin `/dev/null`, the lock's fd closed, so it can never prompt or hang):
-  - If it succeeds, phases 1 and 2 run for real with stdin `/dev/null` for every install command. The log notes `passwordless sudo: installing packages`.
+- Exits at once, changing nothing, if `auto_sync: off` or the last sync is younger than `auto_sync_interval` (default `4h`). `auto_sync_interval: 0m` means always sync. A `last-sync` timestamp in the future (clock skew) does not throttle.
+- Otherwise checks for passwordless sudo, then pulls both repos. The check needs both: the run has no terminal (`/dev/tty` cannot be opened; sudo reads passwords from the terminal, not stdin, and a run started without `setsid` may keep the login terminal), and `sudo -n true` succeeds (stdin `/dev/null`, the lock's fd closed, so it can never prompt or hang). `DOTFILES_TEST_HAS_TTY=1` is a test hook that makes the run act as if it had a terminal.
+  - If the check passes, phases 1 and 2 run for real with stdin `/dev/null` for every install command. apt and dnf run as `sudo -n` (apt with `DEBIAN_FRONTEND=noninteractive`), and custom install scripts find a `sudo` shim first on `PATH` (`sudo-shim/` in the state directory) that always adds `-n`, so a `sudo` inside them fails instead of prompting. The log notes `passwordless sudo: installing packages`.
   - If not (or there is no `sudo`), phases 1 and 2 only check: nothing is installed, and missing packages and custom tools are recorded as pending.
   - Either way, whatever is still missing afterwards is pending, and a custom tool's drop-in is deployed only once its `check` passes.
 - Writes its output to `last-sync.log`, touches `last-sync` even when it fails (so a broken sync does not retry in every terminal), and writes the report.
@@ -351,6 +351,7 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 | `last-sync.log` | Output of the last `--auto` run. |
 | `launch.log` | Output of the login drop-in's launch of `dotfiles sync --auto`; overwritten each time. |
 | `report` | Message shown at the next terminal, removed once shown. |
+| `sudo-shim/sudo` | Written by an `--auto` run that installs: runs the real `sudo` with `-n`, put first on `PATH` for install commands. |
 | `pending` | Packages still to install, one per line. Shown by `dotfiles status` and by the reminder at every terminal. Refreshed by each real sync; empty when nothing is missing. |
 
 ### Turning it off

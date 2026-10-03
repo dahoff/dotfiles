@@ -54,7 +54,7 @@ main() {
         say "cloning $REPO_URL into $DIR"
         mkdir -p "$(dirname "$DIR")"
         git clone "$REPO_URL" "$DIR" >&2 </dev/null || die "clone of $REPO_URL failed"
-    elif [[ "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null </dev/null)" == "$(cd "$DIR" && pwd -P)" ]]; then
+    elif [[ -d "$DIR" && "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null </dev/null)" == "$(cd "$DIR" && pwd -P)" ]]; then
         say "updating $DIR (git pull --ff-only)"
         git -C "$DIR" pull --ff-only >&2 </dev/null || say "warning: pull failed; continuing with the existing checkout"
     else

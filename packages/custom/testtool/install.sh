@@ -5,3 +5,5 @@
 set -euo pipefail
 [[ -n "${DOTFILES_TEST_MARKER:-}" ]] || exit 1
 touch "$DOTFILES_TEST_MARKER"
+# DOTFILES_TEST_SUDO=1: call sudo like a real installer does, so the test can see its args
+if [[ "${DOTFILES_TEST_SUDO:-}" == 1 ]]; then sudo testtool-install; fi

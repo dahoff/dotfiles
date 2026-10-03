@@ -569,15 +569,21 @@ profile: pendingtest
 EOF
 # Run --auto with a stdin that is open but never delivers data, so anything
 # reading it would block; timeout 20 turns a hang into RC=124.
+# setsid drops any controlling terminal (as the login drop-in does), so a test run
+# from a terminal still reaches the no-terminal path of the sudo probe.
 STDIN_FIFO="$T/stdin.fifo"
 mkfifo "$STDIN_FIFO"
+DETACH=()
+command -v setsid >/dev/null 2>&1 && DETACH=(setsid -w)
+NO_TTY_POSSIBLE=true
+if [[ ${#DETACH[@]} -eq 0 ]] && { : </dev/tty; } 2>/dev/null; then NO_TTY_POSSIBLE=false; fi
 auto_blocking_stdin() {
     local writer
     sleep 60 > "$STDIN_FIFO" &
     writer=$!
     RC=0
-    OUT=$(PATH="$SUDOBIN:$PATH_ORIG" timeout 20 "$WORK/dotfiles/dotfiles" sync --auto --no-backup \
-        < "$STDIN_FIFO" 2>&1) || RC=$?
+    OUT=$(PATH="$SUDOBIN:$PATH_ORIG" timeout 20 ${DETACH[@]+"${DETACH[@]}"} "$WORK/dotfiles/dotfiles" \
+        sync --auto --no-backup < "$STDIN_FIFO" 2>&1) || RC=$?
     kill "$writer" 2>/dev/null || true
     wait "$writer" 2>/dev/null || true
 }
@@ -648,20 +654,47 @@ exit 0
 EOS
 chmod +x "$SUDOBIN/sudo"
 rm -f "$T/sudo-installs" "$T/marker"
-DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-pt" auto_blocking_stdin
-[[ $RC -ne 124 ]] || fail "--auto hung during installs"
-[[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
-grep -q "passwordless sudo: installing packages" "$LOG" || fail "log lacks the passwordless note: $(cat "$LOG")"
-if [[ "$HAVE_SUDO_PM" == true ]]; then
-    grep -q "install.*dotfiles-nonexistent-pkg" "$T/sudo-installs" 2>/dev/null \
-        || fail "no OS package install recorded: $(cat "$T/sudo-installs" 2>&1)"
+if [[ "$NO_TTY_POSSIBLE" == true ]]; then
+    DOTFILES_TEST_SUDO=1 DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-pt" auto_blocking_stdin
+    [[ $RC -ne 124 ]] || fail "--auto hung during installs"
+    [[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
+    grep -q "passwordless sudo: installing packages" "$LOG" || fail "log lacks the passwordless note: $(cat "$LOG")"
+    if [[ "$HAVE_SUDO_PM" == true ]]; then
+        grep -q "^-n .*install.*dotfiles-nonexistent-pkg" "$T/sudo-installs" 2>/dev/null \
+            || fail "no sudo -n OS package install recorded: $(cat "$T/sudo-installs" 2>&1)"
+        if command -v apt-get >/dev/null 2>&1; then
+            grep -q "^-n DEBIAN_FRONTEND=noninteractive apt-get install" "$T/sudo-installs" \
+                || fail "apt install not noninteractive: $(cat "$T/sudo-installs")"
+        fi
+    else
+        info "no apt-get/dnf: OS package install check skipped"
+    fi
+    [[ -e "$T/marker" ]] || fail "custom install script did not run"
+    grep -qx -- "-n testtool-install" "$T/sudo-installs" \
+        || fail "custom installer's sudo did not get -n: $(cat "$T/sudo-installs" 2>&1)"
+    if grep -v '^-n ' "$T/sudo-installs"; then fail "a sudo call under --auto lacked -n"; fi
+    [[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in deployed although check still fails"
+    grep -qx faketool "$STATE/pending" || fail "faketool should stay pending (check fails): $(cat "$STATE/pending")"
+    pass "passwordless sudo: OS packages and custom scripts installed with sudo -n, stdin closed"
 else
-    info "no apt-get/dnf: OS package install check skipped"
+    info "Case 25 skipped: no setsid and a terminal is attached"
 fi
-[[ -e "$T/marker" ]] || fail "custom install script did not run"
-[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in deployed although check still fails"
-grep -qx faketool "$STATE/pending" || fail "faketool should stay pending (check fails): $(cat "$STATE/pending")"
-pass "passwordless sudo: OS packages and custom scripts installed, stdin closed"
+
+# Case 25b
+info "Case 25b: passwordless sudo but a terminal attached stays check-only"
+fresh_env 8
+SUDOBIN="$T/pwlsudo"
+rm -f "$T/sudo-installs" "$T/marker"
+DOTFILES_TEST_HAS_TTY=1 DOTFILES_TEST_SUDO=1 DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-pt" \
+    auto_blocking_stdin
+[[ $RC -ne 124 ]] || fail "--auto hung with a terminal attached"
+[[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
+if grep -q "passwordless sudo" "$LOG"; then fail "installed although a terminal is attached: $(cat "$LOG")"; fi
+[[ ! -e "$T/sudo-installs" ]] || fail "sudo install ran with a terminal attached: $(cat "$T/sudo-installs")"
+[[ ! -e "$T/marker" ]] || fail "custom install script ran with a terminal attached"
+grep -qx nonexistent-pkg "$STATE/pending" || fail "pending lacks nonexistent-pkg: $(cat "$STATE/pending")"
+grep -qx faketool "$STATE/pending" || fail "pending lacks faketool: $(cat "$STATE/pending")"
+pass "terminal attached: --auto stays check-only even with passwordless sudo"
 
 # Case 26
 info "Case 26: a custom drop-in is held until its check passes"

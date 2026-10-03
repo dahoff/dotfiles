@@ -134,6 +134,22 @@ init_validate_profile() {
     fi
 }
 
+# Print the profile names found in the hosts repo, then the dotfiles repo,
+# comma-separated without duplicates
+# Usage: init_list_profiles
+init_list_profiles() {
+    local list="" dir f name
+    for dir in ${INIT_HOSTS_DIR:+"$INIT_HOSTS_DIR/profiles"} "$PROFILES_DIR"; do
+        for f in "$dir"/*.yaml; do
+            [[ -f "$f" ]] || continue
+            name="${f##*/}"
+            name="${name%.yaml}"
+            [[ ", $list, " == *", $name, "* ]] || list+="${list:+, }$name"
+        done
+    done
+    echo "${list:-none}"
+}
+
 # Check an auto sync value: on or off
 init_validate_auto_sync() {
     case "$1" in
@@ -305,6 +321,7 @@ init_main() {
         fi
     else
         INIT_PROFILE_COMMENTED=false
+        [[ "$g_profile" == true || "$INIT_YES" == true ]] || echo "profiles: $(init_list_profiles)"
         init_choose INIT_PROFILE "$f_profile" "$g_profile" "Profile" "$d_profile" init_validate_profile
     fi
 
@@ -323,13 +340,15 @@ init_main() {
         "$DOTFILES_REPO/dotfiles" sync || rc=$?
     fi
 
+    # host.yaml selects the profile only when no explicit profile overrides it
     local how="profile $INIT_PROFILE"
-    [[ -z "$host_yaml" ]] || how="host.yaml"
+    [[ -z "$host_yaml" || "$INIT_PROFILE_COMMENTED" != true ]] || how="host.yaml"
     echo "dotfiles: $INIT_HOSTNAME configured ($how)"
     if [[ "$INIT_AUTO_SYNC" == on ]]; then
         echo "background sync every $INIT_INTERVAL"
     else
         echo "background sync off"
     fi
+    echo "open a new terminal to load the new shell setup"
     exit $rc
 }

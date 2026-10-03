@@ -135,5 +135,13 @@ run --repo "$URL" --dir "$HOME/df/sub" -- --no-sync --hosts-dir none
 [[ $RC -eq 1 && "$OUT" == *"$HOME/df/sub"* ]] || fail "8: expected exit 1 naming dir, got $RC: $OUT"
 pass "subdirectory of a checkout is refused"
 
+# 9. --dir names a regular file
+: > "$HOME/afile"
+run --repo "$URL" --dir "$HOME/afile" -- --no-sync --hosts-dir none
+[[ $RC -eq 1 && "$OUT" == *"$HOME/afile exists and is not a git checkout"* ]] \
+    || fail "9: expected exit 1 naming the file, got $RC: $OUT"
+[[ "$OUT" != *updating* ]] || fail "9: took the update path: $OUT"
+pass "a regular file as --dir is refused"
+
 echo
 echo "All bootstrap tests passed"

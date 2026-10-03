@@ -57,6 +57,12 @@ for args in "--hostname x" "--profile p" "--yes" "--auto-sync on" "--interval 4h
 done
 pass "init flags without --init: usage error"
 
+info "Case 1c: --hostname with more than one HOST is a usage error"
+run push --init --hostname x testuser@h1 testuser@h2
+[[ $RC -eq 1 ]] || fail "expected exit 1, got $RC: $OUT"
+printf '%s\n' "$OUT" | grep -qF "only valid with a single HOST" || fail "no usage message: $OUT"
+pass "--hostname with two hosts: usage error"
+
 info "Case 2: unreachable hosts fail and are summarized; the next host still runs"
 export DOTFILES_SSH_OPTS="-o Port=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 run push testuser@localhost otheruser@localhost

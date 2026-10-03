@@ -126,6 +126,7 @@ has "auto_sync: off" || fail "auto_sync off missing"
 has "auto_sync_interval: 2h" || fail "interval 2h missing"
 [[ "$OUT" == *"testhost configured (profile minimal)"* && "$OUT" == *"background sync off"* ]] \
     || fail "closing lines wrong: $OUT"
+[[ "$OUT" == *"open a new terminal"* ]] || fail "no new-terminal hint: $OUT"
 pass "none hosts repo and explicit profile/auto sync/interval"
 
 # Case 4
@@ -161,6 +162,7 @@ run_init --yes --no-sync
 [[ $RC -eq 0 ]] || fail "init failed ($RC): $OUT"
 has "profile: minimal" || fail "explicit profile commented or lost: $(cat "$CFG")"
 [[ "$OUT" == *"profile 'minimal' overrides profile 'base'"* ]] || fail "override not warned: $OUT"
+[[ "$OUT" == *"testhost configured (profile minimal)"* ]] || fail "summary hides the kept profile: $OUT"
 cp "$CFG" "$T/override.yaml"
 rm -f "$CFG.bak"
 run_init --yes --no-sync
@@ -172,6 +174,7 @@ same_body "$CFG" "$T/override.yaml" || fail "re-run changed the config"
 rm -f "$CFG" "$CFG.bak"
 run_init --yes --no-sync --hosts-dir "$HD" --hostname testhost --profile minimal
 [[ $RC -eq 0 ]] && has "profile: minimal" || fail "--profile with host.yaml not written: $OUT"
+[[ "$OUT" == *"testhost configured (profile minimal)"* ]] || fail "summary hides --profile: $OUT"
 # Values with ' #' are quoted and read back whole
 rm -f "$CFG"
 run_init --yes --no-sync --hosts-dir none --hostname 'a #b'
@@ -273,6 +276,15 @@ rm -f "$CFG"
 run_interactive "/nonexistent" "$HD" "testhost" "maybe" "off" "10x" "2d"
 [[ $RC -eq 0 ]] || fail "re-prompt run failed ($RC): $OUT"
 has "auto_sync: off" && has "auto_sync_interval: 2d" || fail "re-prompted values not written: $(cat "$CFG")"
+# Without a host.yaml the profile names (hosts repo first) are listed before the prompt
+rm -f "$CFG"
+run_interactive "$HD" "nohost" "" "" ""
+[[ $RC -eq 0 ]] || fail "profile prompt run failed ($RC): $OUT"
+LIST=$(grep '^profiles: ' <<< "$OUT") || fail "profile names not listed: $OUT"
+[[ "$LIST" == "profiles: base, "* && "$LIST" == *", complete" ]] || fail "profile list order wrong: $LIST"
+[[ $(grep -o 'minimal' <<< "$LIST" | wc -l) -eq 1 ]] || fail "duplicate profile name: $LIST"
+[[ "${OUT%%Profile \[complete\]: *}" == *"$LIST"* ]] || fail "list not printed before the prompt: $OUT"
+has "profile: complete" || fail "default profile not written: $(cat "$CFG")"
 # EOF before all answers
 rm -f "$CFG"
 run_interactive "$HD"
