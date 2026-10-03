@@ -62,29 +62,89 @@ info "Case 3: push takes no lock and writes no local state"
 [[ ! -e "$T/home/.local/bin/dotfiles" ]] || fail "push self-installed locally"
 pass "no local state"
 
-info "Case 4: the remote config snippet reads config like config_load"
+info "Case 4: the remote snippet reads hosts_dir like config_load"
+# shellcheck source=../../lib/logging.sh
+source "$ROOT_DIR/lib/logging.sh"
+# shellcheck source=../../lib/config.sh
+source "$ROOT_DIR/lib/config.sh"
 # shellcheck source=../../lib/push.sh
 source "$ROOT_DIR/lib/push.sh"
 SH=sh
 command -v dash >/dev/null 2>&1 && SH=dash
 snippet() {
     # $1 = config file content (printf format); prints the snippet's stdout+stderr
-    printf "$1" > "$T/snip-cfg"
+    printf -- "$1" > "$T/snip-cfg"
     push_remote_snippet | DOTFILES_CONFIG="$T/snip-cfg" $SH 2>&1
 }
 D="$HOME/.local/share/dotfiles"
-EXP=$(printf 'dotfiles_repo=%s/dotfiles\nhosts_repo=%s/dotfiles-hosts' "$D" "$D")
+EXP=$(printf 'dotfiles_repo=%s/dotfiles\nhosts_dir=%s/dotfiles-hosts' "$D" "$D")
 [[ "$(snippet '')" == "$EXP" ]] || fail "defaults wrong: $(snippet '')"
-OUT=$(snippet '# hosts_repo=/nope\n\n  hosts_repo = "~/h one"  \r\ndotfiles_repo\t=\t'"'"'/srv/d'"'"'\r\n')
-[[ "$OUT" == "dotfiles_repo=/srv/d
-hosts_repo=$HOME/h one" ]] || fail "spaced/quoted/CRLF config wrong: $OUT"
-OUT=$(snippet 'hosts_repo=/a\nhosts_repo=/b\n')
-[[ "$OUT" == "dotfiles_repo=$D/dotfiles
-hosts_repo=/b" ]] || fail "last occurrence should win: $OUT"
-OUT=$(snippet 'hosts_repo=relative/path\n')
-printf '%s\n' "$OUT" | grep -qF "non-absolute hosts_repo" || fail "no warning for a relative path: $OUT"
-printf '%s\n' "$OUT" | grep -qF "hosts_repo=$D/dotfiles-hosts" || fail "relative path should fall back to the default: $OUT"
-pass "snippet matches config_load rules ($SH)"
+[[ "$(push_remote_snippet | DOTFILES_CONFIG="$T/none.yaml" $SH 2>&1)" == "$EXP" ]] || fail "missing config should give defaults"
+# Each case: config content -> hosts_dir the snippet must print, identical to config_load's
+parity() {
+    local content="$1" want="$2" out got
+    out=$(snippet "$content")
+    got=$(printf '%s\n' "$out" | sed -n 's/^hosts_dir=//p')
+    [[ "$got" == "$want" ]] || fail "snippet hosts_dir '$got', want '$want' for: $content"
+    printf -- "$content" > "$T/snip-cfg"
+    config_load "$T/snip-cfg" >/dev/null 2>&1 || true
+    [[ "$want" == "$D/dotfiles-hosts" ]] || [[ "$CFG_HOSTS_DIR" == "$want" ]] \
+        || fail "config_load gave '$CFG_HOSTS_DIR', want '$want' for: $content"
+}
+parity 'hosts_dir: /srv/h\n' /srv/h
+parity '# hosts_dir: /nope\n\nhosts_dir: ~/h one  \r\n' "$HOME/h one"
+parity 'hosts_dir: "~/dh-custom"  # comment\r\n' "$HOME/dh-custom"
+parity "hosts_dir: '/a b'\t# c\n" "/a b"
+parity 'hosts_dir: "/a#b"\n' "/a#b"
+parity 'hosts_dir: "/a#b" # c\n' "/a#b"
+parity 'hosts_dir: /a#b\n' "/a#b"
+parity 'hosts_dir: /a   # c # d\n' /a
+parity 'hosts_dir: ~\n' "$HOME"
+parity 'hosts_dir: /a\nhosts_dir: /b\n' /b
+parity 'hosts_dir:   /sp  \n' /sp
+parity '  hosts_dir: /indented\n' "$D/dotfiles-hosts"
+parity '- hosts_dir: /list\n' "$D/dotfiles-hosts"
+parity 'hosts_dir=/equals\n' "$D/dotfiles-hosts"
+parity 'hosts_dir: /last-no-newline' /last-no-newline
+parity 'hosts_dirx: /nope\n' "$D/dotfiles-hosts"
+OUT=$(snippet 'hosts_dir: relative/path\n')
+printf '%s\n' "$OUT" | grep -qF "non-absolute hosts_dir" || fail "no warning for a relative path: $OUT"
+printf '%s\n' "$OUT" | grep -qF "hosts_dir=$D/dotfiles-hosts" || fail "relative path should fall back to the default: $OUT"
+OUT=$(snippet 'hosts_repo: /old\n')
+[[ "$OUT" == "$EXP" ]] || fail "removed hosts_repo key must be ignored: $OUT"
+pass "snippet hosts_dir matches config_load rules ($SH)"
+
+info "Case 5: the snippet finds the dotfiles checkout through ~/.local/bin/dotfiles"
+rdot() { push_remote_snippet | DOTFILES_CONFIG="$T/none.yaml" $SH 2>&1 | sed -n 's/^dotfiles_repo=//p'; }
+LB="$HOME/.local/bin"
+[[ "$(rdot)" == "$D/dotfiles" ]] || fail "no link should give the default: $(rdot)"
+mkdir -p "$LB" "$T/alt/dotfiles/lib" "$T/other" "$T/nolib"
+: > "$T/alt/dotfiles/dotfiles"
+: > "$T/other/tool"
+: > "$T/nolib/dotfiles"
+ln -s "$T/alt/dotfiles/dotfiles" "$LB/dotfiles"
+[[ "$(rdot)" == "$T/alt/dotfiles" ]] || fail "absolute link not followed: $(rdot)"
+rm "$LB/dotfiles"
+ln -s "../../../alt/dotfiles/dotfiles" "$LB/dotfiles"
+[[ "$(rdot)" == "$T/alt/dotfiles" ]] || fail "relative link not followed: $(rdot)"
+rm "$LB/dotfiles"
+ln -s "$T/alt/dotfiles/dotfiles" "$T/hop"
+ln -s "$T/hop" "$LB/dotfiles"
+[[ "$(rdot)" == "$T/alt/dotfiles" ]] || fail "chained links not followed: $(rdot)"
+rm "$LB/dotfiles"
+ln -s "$T/other/tool" "$LB/dotfiles"
+[[ "$(rdot)" == "$D/dotfiles" ]] || fail "link to a non-dotfiles file should give the default: $(rdot)"
+rm "$LB/dotfiles"
+ln -s "$T/nolib/dotfiles" "$LB/dotfiles"
+[[ "$(rdot)" == "$D/dotfiles" ]] || fail "link to a dir without lib/ should give the default: $(rdot)"
+rm "$LB/dotfiles"
+ln -s "$T/missing/dotfiles" "$LB/dotfiles"
+[[ "$(rdot)" == "$D/dotfiles" ]] || fail "dangling link should give the default: $(rdot)"
+rm "$LB/dotfiles"
+: > "$LB/dotfiles"
+[[ "$(rdot)" == "$D/dotfiles" ]] || fail "a plain file should give the default: $(rdot)"
+rm "$LB/dotfiles"
+pass "link resolution ($SH)"
 
 echo
 echo -e "${GREEN}All push tests passed${NC}"

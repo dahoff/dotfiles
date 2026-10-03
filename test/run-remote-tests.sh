@@ -81,10 +81,10 @@ WORKTREE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
 # push runs never needs sudo
 reset_remote() {
     # The config uses comments, spaces, tabs, quotes and CRLF line ends, and puts
-    # the hosts repo at a non-default path: push must read it like config_load
-    test_ssh 'rm -rf ~/.local/share/dotfiles ~/dh-custom ~/.local/bin/dotfiles ~/.bashrc.d ~/.config/dotfiles ~/.claude ~/.local/state/dotfiles
+    # the hosts dir at a non-default path: push must read it like config_load
+    test_ssh 'rm -rf ~/.local/share/dotfiles ~/dh-custom ~/alt ~/.local/bin/dotfiles ~/.bashrc.d ~/.config/dotfiles ~/.claude ~/.local/state/dotfiles
         mkdir -p ~/.config/dotfiles ~/.claude
-        printf "# hosts_repo=/nope\r\n\r\n  hostname = \"testhost\"\r\nhosts_repo\t=\t\"~/dh-custom\"\r\n" > ~/.config/dotfiles/config
+        printf "# hosts_dir: /nope\r\n\r\nhostname: testhost\r\nhosts_dir: \"~/dh-custom\"  # comment\r\n" > ~/.config/dotfiles/config.yaml
         printf "{\"liveOnly\":1}\n" > ~/.claude/settings.json'
 }
 
@@ -167,6 +167,21 @@ test_ssh 'rm -rf ~/dh-custom'
 push "$TARGET"
 [[ $RC -eq 0 ]] || fail "P6: push after cleanup exited $RC: $OUT"
 pass "P6: foreign directory refused and left intact"
+
+info "P7: the remote dotfiles checkout is found through its ~/.local/bin/dotfiles link"
+reset_remote
+test_ssh 'mkdir -p ~/alt/dotfiles/lib ~/.local/bin
+    echo old > ~/alt/dotfiles/PUSHED
+    printf "#!/bin/sh\n" > ~/alt/dotfiles/dotfiles && chmod +x ~/alt/dotfiles/dotfiles
+    ln -s ~/alt/dotfiles/dotfiles ~/.local/bin/dotfiles'
+push "$TARGET"
+[[ $RC -eq 0 ]] || fail "P7: push exited $RC: $OUT"
+test_ssh 'test -f ~/alt/dotfiles/lib/config.sh' || fail "P7: dotfiles not unpacked into ~/alt/dotfiles"
+test_ssh 'grep -q "commit='"$WORKTREE_COMMIT"'" ~/alt/dotfiles/PUSHED' || fail "P7: PUSHED not refreshed in ~/alt/dotfiles"
+test_ssh 'test ! -e ~/.local/share/dotfiles/dotfiles' || fail "P7: dotfiles also shipped to the default path"
+[[ "$(test_ssh 'readlink ~/.local/bin/dotfiles')" == "$(test_ssh 'echo ~/alt/dotfiles/dotfiles')" ]] || fail "P7: the link was re-pointed"
+test_ssh 'test -f ~/dh-custom/hosts/testhost/host.yaml' || fail "P7: hosts dir not at the config.yaml path"
+pass "P7: pushed into the checkout the link points to"
 
 echo
 echo "======================================"

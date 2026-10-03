@@ -45,51 +45,73 @@ push_build_payload() {
     return $rc
 }
 
-# Print "dotfiles_repo=<abs>" and "hosts_repo=<abs>" as the remote sees them.
+# Print "dotfiles_repo=<abs>" and "hosts_dir=<abs>" as the remote sees them.
 # Usage: push_remote_paths HOST
 push_remote_paths() {
     local host="$1"
     push_remote_snippet | push_ssh "$host" "sh -s"
 }
 
-# Print the POSIX sh snippet that reads the remote config. It applies the same
-# rules as config_load (lib/config.sh): strip CR, skip blanks and comments,
-# split on the first '=', trim whitespace, strip one pair of matching quotes,
-# last occurrence wins, expand a leading ~. A value that is not absolute falls
-# back to the default with a warning on stderr. Plain sh (dash) only: the
-# remote may not have dotfiles yet.
+# Print the POSIX sh snippet that locates the remote dotfiles checkout and
+# hosts dir. The dotfiles checkout is where ~/.local/bin/dotfiles points (the
+# link is followed to its final target, whose basename must be "dotfiles" and
+# whose directory must contain lib/), else the default. hosts_dir is read from
+# the remote config.yaml with the same rules as config_load (lib/config.sh):
+# CRLF stripped, blank and '#' lines skipped, indented lines and list items
+# ignored, the first ': ' splits key from value, a quoted value may be followed
+# by ' # comment' (quotes stripped, '#' inside kept), an unquoted value is cut
+# at the first whitespace+'#', leading ~ expanded, last occurrence wins. A
+# value that is not absolute falls back to the default with a warning on
+# stderr. Plain sh (dash) only: the remote may not have dotfiles yet.
 push_remote_snippet() {
     cat <<'SNIPPET'
-cfg="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
+cfg="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config.yaml}"
 d=; h=
-trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+lnk="$HOME/.local/bin/dotfiles"
+if [ -L "$lnk" ]; then
+    t=$lnk; n=0
+    while [ -L "$t" ] && [ "$n" -lt 40 ]; do
+        n=$((n + 1))
+        r=$(readlink "$t")
+        case "$r" in /*) t=$r ;; *) t="$(dirname "$t")/$r" ;; esac
+    done
+    if [ ! -L "$t" ] && [ "$(basename "$t")" = dotfiles ] && [ -d "$(dirname "$t")/lib" ]; then
+        d=$(cd "$(dirname "$t")" && pwd -P)
+    fi
+fi
 if [ -f "$cfg" ]; then
     while IFS= read -r l || [ -n "$l" ]; do
         l=$(printf '%s' "$l" | tr -d '\r')
-        case "$l" in *=*) ;; *) continue ;; esac
-        k=$(trim "${l%%=*}")
-        case "$k" in dotfiles_repo|hosts_repo) ;; *) continue ;; esac
-        v=$(trim "${l#*=}")
-        case "$v" in
-            \"?*\") v=${v#?}; v=${v%?} ;;
-            \'?*\') v=${v#?}; v=${v%?} ;;
+        case "$l" in ''|'#'*) continue ;; esac
+        case "$l" in
+            ' '*|'	'*|'- '*|-) continue ;;
+            *': '*) k=${l%%: *}; v=${l#*: } ;;
+            *:) k=${l%:}; v= ;;
+            *) continue ;;
         esac
+        k=$(printf '%s' "$k" | sed 's/[[:space:]]*$//')
+        [ "$k" = hosts_dir ] || continue
+        v=$(printf '%s' "$v" | sed 's/^[[:space:]]*//')
+        if printf '%s\n' "$v" | grep -Eq "^(\"[^\"]*\"|'[^']*')([[:space:]]+#.*)?[[:space:]]*\$"; then
+            c=${v%"${v#?}"}
+            v=${v#?}
+            v=${v%%"$c"*}
+        else
+            v=$(printf '%s' "$v" | sed -e 's/^#.*$//' -e 's/[[:space:]]#.*$//' -e 's/[[:space:]]*$//')
+        fi
         case "$v" in
             "~") v=$HOME ;;
             "~/"*) v="$HOME/${v#"~/"}" ;;
         esac
-        if [ "$k" = dotfiles_repo ]; then d=$v; else h=$v; fi
+        h=$v
     done < "$cfg"
 fi
-if [ -n "$d" ]; then
-    case "$d" in /*) ;; *) echo "dotfiles: ignoring non-absolute dotfiles_repo in $cfg: $d" >&2; d= ;; esac
-fi
 if [ -n "$h" ]; then
-    case "$h" in /*) ;; *) echo "dotfiles: ignoring non-absolute hosts_repo in $cfg: $h" >&2; h= ;; esac
+    case "$h" in /*) ;; *) echo "dotfiles: ignoring non-absolute hosts_dir in $cfg: $h" >&2; h= ;; esac
 fi
 [ -n "$d" ] || d="$HOME/.local/share/dotfiles/dotfiles"
 [ -n "$h" ] || h="$HOME/.local/share/dotfiles/dotfiles-hosts"
-printf 'dotfiles_repo=%s\nhosts_repo=%s\n' "$d" "$h"
+printf 'dotfiles_repo=%s\nhosts_dir=%s\n' "$d" "$h"
 SNIPPET
 }
 
@@ -124,7 +146,7 @@ push_host() {
     while IFS= read -r line; do
         case "$line" in
             dotfiles_repo=*) rdot="${line#*=}" ;;
-            hosts_repo=*) rhosts="${line#*=}" ;;
+            hosts_dir=*) rhosts="${line#*=}" ;;
         esac
     done <<< "$paths"
     if [[ -z "$rdot" || -z "$rhosts" ]]; then
