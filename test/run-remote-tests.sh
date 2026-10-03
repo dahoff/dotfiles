@@ -203,16 +203,18 @@ test_ssh 'test -f ~/.bashrc.d/90-dotfiles.sh' || fail "PI1: remote login drop-in
 pass "PI1: config written, self-installed, synced"
 
 info "PI2: push --init again keeps the existing config values as defaults"
+# Hand-set an uncommented profile: the same one testhost's host.yaml selects
+# (base), so the sync needs nothing extra. The edited file is what init writes.
+test_ssh 'sed -i "s/^# profile: .*/profile: base/" ~/.config/dotfiles/config.yaml'
+test_ssh 'grep -qx "profile: base" ~/.config/dotfiles/config.yaml' || fail "PI2: setup could not set the profile"
+test_ssh 'test ! -e ~/.config/dotfiles/config.yaml.bak' || fail "PI2: config.bak already present before the run"
 push --init --yes "$TARGET"
 [[ $RC -eq 0 ]] || fail "PI2: push --init exited $RC: $OUT"
 CFG2=$(test_ssh 'cat ~/.config/dotfiles/config.yaml')
 grep -qx 'hostname: testhost' <<< "$CFG2" || fail "PI2: hostname not kept: $CFG2"
-if test_ssh 'test -e ~/.config/dotfiles/config.yaml.bak'; then
-    BAK=$(test_ssh 'cat ~/.config/dotfiles/config.yaml.bak')
-    [[ "$(grep -v '^# Written by dotfiles init on ' <<< "$BAK")" == "$(grep -v '^# Written by dotfiles init on ' <<< "$CFG2")" ]] \
-        || fail "PI2: config changed: was $BAK, now $CFG2"
-fi
-pass "PI2: existing values kept"
+grep -qx 'profile: base' <<< "$CFG2" || fail "PI2: hand-set profile not kept uncommented: $CFG2"
+test_ssh 'test ! -e ~/.config/dotfiles/config.yaml.bak' || fail "PI2: config.bak written, so the config changed: $CFG2"
+pass "PI2: existing values (hostname, hand-set profile) kept, no config.bak"
 
 info "PI3: push --init with an invalid --interval leaves the config alone"
 push --init --yes --interval 10x "$TARGET"
@@ -220,6 +222,23 @@ push --init --yes --interval 10x "$TARGET"
 printf '%s\n' "$OUT" | grep -qF "interval must be <n>m, <n>h or <n>d: 10x" || fail "PI3: not refused by the remote init: $OUT"
 [[ "$(test_ssh 'cat ~/.config/dotfiles/config.yaml')" == "$CFG2" ]] || fail "PI3: remote config changed"
 pass "PI3: invalid flag refused by the remote init, config unchanged"
+
+info "PI4: push --init without a local hosts dir keeps the remote's configured hosts_dir"
+# An empty local config and no default hosts dir under the local HOME: no hosts payload
+: > "$T/empty-cfg"
+[[ ! -e "$HOME/.local/share/dotfiles/dotfiles-hosts" ]] || fail "PI4: local default hosts dir exists"
+grep -qx 'hosts_dir: /home/testuser/.local/share/dotfiles/dotfiles-hosts' <<< "$CFG2" || fail "PI4: setup: remote hosts_dir not set: $CFG2"
+DOTFILES_CONFIG="$T/empty-cfg" push --dry-run --init --yes "$TARGET"
+[[ $RC -eq 0 ]] || fail "PI4: dry-run exited $RC: $OUT"
+printf '%s\n' "$OUT" | grep -qF "Would push dotfiles.tar" || fail "PI4: no dotfiles payload planned: $OUT"
+! printf '%s\n' "$OUT" | grep -qF "hosts.tar" || fail "PI4: a hosts payload would be shipped: $OUT"
+DOTFILES_CONFIG="$T/empty-cfg" push --init --yes "$TARGET"
+[[ $RC -eq 0 ]] || fail "PI4: push --init exited $RC: $OUT"
+CFG4=$(test_ssh 'cat ~/.config/dotfiles/config.yaml')
+[[ "$(grep -v '^# Written by dotfiles init on ' <<< "$CFG4")" == "$(grep -v '^# Written by dotfiles init on ' <<< "$CFG2")" ]] \
+    || fail "PI4: remote config changed: was $CFG2, now $CFG4"
+test_ssh 'test ! -e ~/.config/dotfiles/config.yaml.bak' || fail "PI4: config.bak written"
+pass "PI4: no hosts payload, remote hosts_dir kept"
 
 echo
 echo "======================================"

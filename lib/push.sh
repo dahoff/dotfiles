@@ -242,13 +242,12 @@ rm -rf $p.old
     fi
 
     if [[ "$init" == true ]]; then
-        # The hosts dir is the one just shipped; with none shipped there is none
+        # The hosts dir is the one just shipped; with none shipped, the remote
+        # init keeps its own default (its configured hosts dir, if any)
         local cmd f
-        cmd="$(push_quote "$rdot/dotfiles") init --hosts-dir "
+        cmd="$(push_quote "$rdot/dotfiles") init"
         if [[ -f "$dir/hosts.tar" ]]; then
-            cmd+=$(push_quote "$rhosts")
-        else
-            cmd+=$(push_quote none)
+            cmd+=" --hosts-dir $(push_quote "$rhosts")"
         fi
         for f in ${init_flags[@]+"${init_flags[@]}"}; do
             cmd+=" $(push_quote "$f")"

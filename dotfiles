@@ -527,7 +527,7 @@ Push options:
                        (with push, these are valid only together with --init)
 
 Sync options:
-  --auto              Background mode (used by the login drop-in)
+  --auto               Background mode (used by the login drop-in)
   --no-pull            Do not git pull the dotfiles and hosts dirs
 
 Options (passed through to each app's installer):
