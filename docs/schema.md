@@ -228,6 +228,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 | Command | What it does |
 |---|---|
+| `init` | Guided per-host setup: asks a few questions, writes the config file, then runs the first sync. See Setting up a new machine. |
 | `sync` | Pulls the dotfiles and hosts repos (fast-forward only), self-installs, then installs packages and deploys app configs. Idempotent: it installs what is new and upgrades what changed. |
 | `push HOST...` | Ships the repos to each HOST over ssh and runs `dotfiles sync --no-pull` there. Meant for hosts without access to the repos. |
 | `status` | Read-only. Shows the repos (branch and commit, or the pushed copy's `PUSHED` line), host and profile, auto sync state, pending packages and per-app state. |
@@ -253,7 +254,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 - A remote target that is a git checkout is refused (run `dotfiles sync` there instead). An existing target is replaced only if it holds a `PUSHED` marker or is an empty directory; anything else is refused with `<host>:<path> exists and is not a pushed dotfiles copy; refusing to replace it`, so a wrong remote config line cannot delete user data. An existing pushed copy is replaced by swapping the directory, and the old copy is restored if the swap fails.
 - It then runs `<remote dotfiles repo>/dotfiles sync --no-pull` with `ssh -t`, so prompts such as sudo work. The remote exit status is the push result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed.
 - `--dry-run` reports what would be sent and, if the remote already has dotfiles, runs a remote `sync --no-pull --dry-run`. Nothing is copied.
-- `push --init` (bootstrapping a host that has no dotfiles yet) is not available.
+- `push --init` sets up a host that has no dotfiles yet. See Setting up a new machine.
 
 ### Self-install
 
@@ -263,6 +264,45 @@ A real `sync` (not `--dry-run`) installs two things, so the checkout becomes the
 - `<shell scripts dir>/90-dotfiles.sh` (default `~/.bashrc.d/`), a copy of `lib/login.sh` taken from the repo the link resolves to. It is managed by dotfiles; do not edit it.
 
 `~/.local/bin` must be on `PATH`.
+
+---
+
+## Setting up a new machine
+
+### Bootstrap
+
+On a fresh machine, one command installs git if needed (apt, dnf or brew; it may ask for sudo), clones dotfiles to `~/.local/share/dotfiles/dotfiles`, and runs `dotfiles init`:
+
+    curl -fsSL https://raw.githubusercontent.com/dahoff/dotfiles/main/bootstrap.sh | bash
+
+Pass init flags after `bash -s --`, for example the hosts repo:
+
+    curl -fsSL https://raw.githubusercontent.com/dahoff/dotfiles/main/bootstrap.sh | bash -s -- --hosts-dir git@github.com:me/dotfiles-hosts.git
+
+`bootstrap.sh` consumes `--repo URL` and `--dir PATH` (or env `DOTFILES_REPO_URL`, `DOTFILES_DIR`) to choose where dotfiles is cloned from and to; every other argument goes to `dotfiles init`. If the target directory is already a checkout it is updated with a fast-forward-only pull; any other existing path is an error. Init reads its answers from `/dev/tty`, so the prompts work even though the script itself arrives on stdin. With no terminal at all, bootstrap runs `init --yes` instead of hanging.
+
+### `init`
+
+    dotfiles init [--hosts-dir URL|PATH|none] [--hostname NAME] [--profile NAME]
+                  [--auto-sync on|off] [--interval <n>m|h|d] [--yes] [--no-sync]
+
+Init asks for the hosts repo, hostname, profile, auto sync and interval, writes the config file and runs a sync. A flag answers its question without asking.
+
+- `--hosts-dir`: a URL (contains `://`, or looks like `user@host:path`) is cloned to `~/.local/share/dotfiles/dotfiles-hosts`; a path must be an existing directory; `none` means no hosts repo. A failed clone exits 1 and writes nothing. If the default hosts path already holds a pushed (non-checkout) copy, a URL is refused with an error naming the path; the copy is never deleted.
+- `--hostname`: same rules as everywhere else (no `/`, not `.` or `..`); the prompt applies them too.
+- `--profile`: a profile already set in the config stays active even if `hosts/<hostname>/host.yaml` exists.
+- `--yes` accepts every default (or flag value) without prompting. `--no-sync` writes the config and skips the first sync.
+- Without a terminal and without `--yes`, init exits 1 with `init is interactive; pass --yes to accept defaults`.
+
+Init writes `${DOTFILES_CONFIG:-~/.config/dotfiles/config.yaml}` in the format described under Config file, with the header `# Written by dotfiles init on <date>`. It is written to `<config>.tmp` and then moved into place.
+
+Re-running init is safe. The defaults offered are the values already in the config, so accepting every answer (or `--yes`) changes nothing. When the new content differs from an existing file, the old one is kept as `<config>.bak`; when nothing changed, no `.bak` is made. Run `dotfiles init` again whenever you want to change a setting.
+
+### `push --init`
+
+    dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST...
+
+For a host that cannot reach the repos. It ships the repos as `push` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `sync --no-pull`. The flags above are forwarded to the remote init and are valid only with `--init`. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
 
 ---
 

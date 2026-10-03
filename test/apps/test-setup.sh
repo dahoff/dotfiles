@@ -80,15 +80,15 @@ else
 fi
 
 # Test 4b: help lists the commands and sync flags
-info "Test 4b: help mentions sync, push, status, --auto and --no-pull"
+info "Test 4b: help mentions init, sync, push, status, --auto and --no-pull"
 output=$(cd "$ROOT_DIR" && ./dotfiles help 2>&1)
 missing=""
-for word in sync push status uninstall verify -- --auto --no-pull; do
+for word in init "push --init" --hosts-dir --no-sync sync push status uninstall verify -- --auto --no-pull; do
     [[ "$word" == "--" ]] && continue
     echo "$output" | grep -q -- "$word" || missing+=" $word"
 done
 if [[ -z "$missing" ]]; then
-    pass "help lists all commands and sync flags"
+    pass "help lists all commands, init and sync flags"
 else
     fail "help is missing:$missing"
 fi
