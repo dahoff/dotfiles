@@ -164,15 +164,15 @@ sync_join() {
 }
 
 # Write <state>/report for --auto, or remove it when there is nothing to say.
-# Usage: sync_write_report LOG UPDATED_CSV PENDING_CSV
+# Usage: sync_write_report LOG UPDATED_CSV
 #   LOG          path shown in "see <log>" suffixes
 #   UPDATED_CSV  comma-separated names of updated apps ("" if none)
-#   PENDING_CSV  comma-separated names of pending packages ("" if none)
 # Warnings come from the global SYNC_WARNINGS, failures from FAIL entries in
-# the global RESULTS ("target|item|FAIL"). Lines, in order: updated, pending,
-# warnings, failed. Written to report.tmp, then moved into place.
+# the global RESULTS ("target|item|FAIL"). Lines, in order: updated, pull
+# warnings, failed. Pending packages are not reported here: the login drop-in
+# reminds about them at every terminal. Written to report.tmp, then moved into place.
 sync_write_report() {
-    local log="$1" updated_csv="${2:-}" pending_csv="${3:-}"
+    local log="$1" updated_csv="${2:-}"
     local dir report tmp
     dir=$(sync_state_dir)
     report="$dir/report"
@@ -183,13 +183,6 @@ sync_write_report() {
     if [[ -n "$updated_csv" ]]; then
         IFS=',' read -r -a items <<< "$updated_csv"
         printf 'dotfiles: updated %s\n' "$(sync_join "${items[@]}")" >> "$tmp"
-    fi
-    if [[ -n "$pending_csv" ]]; then
-        IFS=',' read -r -a items <<< "$pending_csv"
-        local noun="packages"
-        [[ ${#items[@]} -eq 1 ]] && noun="package"
-        printf "dotfiles: %d %s pending (%s) — run 'dotfiles sync'\n" \
-            "${#items[@]}" "$noun" "$(sync_join "${items[@]}")" >> "$tmp"
     fi
     local w
     for w in "${SYNC_WARNINGS[@]}"; do

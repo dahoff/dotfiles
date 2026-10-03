@@ -80,10 +80,17 @@ EOF
 STATE="$XDG_STATE_HOME/dotfiles"
 OUT=""
 RC=0
+# A sudo that always fails, so no case can reach the real sudo (--auto installs
+# for real when sudo -n succeeds). Cases that need another sudo set SUDOBIN.
+NOSUDO="$T/nosudo"
+mkdir -p "$NOSUDO"
+printf '#!/bin/sh\nexit 1\n' > "$NOSUDO/sudo"
+chmod +x "$NOSUDO/sudo"
+SUDOBIN="$NOSUDO"
 # Run the repo's dotfiles with args, capture output in OUT and exit code in RC
 run() {
     RC=0
-    OUT=$("$WORK/dotfiles/dotfiles" "$@" --no-backup --skip-git-setup 2>&1) || RC=$?
+    OUT=$(PATH="$SUDOBIN:$PATH" "$WORK/dotfiles/dotfiles" "$@" --no-backup --skip-git-setup 2>&1) || RC=$?
 }
 author_commit() {
     local file="$1" content="$2"
@@ -256,7 +263,7 @@ LOG="$STATE/last-sync.log"
 age_last_sync() { mkdir -p "$STATE"; touch -d '5 hours ago' "$STATE/last-sync"; }
 FAKEBIN="$T/fakebin"
 mkdir -p "$FAKEBIN"
-printf '#!/bin/sh\ntouch "%s/sudo-called"\nexit 1\n' "$T" > "$FAKEBIN/sudo"
+printf '#!/bin/sh\ntouch "%s/sudo-called"\necho "$*" >> "%s/sudo-args"\nexit 1\n' "$T" "$T" > "$FAKEBIN/sudo"
 chmod +x "$FAKEBIN/sudo"
 PATH_ORIG="$PATH"
 cp "$T/config" "$T/config.orig"
@@ -296,19 +303,21 @@ pass "auto_sync=off leaves everything alone"
 info "Case 13: config-only with pending packages"
 sed -i 's/^hostname: .*/hostname: nohost/' "$T/config"
 echo "profile: pendingtest" >> "$T/config"
-rm -rf "$HOME/.bashrc.d/50-lazygit.sh" "$HOME/.claude" "$STATE/report" "$T/sudo-called"
+rm -rf "$HOME/.bashrc.d/50-testtool.sh" "$HOME/.claude" "$STATE/report" "$T/sudo-called" "$T/sudo-args"
 age_last_sync
 RC=0
 OUT=$(PATH="$FAKEBIN:$PATH_ORIG" "$WORK/dotfiles/dotfiles" sync --auto --no-backup 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
-[[ ! -e "$T/sudo-called" ]] || fail "--auto called sudo"
+# The only sudo call allowed is the passwordless probe (-n true)
+[[ ! -e "$T/sudo-called" ]] || [[ "$(cat "$T/sudo-args")" == "-n true" ]] || fail "--auto called sudo: $(cat "$T/sudo-args")"
 { grep -qx nonexistent-pkg "$STATE/pending" && grep -qx faketool "$STATE/pending"; } \
     || fail "pending missing entries: $(cat "$STATE/pending")"
-grep -q "^dotfiles: 2 packages pending (nonexistent-pkg, faketool) — run 'dotfiles sync'$" "$STATE/report" \
-    || fail "bad report: $(cat "$STATE/report" 2>&1)"
-[[ -f "$HOME/.bashrc.d/50-lazygit.sh" ]] || fail "custom drop-in not deployed"
+[[ -s "$STATE/report" ]] || fail "no report (configs were updated)"
+if grep -q "pending" "$STATE/report"; then fail "report has a pending line: $(cat "$STATE/report")"; fi
+[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in deployed although its check fails"
+grep -q "faketool: drop-in held until the tool is installed" "$LOG" || fail "no held message: $(cat "$LOG")"
 [[ -f "$HOME/.claude/settings.json" ]] || fail "claude configs not deployed"
-pass "config-only, pending recorded, drop-in deployed"
+pass "config-only, pending recorded, no pending line in report, drop-in held"
 
 # Case 14
 info "Case 14: updated apps in report"
@@ -543,6 +552,149 @@ for _ in $(seq 1 20); do grep -q 'sync --auto' "$WORK/calls" 2>/dev/null && brea
 grep -q 'sync --auto' "$WORK/calls" || fail "background sync not started without setsid"
 [[ -e "$STATE/launch.log" ]] || fail "launch.log not written"
 pass "drop-in falls back when setsid is missing"
+
+# Helpers for the sudo / pending cases
+# Switch to a fresh HOME and state (not restored: these are the last cases)
+fresh_env() {
+    export HOME="$T/home$1" STATE_DIR="$T/state$1" XDG_STATE_HOME="$T/xdg-state$1"
+    mkdir -p "$HOME" "$STATE_DIR/apps"
+    STATE="$XDG_STATE_HOME/dotfiles"
+    LOG="$STATE/last-sync.log"
+}
+# A config using the pendingtest profile (no host.yaml for "nohost")
+cat > "$T/config-pt" <<EOF
+hosts_dir: $T/hosts-dir
+hostname: nohost
+profile: pendingtest
+EOF
+# Run --auto with a stdin that is open but never delivers data, so anything
+# reading it would block; timeout 20 turns a hang into RC=124.
+STDIN_FIFO="$T/stdin.fifo"
+mkfifo "$STDIN_FIFO"
+auto_blocking_stdin() {
+    local writer
+    sleep 60 > "$STDIN_FIFO" &
+    writer=$!
+    RC=0
+    OUT=$(PATH="$SUDOBIN:$PATH_ORIG" timeout 20 "$WORK/dotfiles/dotfiles" sync --auto --no-backup \
+        < "$STDIN_FIFO" 2>&1) || RC=$?
+    kill "$writer" 2>/dev/null || true
+    wait "$writer" 2>/dev/null || true
+}
+HAVE_SUDO_PM=false
+command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 && HAVE_SUDO_PM=true
+
+# Case 23
+info "Case 23: pending reminder at every terminal, report only once"
+LOGIN_SRC="$WORK/dotfiles/lib/login.sh"
+REMINDER="dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles sync'"
+login_run() {
+    LOGIN_OUT=$(DOTFILES_NO_AUTO_SYNC=1 PATH="$PATH_ORIG" bash --norc --noprofile -i -c "source '$LOGIN_SRC'" 2>/dev/null)
+}
+mkdir -p "$STATE"
+printf 'lazygit\nhtop\n' > "$STATE/pending"
+echo "dotfiles: hello" > "$STATE/report"
+login_run; FIRST="$LOGIN_OUT"
+login_run; SECOND="$LOGIN_OUT"
+[[ "$FIRST" == *"dotfiles: hello"* ]] || fail "report not shown: $FIRST"
+[[ "$SECOND" != *"dotfiles: hello"* ]] || fail "report shown twice: $SECOND"
+grep -qxF "$REMINDER" <<< "$FIRST" || fail "no reminder in first shell: $FIRST"
+grep -qxF "$REMINDER" <<< "$SECOND" || fail "no reminder in second shell: $SECOND"
+printf 'lazygit\n\nhtop' > "$STATE/pending"
+login_run
+grep -qxF "$REMINDER" <<< "$LOGIN_OUT" || fail "blank line / no final newline broke the reminder: $LOGIN_OUT"
+: > "$STATE/pending"
+login_run
+[[ "$LOGIN_OUT" != *"not installed"* ]] || fail "reminder with empty pending: $LOGIN_OUT"
+rm -f "$STATE/pending"
+login_run
+[[ -z "$LOGIN_OUT" ]] || fail "output without pending file: $LOGIN_OUT"
+pass "reminder at every shell while pending; report once; silent when nothing pending"
+
+# Case 24
+info "Case 24: a sudo that would prompt does not hang or install"
+fresh_env 5
+SUDOBIN="$T/promptsudo"
+mkdir -p "$SUDOBIN"
+cat > "$SUDOBIN/sudo" <<EOS
+#!/bin/sh
+# -n branch blocks on stdin unless it is /dev/null
+if [ "\$1" = "-n" ]; then read -r _; exit 1; fi
+echo "\$*" >> "$T/sudo-installs"
+exit 0
+EOS
+chmod +x "$SUDOBIN/sudo"
+rm -f "$T/sudo-installs"
+DOTFILES_CONFIG="$T/config-pt" auto_blocking_stdin
+[[ $RC -ne 124 ]] || fail "--auto hung on the sudo probe"
+[[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
+[[ ! -e "$T/sudo-installs" ]] || fail "install ran without passwordless sudo: $(cat "$T/sudo-installs")"
+if grep -q "passwordless sudo" "$LOG"; then fail "probe treated a failing sudo as passwordless"; fi
+grep -qx nonexistent-pkg "$STATE/pending" || fail "pending lacks nonexistent-pkg: $(cat "$STATE/pending")"
+pass "prompting sudo: no hang, check-only"
+
+# Case 25
+info "Case 25: passwordless sudo installs in the background"
+fresh_env 6
+SUDOBIN="$T/pwlsudo"
+mkdir -p "$SUDOBIN"
+cat > "$SUDOBIN/sudo" <<EOS
+#!/bin/sh
+if [ "\$1" = "-n" ] && [ "\$2" = "true" ]; then exit 0; fi
+echo "\$*" >> "$T/sudo-installs"
+# Blocks unless stdin is /dev/null
+cat >/dev/null
+exit 0
+EOS
+chmod +x "$SUDOBIN/sudo"
+rm -f "$T/sudo-installs" "$T/marker"
+DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-pt" auto_blocking_stdin
+[[ $RC -ne 124 ]] || fail "--auto hung during installs"
+[[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
+grep -q "passwordless sudo: installing packages" "$LOG" || fail "log lacks the passwordless note: $(cat "$LOG")"
+if [[ "$HAVE_SUDO_PM" == true ]]; then
+    grep -q "install.*dotfiles-nonexistent-pkg" "$T/sudo-installs" 2>/dev/null \
+        || fail "no OS package install recorded: $(cat "$T/sudo-installs" 2>&1)"
+else
+    info "no apt-get/dnf: OS package install check skipped"
+fi
+[[ -e "$T/marker" ]] || fail "custom install script did not run"
+[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in deployed although check still fails"
+grep -qx faketool "$STATE/pending" || fail "faketool should stay pending (check fails): $(cat "$STATE/pending")"
+pass "passwordless sudo: OS packages and custom scripts installed, stdin closed"
+
+# Case 26
+info "Case 26: a custom drop-in is held until its check passes"
+fresh_env 7
+SUDOBIN="$FAKEBIN"
+cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/hosts-dt"
+sed "s#^hosts_dir: .*#hosts_dir: $T/hosts-dt#" "$T/config-pt" > "$T/config-dt"
+rm -f "$T/marker"
+DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-dt" run sync --no-pull
+[[ -e "$T/marker" ]] || fail "interactive sync did not run the install script: $OUT"
+[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "interactive: drop-in deployed although check fails"
+[[ "$OUT" == *"faketool: drop-in held until the tool is installed"* ]] || fail "interactive: no held message: $OUT"
+age_last_sync
+DOTFILES_CONFIG="$T/config-dt" run sync --auto --no-pull
+[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
+[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "--auto: drop-in deployed although check fails"
+grep -q "faketool: drop-in held until the tool is installed" "$LOG" || fail "--auto: no held message: $(cat "$LOG")"
+sed -i 's/^      check: false$/      check: true/' "$T/hosts-dt/profiles/pendingtest.yaml"
+DOTFILES_CONFIG="$T/config-dt" run sync --no-pull
+[[ -f "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in not deployed once check passes: $OUT"
+if grep -qx faketool "$STATE/pending"; then fail "faketool still pending"; fi
+cat > "$T/hosts-dt/profiles/onlytool.yaml" <<'EOS'
+packages:
+  - name: faketool
+    custom:
+      check: true
+      script: custom/testtool/install.sh
+EOS
+echo "dotfiles: stale" > "$STATE/pending"
+DOTFILES_CONFIG="$T/config-dt" run sync --no-pull --profile onlytool
+[[ $RC -eq 0 ]] || fail "onlytool sync failed: $OUT"
+[[ -e "$STATE/pending" && ! -s "$STATE/pending" ]] || fail "pending not emptied: $(cat "$STATE/pending" 2>&1)"
+pass "drop-in held while check fails (interactive and --auto), deployed once it passes"
 
 echo
 echo "All sync tests passed"

@@ -71,7 +71,8 @@ declare -a PUSH_HOSTS=()
 EXIT_CODE=0
 SYNC_NO_PULL=false
 SYNC_RECORD=false
-CHECK_ONLY=false    # --auto: phases 1 and 2 only check, never install
+CHECK_ONLY=false    # --auto without passwordless sudo: phases 1 and 2 only check, never install
+SYNC_CAN_SUDO=false # --auto: sudo -n works, so phases 1 and 2 install with stdin closed
 # Packages still missing (names from the profile); apps whose state version changed
 declare -a PENDING=()
 declare -a UPDATED_APPS=()
@@ -83,6 +84,16 @@ SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
 # Usage: run_on_target command
 run_on_target() {
     eval "$@" 9>&-
+}
+
+# Run an install command; in --auto its stdin is /dev/null so nothing can prompt
+# Usage: run_install command [args...]
+run_install() {
+    if [[ "$SYNC_AUTO" == true ]]; then
+        "$@" </dev/null
+    else
+        "$@"
+    fi
 }
 
 # Detect package manager
@@ -174,7 +185,7 @@ run_phase_os_packages() {
 
     log_info "[$target] Packages to install: ${missing[*]}"
 
-    # --auto never installs OS packages: report them as pending
+    # --auto without passwordless sudo never installs OS packages: report them as pending
     if [[ "$CHECK_ONLY" == true ]]; then
         log_info "[$target] Check only: ${#missing[@]} package(s) pending: ${missing_names[*]}"
         PENDING+=("${missing_names[@]}")
@@ -189,13 +200,13 @@ run_phase_os_packages() {
 
     case "$pkg_manager" in
         apt)
-            run_on_target "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
+            run_install run_on_target "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
             ;;
         dnf)
-            run_on_target "sudo dnf install -y -q ${missing[*]}"
+            run_install run_on_target "sudo dnf install -y -q ${missing[*]}"
             ;;
         brew)
-            run_on_target "brew install ${missing[*]}"
+            run_install run_on_target "brew install ${missing[*]}"
             ;;
     esac
 
@@ -231,7 +242,7 @@ run_phase_custom_installs() {
         if [[ -n "$check" ]] && run_on_target "$check" &>/dev/null; then
             log_info "[$target] $name: already installed"
         elif [[ "$CHECK_ONLY" == true ]]; then
-            # --auto never runs install scripts. Without a check we cannot tell
+            # Check-only --auto never runs install scripts. Without a check we cannot tell
             # whether the tool is missing, so it is not reported as pending.
             if [[ -n "$check" ]]; then
                 log_info "[$target] $name: not installed (pending, install skipped)"
@@ -253,7 +264,7 @@ run_phase_custom_installs() {
                 continue
             fi
 
-            if bash "$script_path" 9>&-; then
+            if run_install bash "$script_path" 9>&-; then
                 log_success "[$target] Custom install complete: $name"
                 if [[ -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
                     PENDING+=("$name")
@@ -267,8 +278,11 @@ run_phase_custom_installs() {
             fi
         fi
 
-        # Always install dropin (even if tool was already installed)
-        if [[ -n "$dropin" ]]; then
+        # Deploy the dropin only when the tool is there: no check, or the check
+        # passes after the install step. An existing copy is never removed.
+        if [[ -n "$dropin" && -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
+            log_info "[$target] $name: drop-in held until the tool is installed"
+        elif [[ -n "$dropin" ]]; then
             local dropin_src="$SCRIPT_DIR/packages/$dropin"
             local dropin_dest="$SHELL_SCRIPTS_DIR/$(basename "$dropin")"
             if [[ -f "$dropin_src" ]]; then
@@ -696,8 +710,7 @@ cleanup() {
 sync_record() {
     sync_touch_last
     if [[ "$SYNC_AUTO" == true ]]; then
-        sync_write_report "$(sync_state_dir)/last-sync.log" \
-            "$(IFS=,; echo "${UPDATED_APPS[*]}")" "$(IFS=,; echo "${PENDING[*]}")"
+        sync_write_report "$(sync_state_dir)/last-sync.log" "$(IFS=,; echo "${UPDATED_APPS[*]}")"
     else
         sync_clear_report
     fi
@@ -915,6 +928,13 @@ main() {
             exec >"$log" 2>&1
             echo "dotfiles sync --auto $(date +%Y-%m-%dT%H:%M:%S%z)"
             export GIT_SETUP_SKIP=true
+            # Install for real only if sudo works without a password. stdin is
+            # /dev/null and fd 9 (the lock) closed, so the probe can never prompt or hang.
+            if command -v sudo >/dev/null 2>&1 && sudo -n true </dev/null >/dev/null 2>&1 9>&-; then
+                SYNC_CAN_SUDO=true
+                CHECK_ONLY=false
+                log_info "passwordless sudo: installing packages"
+            fi
         fi
         # From here on the EXIT trap records the run, however it ends
         SYNC_RECORD=true

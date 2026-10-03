@@ -29,7 +29,7 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 | `packages[].custom` | object | No | — | Custom install definition (for tools not in package managers). |
 | `packages[].custom.check` | string | Yes | — | Shell command to test if already installed (exit 0 = installed). |
 | `packages[].custom.script` | string | Yes | — | Install script path, relative to `packages/`. |
-| `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `packages/`), copied to `${SHELL_SCRIPTS_DIR}`. |
+| `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `packages/`), copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or the entry has no `check`). An existing copy is never removed. |
 | `packages[].config` | object | No | — | Dotfiles config deployment definition. |
 | `packages[].config.dir` | string | Yes | — | App module directory (relative to repo root) containing `install.sh` and `files/`. |
 | `packages[].config.flags` | string | No | — | Extra flags passed to the app's `install.sh` (e.g., `--append`). |
@@ -38,7 +38,7 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 
 dotfiles processes the unified list in three phases:
 1. **Phase 1: OS packages** — Collect all `apt`/`dnf`/`brew` values, batch into one package manager call.
-2. **Phase 2: Custom installs** — Run each `custom` entry's script (if `check` fails), install dropins.
+2. **Phase 2: Custom installs** — Run each `custom` entry's script (if `check` fails), then install its dropin if `check` now passes (or there is no `check`); otherwise the log says `<name>: drop-in held until the tool is installed`.
 3. **Phase 3: Configs** — For each entry with `config.dir`, call `<dir>/install.sh deploy [flags]`.
 
 **Example — base profile:**
@@ -239,7 +239,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 - Pull is `git pull --ff-only` and nothing else. A failed pull (diverged, no network, no access) is a warning, not a failure: the repo is left untouched, the sync continues with what is checked out, and the exit code stays 0. A repo that is not a git work tree, or has no upstream branch, is skipped silently.
 - `--no-pull` skips the pull of both repos.
-- `--auto` is the background mode used by the login drop-in (see Background sync). It never installs OS packages or runs custom install scripts, never prompts, and applies configs only.
+- `--auto` is the background mode used by the login drop-in (see Background sync). It never prompts. It installs OS packages and runs custom install scripts only when sudo works without a password; otherwise it only checks them and applies configs.
 - A sync takes a lock in the state directory. A second concurrent sync exits with `dotfiles: sync already running` (an `--auto` run exits silently).
 - `--dry-run` previews without changing anything: no lock, no pull, no self-install, and the state files are not touched.
 - The other flags (`--profile`, `--hosts-dir`, `--hostname`, `--no-backup`, `--verbose`, `--quiet`, `--force`, `--skip-git-setup`, `--shell-scripts-dir`, `--log`) are listed in `dotfiles help`.
@@ -271,13 +271,21 @@ A real `sync` (not `--dry-run`) installs two things, so the checkout becomes the
 The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new terminal it:
 
 1. Prints the report left by the previous background sync (if any), then deletes it.
-2. Unless `DOTFILES_NO_AUTO_SYNC` is set to a non-empty value, or `dotfiles` is not on `PATH`, starts `dotfiles sync --auto` detached in the background (`setsid` when available, else a plain background subshell). Its output goes to `launch.log` in the state directory (overwritten each time), so failures before `last-sync.log` exists are visible.
+2. While `pending` in the state directory is non-empty, prints at every terminal:
+
+       dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles sync'
+
+   A sync that installs everything leaves `pending` empty, and the reminder stops.
+3. Unless `DOTFILES_NO_AUTO_SYNC` is set to a non-empty value, or `dotfiles` is not on `PATH`, starts `dotfiles sync --auto` detached in the background (`setsid` when available, else a plain background subshell). Its output goes to `launch.log` in the state directory (overwritten each time), so failures before `last-sync.log` exists are visible.
 
 `sync --auto` then:
 
 - Pulls with a bounded git: ssh `ConnectTimeout=10`, `ServerAliveInterval=15`, `ServerAliveCountMax=2` (plus `BatchMode=yes`) unless `GIT_SSH_COMMAND` is set, `http.lowSpeedLimit=1000`/`http.lowSpeedTime=30`, and `timeout 300` where available. A timeout is a pull failure (warning). Only a repo whose top level is the path itself is pulled; a pushed copy inside a tracked directory is skipped.
 - Exits at once, changing nothing, if `auto_sync: off` or the last sync is younger than `auto_sync_interval` (default `4h`). `auto_sync_interval=0m` means always sync. A `last-sync` timestamp in the future (clock skew) does not throttle.
-- Otherwise pulls both repos, then applies configs only. It never installs OS packages or runs custom install scripts, and never prompts. Missing packages are recorded as pending instead.
+- Otherwise pulls both repos, then probes `sudo -n true` (stdin `/dev/null`, the lock's fd closed, so it can never prompt or hang):
+  - If it succeeds, phases 1 and 2 run for real with stdin `/dev/null` for every install command. The log notes `passwordless sudo: installing packages`.
+  - If not (or there is no `sudo`), phases 1 and 2 only check: nothing is installed, and missing packages and custom tools are recorded as pending.
+  - Either way, whatever is still missing afterwards is pending, and a custom tool's drop-in is deployed only once its `check` passes.
 - Writes its output to `last-sync.log`, touches `last-sync` even when it fails (so a broken sync does not retry in every terminal), and writes the report.
 
 ### Report
@@ -287,11 +295,10 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 | Line | Meaning |
 |---|---|
 | `dotfiles: updated a, b` | Apps whose config was successfully updated. |
-| `dotfiles: N package(s) pending (a, b) — run 'dotfiles sync'` | Packages or custom tools not installed, left for a manual sync. |
 | `dotfiles: <path>: pull failed (<reason>) — see <log>` | A pull failed; the repo was left as it was. |
 | `dotfiles: sync failed (<items>) — see <log>` | Items that failed. An early abort before any app ran (missing hosts dir, ...) reports `sync failed (setup)`. An unusable config file (bad `auto_sync`, `auto_sync_interval` or `hostname`) reports `sync failed (config)` with the error text in the log. The config cannot supply the interval then, so the default `4h` throttle applies: the error is reported at most once per 4 hours. |
 
-`<log>` is `last-sync.log`. A manual (non-`--auto`) sync removes a stale report.
+`<log>` is `last-sync.log`. A manual (non-`--auto`) sync removes a stale report. Pending packages are not in the report; the reminder above shows them at every terminal instead.
 
 ### State directory
 
@@ -304,7 +311,7 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 | `last-sync.log` | Output of the last `--auto` run. |
 | `launch.log` | Output of the login drop-in's launch of `dotfiles sync --auto`; overwritten each time. |
 | `report` | Message shown at the next terminal, removed once shown. |
-| `pending` | Packages still to install, one per line. Shown by `dotfiles status`. Refreshed by each real sync. |
+| `pending` | Packages still to install, one per line. Shown by `dotfiles status` and by the reminder at every terminal. Refreshed by each real sync; empty when nothing is missing. |
 
 ### Turning it off
 
