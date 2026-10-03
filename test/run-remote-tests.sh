@@ -58,9 +58,9 @@ T="/tmp/dotfiles-test-remote-$$"
 trap 'rm -rf "$T"' EXIT
 rm -rf "$T"
 mkdir -p "$T/home"
-cp -R "$SCRIPT_DIR/fixtures/hosts-repo" "$T/hosts-repo"
-printf 'hosts_repo=%s\n' "$T/hosts-repo" > "$T/push-cfg"
-unset DOTFILES_HOSTS_REPO
+cp -R "$SCRIPT_DIR/fixtures/hosts-dir" "$T/hosts-dir"
+printf 'hosts_dir: %s\n' "$T/hosts-dir" > "$T/push-cfg"
+unset DOTFILES_HOSTS_DIR
 export HOME="$T/home"
 export XDG_STATE_HOME="$T/xdg-state"
 export STATE_DIR="$T/state"

@@ -21,7 +21,7 @@ echo "Push Tests (local)"
 echo "======================================"
 echo
 
-unset DOTFILES_HOSTS_REPO
+unset DOTFILES_HOSTS_DIR
 T="/tmp/dotfiles-test-push-$$"
 trap 'rm -rf "$T"' EXIT
 rm -rf "$T"

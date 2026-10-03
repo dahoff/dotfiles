@@ -45,16 +45,16 @@ declare -a PKG_CONFIG_FLAGS=()
 COMMAND=""
 INSTALLER_CMD=""
 PROFILE_ARG=""
-HOSTS_REPO=""
+HOSTS_DIR=""
 HOSTNAME_ARG=""
 DOTFILES_REPO=""
 AUTO_SYNC="on"
 AUTO_SYNC_SECONDS=14400
-DEFAULT_HOSTS_REPO="$HOME/.local/share/dotfiles/dotfiles-hosts"
+DEFAULT_HOSTS_DIR="$HOME/.local/share/dotfiles/dotfiles-hosts"
 
 # Resolution results (set by load_packages_for_profile)
 RESOLVED_PROFILE=""
-declare -a HOSTS_PROFILE_CHAIN=()   # hosts-repo profiles in the chain, base-most first
+declare -a HOSTS_PROFILE_CHAIN=()   # hosts-dir profiles in the chain, base-most first
 HOST_YAML=""
 OVERLAY_HOST=""
 
@@ -485,14 +485,14 @@ Profile options:
   --profile NAME       Use a specific profile (default: complete)
                        Profiles are defined in profiles/<name>.yaml
 
-Hosts repo options:
-  --hosts-repo PATH    dotfiles-hosts checkout (default: env DOTFILES_HOSTS_REPO)
+Hosts dir options:
+  --hosts-dir PATH     dotfiles-hosts checkout (default: env DOTFILES_HOSTS_DIR)
                        Profiles are looked up there first, then in profiles/
   --hostname NAME      Host directory hosts/NAME/ to apply (default: hostname -s)
 
 Sync options:
   --auto               Background mode (used by the login drop-in)
-  --no-pull            Do not git pull the dotfiles and hosts repos
+  --no-pull            Do not git pull the dotfiles and hosts dirs
 
 Options (passed through to each app's installer):
   --dry-run            Show what would be done without making changes
@@ -570,12 +570,12 @@ parse_args() {
                 PROFILE_ARG="$2"
                 shift 2
                 ;;
-            --hosts-repo)
+            --hosts-dir)
                 if [[ $# -lt 2 || "$2" == --* ]]; then
-                    echo "Error: --hosts-repo requires a path argument" >&2
+                    echo "Error: --hosts-dir requires a path argument" >&2
                     exit 1
                 fi
-                HOSTS_REPO="$2"
+                HOSTS_DIR="$2"
                 shift 2
                 ;;
             --hostname)
@@ -639,31 +639,22 @@ parse_args() {
 }
 
 # Fill in settings from flags, env, the config file and defaults.
-# Precedence: flag > env DOTFILES_HOSTS_REPO (hosts repo only) > config > default.
-# parse_args has set PROFILE_ARG/HOSTS_REPO/HOSTNAME_ARG only from flags.
+# Precedence: flag > env DOTFILES_HOSTS_DIR (hosts dir only) > config > default.
+# parse_args has set PROFILE_ARG/HOSTS_DIR/HOSTNAME_ARG only from flags.
 resolve_settings() {
-    local config_file="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
+    local config_file="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config.yaml}"
     config_load "$config_file" || return 1
 
     # The running code is always the repo it was started from
     DOTFILES_REPO="$SCRIPT_DIR"
-    if [[ -n "$CFG_DOTFILES_REPO" ]]; then
-        if [[ ! -d "$CFG_DOTFILES_REPO" ]]; then
-            log_error "dotfiles repo not found: $CFG_DOTFILES_REPO"
-            return 1
-        fi
-        if [[ "$(cd "$CFG_DOTFILES_REPO" && pwd -P)" != "$(cd "$SCRIPT_DIR" && pwd -P)" ]]; then
-            log_warn "Running $SCRIPT_DIR/dotfiles but config dotfiles_repo is $CFG_DOTFILES_REPO"
-        fi
-    fi
 
-    if [[ -z "$HOSTS_REPO" ]]; then
-        if [[ -n "${DOTFILES_HOSTS_REPO:-}" ]]; then
-            HOSTS_REPO="$DOTFILES_HOSTS_REPO"
-        elif [[ -n "$CFG_HOSTS_REPO" ]]; then
-            HOSTS_REPO="$CFG_HOSTS_REPO"
-        elif [[ -d "$DEFAULT_HOSTS_REPO" ]]; then
-            HOSTS_REPO="$DEFAULT_HOSTS_REPO"
+    if [[ -z "$HOSTS_DIR" ]]; then
+        if [[ -n "${DOTFILES_HOSTS_DIR:-}" ]]; then
+            HOSTS_DIR="$DOTFILES_HOSTS_DIR"
+        elif [[ -n "$CFG_HOSTS_DIR" ]]; then
+            HOSTS_DIR="$CFG_HOSTS_DIR"
+        elif [[ -d "$DEFAULT_HOSTS_DIR" ]]; then
+            HOSTS_DIR="$DEFAULT_HOSTS_DIR"
         fi
     fi
     [[ -n "$HOSTNAME_ARG" ]] || HOSTNAME_ARG="$CFG_HOSTNAME"
@@ -753,7 +744,7 @@ status_age() {
 # writes state (SYNC_RECORD stays false). Resolution errors are printed and
 # the command still exits 0.
 cmd_status() {
-    local config_file="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config}"
+    local config_file="${DOTFILES_CONFIG:-$HOME/.config/dotfiles/config.yaml}"
     # Not sync_state_dir: that creates the directory
     local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles"
     local ok=true
@@ -761,14 +752,14 @@ cmd_status() {
     resolve_settings || ok=false
 
     printf '%-17s%s\n' "dotfiles repo:" "$(status_describe_repo "$SCRIPT_DIR")"
-    if [[ -z "$HOSTS_REPO" ]]; then
-        printf '%-17s%s\n' "hosts repo:" "none"
-    elif [[ -d "$HOSTS_REPO" ]]; then
-        HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
-        printf '%-17s%s\n' "hosts repo:" "$(status_describe_repo "$HOSTS_REPO")"
+    if [[ -z "$HOSTS_DIR" ]]; then
+        printf '%-17s%s\n' "hosts dir:" "none"
+    elif [[ -d "$HOSTS_DIR" ]]; then
+        HOSTS_DIR="$(cd "$HOSTS_DIR" && pwd)"
+        printf '%-17s%s\n' "hosts dir:" "$(status_describe_repo "$HOSTS_DIR")"
     else
-        printf '%-17s%s\n' "hosts repo:" "$HOSTS_REPO  (not found)"
-        log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
+        printf '%-17s%s\n' "hosts dir:" "$HOSTS_DIR  (not found)"
+        log_error "Hosts dir not found or not a directory: $HOSTS_DIR"
         ok=false
     fi
     if [[ -f "$config_file" ]]; then
@@ -780,7 +771,7 @@ cmd_status() {
     # Host and profile
     local host host_note="(no host directory)" profile_note=""
     host="${HOSTNAME_ARG:-$(hosts_local_name)}"
-    [[ -n "$HOSTS_REPO" && -f "$HOSTS_REPO/hosts/$host/host.yaml" ]] && host_note="(hosts/$host/host.yaml)"
+    [[ -n "$HOSTS_DIR" && -f "$HOSTS_DIR/hosts/$host/host.yaml" ]] && host_note="(hosts/$host/host.yaml)"
     if [[ "$ok" == true ]]; then
         if load_packages_for_profile "$PROFILE_ARG" "$host"; then
             profile_note="   profile: $RESOLVED_PROFILE"
@@ -929,13 +920,13 @@ main() {
         SYNC_RECORD=true
     fi
 
-    # Validate hosts repo before any changes
-    if [[ -n "$HOSTS_REPO" ]]; then
-        if [[ ! -d "$HOSTS_REPO" ]]; then
-            log_error "Hosts repo not found or not a directory: $HOSTS_REPO"
+    # Validate hosts dir before any changes
+    if [[ -n "$HOSTS_DIR" ]]; then
+        if [[ ! -d "$HOSTS_DIR" ]]; then
+            log_error "Hosts dir not found or not a directory: $HOSTS_DIR"
             exit 1
         fi
-        HOSTS_REPO="$(cd "$HOSTS_REPO" && pwd)"
+        HOSTS_DIR="$(cd "$HOSTS_DIR" && pwd)"
     fi
 
     [[ "$COMMAND" != "push" ]] || cmd_push
@@ -943,15 +934,9 @@ main() {
     if [[ "$COMMAND" == "sync" ]]; then
         if [[ "$SYNC_NO_PULL" != true ]] && ! is_dry_run; then
             sync_pull_one "$DOTFILES_REPO"
-            [[ -z "$HOSTS_REPO" ]] || sync_pull_one "$HOSTS_REPO"
+            [[ -z "$HOSTS_DIR" ]] || sync_pull_one "$HOSTS_DIR"
         fi
-        # Link to the configured repo (not whichever checkout ran last); fall
-        # back to the running checkout when none is configured
-        local install_repo="$DOTFILES_REPO"
-        if [[ -n "$CFG_DOTFILES_REPO" && -x "$CFG_DOTFILES_REPO/dotfiles" ]]; then
-            install_repo="$CFG_DOTFILES_REPO"
-        fi
-        is_dry_run || sync_self_install "$install_repo" "$SHELL_SCRIPTS_DIR"
+        is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
     fi
 
     run_all "$PROFILE_ARG"

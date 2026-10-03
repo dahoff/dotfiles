@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# config.sh - Per-host config file (~/.config/dotfiles/config)
-# key=value lines, parsed (never sourced). Requires lib/logging.sh.
+# config.sh - Per-host config file (~/.config/dotfiles/config.yaml)
+# Flat YAML "key: value" lines, parsed (never sourced). Requires lib/logging.sh.
 
 CFG_FILE=""
-CFG_DOTFILES_REPO=""
-CFG_HOSTS_REPO=""
+CFG_HOSTS_DIR=""
 CFG_HOSTNAME=""
 CFG_PROFILE=""
 CFG_AUTO_SYNC="on"
@@ -29,8 +28,7 @@ config_interval_seconds() {
 config_load() {
     local file="$1"
     CFG_FILE="$file"
-    CFG_DOTFILES_REPO=""
-    CFG_HOSTS_REPO=""
+        CFG_HOSTS_DIR=""
     CFG_HOSTNAME=""
     CFG_PROFILE=""
     CFG_AUTO_SYNC="on"
@@ -44,22 +42,40 @@ config_load() {
         line="${line//$'\r'/}"
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
 
-        if [[ "$line" != *=* ]]; then
-            log_warn "$file:$n: ignoring line without '=': $line"
+        if [[ "$line" =~ ^[[:space:]] || "$line" == "- "* || "$line" == "-" ]]; then
+            log_warn "$file:$n: ignoring indented line or list item (only flat 'key: value' is supported): $line"
             continue
         fi
-        key="${line%%=*}"
-        value="${line#*=}"
-        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
-        value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+        # Only the first ': ' (or a trailing ':') splits key from value
+        if [[ "$line" == *": "* ]]; then
+            key="${line%%: *}"
+            value="${line#*: }"
+        elif [[ "$line" == *: ]]; then
+            key="${line%:}"
+            value=""
+        else
+            log_warn "$file:$n: ignoring line without 'key: value': $line"
+            continue
+        fi
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
 
         if [[ ! "$key" =~ ^[a-z_]+$ ]]; then
             log_warn "$file:$n: ignoring malformed line: $line"
             continue
         fi
-        if [[ ${#value} -ge 2 && ( "${value:0:1}" == '"' || "${value:0:1}" == "'" ) \
-              && "${value: -1}" == "${value:0:1}" ]]; then
+        if [[ "$value" =~ ^(\"[^\"]*\"|\'[^\']*\')([[:space:]]+#.*)?[[:space:]]*$ ]]; then
+            # Quoted: strip the pair; '#' inside the quotes is kept
+            value="${BASH_REMATCH[1]}"
             value="${value:1:${#value}-2}"
+        else
+            # Unquoted: a trailing ' #...' is a comment
+            if [[ "$value" =~ ^(.*[^[:space:]])?[[:space:]]+#.*$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            elif [[ "$value" == "#"* ]]; then
+                value=""
+            fi
+            value="${value%"${value##*[![:space:]]}"}"
         fi
         # Expand a leading ~ (harmless for non-path values)
         if [[ "$value" == "~" ]]; then
@@ -69,8 +85,7 @@ config_load() {
         fi
 
         case "$key" in
-            dotfiles_repo) CFG_DOTFILES_REPO="$value" ;;
-            hosts_repo) CFG_HOSTS_REPO="$value" ;;
+            hosts_dir) CFG_HOSTS_DIR="$value" ;;
             hostname)
                 if [[ -z "$value" || "$value" == */* || "$value" == . || "$value" == .. ]]; then
                     log_error "$file:$n: hostname must be a plain name without '/': $value"
@@ -81,12 +96,14 @@ config_load() {
                 ;;
             profile) CFG_PROFILE="$value" ;;
             auto_sync)
-                if [[ "$value" == on || "$value" == off ]]; then
-                    CFG_AUTO_SYNC="$value"
-                else
-                    log_error "$file:$n: auto_sync must be 'on' or 'off': $value"
-                    rc=1
-                fi
+                case "$value" in
+                    on|true|yes) CFG_AUTO_SYNC=on ;;
+                    off|false|no) CFG_AUTO_SYNC=off ;;
+                    *)
+                        log_error "$file:$n: auto_sync must be on/off (or true/false/yes/no): $value"
+                        rc=1
+                        ;;
+                esac
                 ;;
             auto_sync_interval)
                 if config_interval_seconds "$value" >/dev/null; then

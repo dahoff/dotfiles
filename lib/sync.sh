@@ -73,15 +73,33 @@ sync_pull_repo() {
     return 0
 }
 
-# Install the command symlink and the login drop-in
+# Install the command symlink and the login drop-in.
+# The symlink is created only when missing or dangling; a valid link to another
+# checkout, or a regular file, is left alone with a warning. The drop-in is
+# copied from the repo the link resolves to.
 # Usage: sync_self_install DOTFILES_REPO SHELL_SCRIPTS_DIR
 sync_self_install() {
     local repo="$1" scripts_dir="$2"
-    local src="$repo/lib/login.sh"
+    local link="$HOME/.local/bin/dotfiles"
+    local src_repo="$repo"
 
     mkdir -p "$HOME/.local/bin"
-    ln -sfn "$repo/dotfiles" "$HOME/.local/bin/dotfiles"
-    log_debug "Linked $HOME/.local/bin/dotfiles -> $repo/dotfiles"
+    if [[ -L "$link" && -e "$link" ]]; then
+        local current wanted
+        current=$(readlink -f "$link")
+        wanted=$(readlink -f "$repo/dotfiles")
+        if [[ "$current" != "$wanted" ]]; then
+            log_warn "~/.local/bin/dotfiles points at $current; leaving it (remove the link to switch to $repo)"
+            src_repo="$(dirname "$current")"
+        fi
+    elif [[ -e "$link" ]]; then
+        log_warn "~/.local/bin/dotfiles is not a symlink; leaving it (remove it to link $repo/dotfiles)"
+    else
+        ln -sfn "$repo/dotfiles" "$link"
+        log_debug "Linked $link -> $repo/dotfiles"
+    fi
+    local src="$src_repo/lib/login.sh"
+    [[ -f "$src" ]] || src="$repo/lib/login.sh"
 
     mkdir -p "$scripts_dir"
     if ! cmp -s "$src" "$scripts_dir/90-dotfiles.sh"; then

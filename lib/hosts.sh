@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hosts.sh - dotfiles-hosts repo helpers (profile lookup, host.yaml parsing)
+# hosts.sh - dotfiles-hosts dir helpers (profile lookup, host.yaml parsing)
 
 # Host name used for hosts/<name>/: strips user@ and the domain.
 # IPv4 addresses are kept whole.
@@ -20,12 +20,12 @@ hosts_local_name() {
     echo "${h%%.*}"
 }
 
-# Resolve a profile name: hosts repo first (unless skip_hosts), then dotfiles
-# Usage: hosts_resolve_profile_path profiles_dir hosts_repo name skip_hosts
+# Resolve a profile name: hosts dir first (unless skip_hosts), then dotfiles
+# Usage: hosts_resolve_profile_path profiles_dir hosts_dir name skip_hosts
 hosts_resolve_profile_path() {
-    local profiles_dir="$1" hosts_repo="$2" name="$3" skip_hosts="${4:-false}"
-    if [[ -n "$hosts_repo" && "$skip_hosts" != true && -f "$hosts_repo/profiles/$name.yaml" ]]; then
-        echo "$hosts_repo/profiles/$name.yaml"
+    local profiles_dir="$1" hosts_dir="$2" name="$3" skip_hosts="${4:-false}"
+    if [[ -n "$hosts_dir" && "$skip_hosts" != true && -f "$hosts_dir/profiles/$name.yaml" ]]; then
+        echo "$hosts_dir/profiles/$name.yaml"
     else
         echo "$profiles_dir/$name.yaml"
     fi

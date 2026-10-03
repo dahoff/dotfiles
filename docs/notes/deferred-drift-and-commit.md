@@ -25,7 +25,7 @@ Turn a local edit into a deliberate change instead of a lost one:
 1. Detect drifted files (as above) and show a diff of live vs deployed.
 2. For each change, ask where it belongs:
    - **host-specific**: `dotfiles-hosts/hosts/<hostname>/apps/<app>/files/...`
-   - **hosts-repo profile default**: `dotfiles-hosts/profiles/<profile>/apps/<app>/files/...`
+   - **hosts-dir profile default**: `dotfiles-hosts/profiles/<profile>/apps/<app>/files/...`
    - **dotfiles default**: `dotfiles/<app>/files/...`
 3. Write the change into the chosen layer (for `merge` files, only the changed keys), then
    commit and optionally push that repo.

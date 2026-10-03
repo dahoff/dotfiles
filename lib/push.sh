@@ -110,7 +110,7 @@ push_host() {
             log_error "[$host] could not build the dotfiles payload"
             return 1
         fi
-        if [[ -n "$HOSTS_REPO" ]] && ! push_build_payload "$HOSTS_REPO" "$dir/hosts.tar"; then
+        if [[ -n "$HOSTS_DIR" ]] && ! push_build_payload "$HOSTS_DIR" "$dir/hosts.tar"; then
             log_error "[$host] could not build the hosts payload"
             return 1
         fi

@@ -21,7 +21,7 @@ echo "Sync Pipeline Tests"
 echo "======================================"
 echo
 
-unset DOTFILES_HOSTS_REPO
+unset DOTFILES_HOSTS_DIR
 HAVE_FLOCK=true
 command -v flock >/dev/null 2>&1 || { HAVE_FLOCK=false; info "flock not found: lock cases will be skipped"; }
 HAVE_RSYNC=true
@@ -71,11 +71,10 @@ git -C "$WORK/dotfiles" commit -q --allow-empty -m wip
 git -C "$WORK/dotfiles" push -q origin HEAD
 git -C "$WORK/author" pull -q
 
-cp -R "$TEST_DIR/fixtures/hosts-repo" "$T/hosts-repo"
+cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/hosts-dir"
 cat > "$T/config" <<EOF
-dotfiles_repo=$WORK/dotfiles
-hosts_repo=$T/hosts-repo
-hostname=testhost
+hosts_dir: $T/hosts-dir
+hostname: testhost
 EOF
 
 STATE="$XDG_STATE_HOME/dotfiles"
@@ -172,9 +171,8 @@ pass "no stash or rebase despite user config"
 info "Case 6: non-git dotfiles repo"
 copy_tree "$WORK/dotfiles" "$T/nogit"
 cat > "$T/config-nogit" <<EOF
-dotfiles_repo=$T/nogit
-hosts_repo=$T/hosts-repo
-hostname=testhost
+hosts_dir: $T/hosts-dir
+hostname: testhost
 EOF
 RC=0
 OUT=$(DOTFILES_CONFIG="$T/config-nogit" "$T/nogit/dotfiles" sync --no-backup --skip-git-setup 2>&1) || RC=$?
@@ -237,7 +235,7 @@ else
 (setsid sleep 4711 >/dev/null 2>&1 &)
 exit 0
 EOS
-    cat > "$T/hosts-repo/profiles/sleeper.yaml" <<'EOS'
+    cat > "$T/hosts-dir/profiles/sleeper.yaml" <<'EOS'
 packages:
   - name: sleeptest
     config:
@@ -283,7 +281,7 @@ pass "throttle skips recent, runs old and logs"
 
 # Case 12
 info "Case 12: auto_sync=off"
-echo "auto_sync=off" >> "$T/config"
+echo "auto_sync: off" >> "$T/config"
 age_last_sync
 OLDSUM=$(cksum < "$LOG")
 OLDTIME=$(stat -c %Y "$STATE/last-sync")
@@ -296,8 +294,8 @@ pass "auto_sync=off leaves everything alone"
 
 # Case 13
 info "Case 13: config-only with pending packages"
-sed -i 's/^hostname=.*/hostname=nohost/' "$T/config"
-echo "profile=pendingtest" >> "$T/config"
+sed -i 's/^hostname: .*/hostname: nohost/' "$T/config"
+echo "profile: pendingtest" >> "$T/config"
 rm -rf "$HOME/.bashrc.d/50-lazygit.sh" "$HOME/.claude" "$STATE/report" "$T/sudo-called"
 age_last_sync
 RC=0
@@ -315,7 +313,7 @@ pass "config-only, pending recorded, drop-in deployed"
 # Case 14
 info "Case 14: updated apps in report"
 cp "$T/config.orig" "$T/config"
-echo "profile=base" >> "$T/config"
+echo "profile: base" >> "$T/config"
 OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STATE="$STATE"
 export HOME="$T/home2" STATE_DIR="$T/state2" XDG_STATE_HOME="$T/xdg-state2"
 mkdir -p "$HOME" "$STATE_DIR/apps"
@@ -326,7 +324,7 @@ grep -q '^dotfiles: updated claude, scripts' "$STATE/report" || fail "bad report
 age_last_sync
 run sync --auto
 [[ ! -e "$STATE/report" ]] || fail "report written without changes: $(cat "$STATE/report")"
-echo "# changed" >> "$T/hosts-repo/profiles/base/apps/claude/files/tmux-notify.sh"
+echo "# changed" >> "$T/hosts-dir/profiles/base/apps/claude/files/tmux-notify.sh"
 age_last_sync
 run sync --auto
 grep -q '^dotfiles: updated claude$' "$STATE/report" || fail "bad report after change: $(cat "$STATE/report" 2>&1)"
@@ -352,7 +350,7 @@ pass "pull failure reported"
 
 # Case 16
 info "Case 16: validation failure in --auto"
-sed -i 's/^hostname=.*/hostname=typo/' "$T/config"
+sed -i 's/^hostname: .*/hostname: typo/' "$T/config"
 age_last_sync
 rm -f "$STATE/report"
 run sync --auto
@@ -366,8 +364,8 @@ pass "validation failure reported, last-sync touched"
 
 # Case 16b
 info "Case 16b: failed installer is not reported as updated"
-cp -R "$TEST_DIR/fixtures/hosts-repo" "$T/hosts-bad"
-sed -i "s#^hosts_repo=.*#hosts_repo=$T/hosts-bad#; s/^hostname=.*/hostname=badjson/" "$T/config"
+cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/hosts-bad"
+sed -i "s#^hosts_dir: .*#hosts_dir: $T/hosts-bad#; s/^hostname: .*/hostname: badjson/" "$T/config"
 export HOME="$T/home3" STATE_DIR="$T/state3" XDG_STATE_HOME="$T/xdg-state3"
 mkdir -p "$HOME" "$STATE_DIR/apps"
 STATE="$XDG_STATE_HOME/dotfiles"
@@ -381,7 +379,7 @@ pass "failed installer: failure reported, not updated"
 
 # Case 16c
 info "Case 16c: early abort still reports a failure"
-sed -i "s#^hosts_repo=.*#hosts_repo=/nonexistent#" "$T/config"
+sed -i "s#^hosts_dir: .*#hosts_dir: /nonexistent#" "$T/config"
 age_last_sync
 rm -f "$STATE/report"
 run sync --auto
@@ -443,28 +441,41 @@ OUT=$(PATH="$HOME/.local/bin:$PATH_ORIG" dotfiles status 2>&1) || fail "PATH sta
 pass "symlinked command resolves its repo"
 
 # Case 19
-info "Case 19: self-install links the configured repo"
+info "Case 19: self-install creates the link only when missing or dangling"
 cp -R "$WORK/dotfiles" "$WORK/other"
+echo "# running-checkout marker" >> "$WORK/other/lib/login.sh"
 OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STATE="$STATE"
 export HOME="$T/home4" STATE_DIR="$T/state4" XDG_STATE_HOME="$T/xdg-state4"
 mkdir -p "$HOME" "$STATE_DIR/apps"
-OUT=$("$WORK/other/dotfiles" sync --no-pull --no-backup --skip-git-setup 2>&1) || fail "sync from other checkout failed: $OUT"
-[[ "$(readlink "$HOME/.local/bin/dotfiles")" == "$WORK/dotfiles/dotfiles" ]] \
-    || fail "symlink re-pointed to the running checkout: $(readlink "$HOME/.local/bin/dotfiles")"
-[[ "$OUT" == *"config dotfiles_repo is"* ]] || fail "mismatch warning lost: $OUT"
-rm -rf "$HOME/.local/bin"
-printf 'hostname=testhost\nhosts_repo=%s\n' "$T/hosts-repo" > "$T/config-norepo"
-OUT=$(DOTFILES_CONFIG="$T/config-norepo" "$WORK/other/dotfiles" sync --no-pull --no-backup --skip-git-setup 2>&1) || fail "sync failed: $OUT"
-[[ "$(readlink "$HOME/.local/bin/dotfiles")" == "$WORK/other/dotfiles" ]] \
-    || fail "no dotfiles_repo: expected the running checkout: $(readlink "$HOME/.local/bin/dotfiles")"
+SELF="$HOME/.local/bin/dotfiles"
+selfrun() { OUT=$("$WORK/other/dotfiles" sync --no-pull --no-backup --skip-git-setup 2>&1) || fail "sync from other checkout failed: $OUT"; }
+# (a) no link: created, pointing at the running checkout
+selfrun
+[[ "$(readlink "$SELF")" == "$WORK/other/dotfiles" ]] || fail "(a) link not created: $(readlink "$SELF")"
+# (b) a valid link to checkout A while running from B: unchanged, with a warning,
+# and the drop-in comes from A
+rm "$SELF"; ln -s "$WORK/dotfiles/dotfiles" "$SELF"
+selfrun
+[[ "$(readlink "$SELF")" == "$WORK/dotfiles/dotfiles" ]] || fail "(b) valid link re-pointed: $(readlink "$SELF")"
+[[ "$OUT" == *"leaving it"* ]] || fail "(b) no 'leaving it' warning: $OUT"
+cmp -s "$WORK/dotfiles/lib/login.sh" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "(b) drop-in not taken from the linked checkout"
+# (c) a dangling link: re-created to the running checkout
+rm "$SELF"; ln -s "$T/does-not-exist/dotfiles" "$SELF"
+selfrun
+[[ "$(readlink "$SELF")" == "$WORK/other/dotfiles" ]] || fail "(c) dangling link not re-created: $(readlink "$SELF")"
+# (d) a regular file: untouched, with a warning
+rm "$SELF"; echo "#!/bin/sh" > "$SELF"
+selfrun
+[[ ! -L "$SELF" && "$(cat "$SELF")" == "#!/bin/sh" ]] || fail "(d) regular file replaced"
+[[ "$OUT" == *"not a symlink"* ]] || fail "(d) no warning: $OUT"
 export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
 STATE="$OLD_STATE"
-pass "link follows dotfiles_repo, else the running checkout"
+pass "link created only if missing or dangling; valid link or file left with a warning"
 
 # Case 20
 info "Case 20: --auto with a bad config reports it, throttled by the default interval"
 cp "$T/config.orig" "$T/config"
-echo "auto_sync=maybe" >> "$T/config"
+echo "auto_sync: maybe" >> "$T/config"
 rm -f "$STATE/report" "$STATE/last-sync"
 run sync --auto
 [[ $RC -ne 0 ]] || fail "bad config --auto should fail: $OUT"
@@ -476,13 +487,13 @@ run sync --auto
 [[ $RC -eq 0 ]] || fail "second --auto should be throttled (exit 0): $OUT"
 [[ ! -e "$STATE/report" ]] || fail "throttled run wrote a report"
 cp "$T/config.orig" "$T/config"
-echo "hostname=a/b" >> "$T/config"
+echo "hostname: a/b" >> "$T/config"
 age_last_sync
 run sync --auto
 grep -q 'sync failed (config)' "$STATE/report" || fail "bad hostname not reported: $(cat "$STATE/report" 2>&1)"
 rm -f "$STATE/report"
 cp "$T/config.orig" "$T/config"
-echo "auto_sync=maybe" >> "$T/config"
+echo "auto_sync: maybe" >> "$T/config"
 run sync
 [[ $RC -eq 1 && "$OUT" == *"auto_sync must be"* ]] || fail "interactive bad config: rc=$RC $OUT"
 cp "$T/config.orig" "$T/config"

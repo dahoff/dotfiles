@@ -21,7 +21,7 @@ echo "Status Tests"
 echo "======================================"
 echo
 
-unset DOTFILES_HOSTS_REPO
+unset DOTFILES_HOSTS_DIR
 T="/tmp/dotfiles-test-status-$$"
 trap 'rm -rf "$T"' EXIT
 rm -rf "$T"
@@ -33,10 +33,10 @@ export DOTFILES_CONFIG="$T/config"
 export GIT_CONFIG_GLOBAL="$T/gitconfig"
 : > "$GIT_CONFIG_GLOBAL"
 
-cp -R "$TEST_DIR/fixtures/hosts-repo" "$T/hosts-repo"
+cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/hosts-dir"
 cat > "$T/config" <<CFG
-hosts_repo=$T/hosts-repo
-hostname=testhost
+hosts_dir: $T/hosts-dir
+hostname: testhost
 CFG
 cd "$ROOT_DIR"
 
@@ -59,7 +59,7 @@ has_line "auto sync:       on, every 4h — never run"
 has_line "pending:         none"
 has_line "host:            testhost  (hosts/testhost/host.yaml)   profile: base"
 has_line "config:          $T/config"
-has_line "hosts repo:      $T/hosts-repo  (not a git checkout)"
+has_line "hosts dir:       $T/hosts-dir  (not a git checkout)"
 pass "fresh status"
 
 info "Case 4: dotfiles repo shows git branch and sha"
@@ -88,25 +88,25 @@ has_line "— last run just now"
 pass "up to date after sync"
 
 info "Case 3: host layer edit"
-echo '{"edited": true}' > "$T/hosts-repo/hosts/testhost/apps/claude/files/settings.json"
+echo '{"edited": true}' > "$T/hosts-dir/hosts/testhost/apps/claude/files/settings.json"
 run status
 has_line "claude    update available"
 has_line "scripts   up to date"
 pass "update available"
 
 info "Case 5: pushed copy"
-echo "source=koi commit=abc1234" > "$T/hosts-repo/PUSHED"
+echo "source=koi commit=abc1234" > "$T/hosts-dir/PUSHED"
 run status
 has_line "(pushed: source=koi"
 pass "PUSHED file shown"
 
 info "Case 7: missing config, pending list, bad profile"
 rm "$T/config"
-run status --hosts-repo "$T/hosts-repo" --hostname testhost
+run status --hosts-dir "$T/hosts-dir" --hostname testhost
 [[ $RC -eq 0 ]] || fail "status failed: $OUT"
 has_line "(not found, using defaults)"
 printf 'a\nb\n' > "$XDG_STATE_HOME/dotfiles/pending"
-run status --hosts-repo "$T/hosts-repo" --profile nonexistent-profile
+run status --hosts-dir "$T/hosts-dir" --profile nonexistent-profile
 [[ $RC -eq 0 ]] || fail "bad profile must exit 0: $OUT"
 has_line "pending:         a, b"
 has_line "dotfiles repo:"

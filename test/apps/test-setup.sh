@@ -2,7 +2,7 @@
 # test-dotfiles - Setup orchestrator tests
 
 set -euo pipefail
-unset DOTFILES_HOSTS_REPO
+unset DOTFILES_HOSTS_DIR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"

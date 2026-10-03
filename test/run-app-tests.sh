@@ -2,7 +2,7 @@
 # run-app-tests.sh - Run all application-specific tests
 
 set -euo pipefail
-unset DOTFILES_HOSTS_REPO
+unset DOTFILES_HOSTS_DIR
 export DOTFILES_CONFIG="/tmp/dotfiles-test-no-config"
 export XDG_STATE_HOME="/tmp/dotfiles-test-no-xdg-state"
 

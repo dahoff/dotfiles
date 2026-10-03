@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # profile.sh - Profile resolution, package manifest and overlay preparation
-# Sourced by dotfiles. Uses globals declared there: PROFILES_DIR, HOSTS_REPO,
+# Sourced by dotfiles. Uses globals declared there: PROFILES_DIR, HOSTS_DIR,
 # PKG_* arrays, RESOLVED_PROFILE, HOSTS_PROFILE_CHAIN, HOST_YAML, STAGE_ROOT,
 # STRATEGIES_FILE, LAYER_ROOTS, WORK_DIR, SCRIPT_DIR.
 
@@ -144,10 +144,10 @@ load_manifest() {
     return 0
 }
 
-# Resolve profile name to file path (hosts repo first unless skip_hosts)
+# Resolve profile name to file path (hosts dir first unless skip_hosts)
 # Usage: resolve_profile_path name [skip_hosts]
 resolve_profile_path() {
-    hosts_resolve_profile_path "$PROFILES_DIR" "$HOSTS_REPO" "$1" "${2:-false}"
+    hosts_resolve_profile_path "$PROFILES_DIR" "$HOSTS_DIR" "$1" "${2:-false}"
 }
 
 # Apply exclude/include/extra from a profile or host.yaml to PKG_* arrays
@@ -309,7 +309,7 @@ apply_profile_modifiers() {
 
 # Load packages from a profile file into PKG_* arrays
 # Handles 'extends', 'exclude'/'include', and 'extra' directives.
-# A hosts-repo profile that extends its own name continues the lookup in dotfiles.
+# A hosts-dir profile that extends its own name continues the lookup in dotfiles.
 # Usage: load_profile name [skip_hosts] [depth]
 load_profile() {
     local name="$1" skip_hosts="${2:-false}" depth="${3:-0}"
@@ -328,7 +328,7 @@ load_profile() {
     fi
 
     local from_hosts=false
-    if [[ -n "$HOSTS_REPO" && "$profile_path" == "$HOSTS_REPO/profiles/"* ]]; then
+    if [[ -n "$HOSTS_DIR" && "$profile_path" == "$HOSTS_DIR/profiles/"* ]]; then
         from_hosts=true
     fi
 
@@ -386,8 +386,8 @@ load_packages_for_profile() {
         return 1
     fi
 
-    if [[ -n "$HOSTS_REPO" ]]; then
-        local host_dir="$HOSTS_REPO/hosts/$hostname"
+    if [[ -n "$HOSTS_DIR" ]]; then
+        local host_dir="$HOSTS_DIR/hosts/$hostname"
         if [[ -f "$host_dir/host.yaml" ]]; then
             HOST_YAML="$host_dir/host.yaml"
         elif [[ -d "$host_dir" ]]; then
@@ -431,8 +431,8 @@ prepare_overlays() {
 
     local p
     for p in "${HOSTS_PROFILE_CHAIN[@]}"; do
-        LAYER_ROOTS+=("$HOSTS_REPO/profiles/$p")
-        hosts_parse_files_map "$HOSTS_REPO/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
+        LAYER_ROOTS+=("$HOSTS_DIR/profiles/$p")
+        hosts_parse_files_map "$HOSTS_DIR/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
     done
     if [[ -n "$HOST_YAML" ]]; then
         LAYER_ROOTS+=("$(dirname "$HOST_YAML")")
@@ -452,7 +452,7 @@ prepare_overlays() {
             [[ -d "$app_path" ]] || continue
             app=$(basename "$app_path")
             if ! list_contains "$app" "${dirs[@]}"; then
-                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$HOSTS_REPO"/}: not in the package list"
+                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$HOSTS_DIR"/}: not in the package list"
             fi
         done
     done
