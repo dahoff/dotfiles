@@ -729,5 +729,261 @@ DOTFILES_CONFIG="$T/config-dt" run sync --no-pull --profile onlytool
 [[ -e "$STATE/pending" && ! -s "$STATE/pending" ]] || fail "pending not emptied: $(cat "$STATE/pending" 2>&1)"
 pass "drop-in held while check fails (interactive and --auto), deployed once it passes"
 
+# Skipping a sync when nothing changed. ~/.vimrc is the probe: a full sync puts
+# a deleted copy back, a skipped sync leaves it missing.
+fresh_env 9
+SUDOBIN="$NOSUDO"
+git -C "$WORK/dotfiles" config --unset merge.autoStash || true
+git -C "$WORK/dotfiles" config --unset rebase.autoStash || true
+git -C "$WORK/dotfiles" config --unset pull.rebase || true
+git -C "$WORK/dotfiles" fetch -q
+git -C "$WORK/dotfiles" reset -q --hard '@{u}'
+git -C "$WORK/dotfiles" clean -fdq
+HOSTS_FP="$T/hosts-fp"
+mkdir -p "$HOSTS_FP/profiles"
+for p in fptest fpother; do
+    cat > "$HOSTS_FP/profiles/$p.yaml" <<'EOS'
+packages:
+  - name: vim
+    config:
+      dir: vim
+EOS
+done
+cat > "$HOSTS_FP/profiles/fppending.yaml" <<EOS
+packages:
+  - name: vim
+    config:
+      dir: vim
+  - name: faketool
+    custom:
+      check: test -e $T/fp-tool
+      script: ../test/fixtures/testtool/install.sh
+EOS
+cat > "$HOSTS_FP/profiles/fpnocheck.yaml" <<'EOS'
+packages:
+  - name: vim
+    config:
+      dir: vim
+  - name: faketool
+    custom:
+      script: ../test/fixtures/testtool/install.sh
+EOS
+hosts_commit() {
+    git -C "$HOSTS_FP" add -A
+    git -C "$HOSTS_FP" -c user.name=tester -c user.email=tester@example.com commit -q --allow-empty -m "$1"
+}
+git -C "$HOSTS_FP" init -q
+hosts_commit initial
+cat > "$T/config-fp" <<EOF
+hosts_dir: $HOSTS_FP
+hostname: nohost
+profile: fptest
+EOF
+fp_run() { DOTFILES_CONFIG="$T/config-fp" run "$@"; }
+VIMRC="$HOME/.vimrc"
+# A sync that must do the full work puts the probe back
+expect_full() {
+    rm -f "$VIMRC"
+    fp_run "$@"
+    [[ $RC -eq 0 ]] || fail "sync $* failed: $OUT"
+    [[ -f "$VIMRC" ]] || fail "sync $* was skipped, should have run in full: $OUT"
+}
+# A sync that must be skipped leaves the probe missing
+expect_skip() {
+    rm -f "$VIMRC"
+    fp_run "$@"
+    [[ $RC -eq 0 ]] || fail "sync $* failed: $OUT"
+    [[ ! -f "$VIMRC" ]] || fail "sync $* ran in full, should have been skipped: $OUT"
+}
+
+# Case 27
+info "Case 27: an unchanged sync is skipped, and still counts as a sync"
+expect_full sync
+age_last_sync
+expect_skip sync
+[[ -n "$(find "$STATE/last-sync" -mmin -1)" ]] || fail "skipped sync did not update last-sync"
+pass "second sync skipped, last-sync updated"
+
+# Case 28
+info "Case 28: --force and --dry-run are never skipped"
+expect_full sync --force
+rm -f "$VIMRC"
+fp_run sync --dry-run
+[[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
+[[ "$OUT" == *"Would"* ]] || fail "dry-run was skipped: $OUT"
+expect_skip sync
+pass "--force runs in full, --dry-run still reports and leaves the skip in place"
+
+# Case 29
+info "Case 29: a new commit in either repo runs in full"
+author_commit FPNEW one
+expect_full sync
+[[ -f "$WORK/dotfiles/FPNEW" ]] || fail "FPNEW not pulled: $OUT"
+expect_skip sync
+echo "# new" > "$HOSTS_FP/NEW"
+hosts_commit "hosts change"
+expect_full sync
+expect_skip sync
+pass "commits in the dotfiles and hosts repos each trigger a full sync"
+
+# Case 30
+info "Case 30: uncommitted changes run in full and deploy"
+VIMSRC="$WORK/dotfiles/apps/vim/files/.vimrc"
+echo '" fp-local-edit' >> "$VIMSRC"
+expect_full sync
+grep -q 'fp-local-edit' "$VIMRC" || fail "uncommitted edit not deployed"
+git -C "$WORK/dotfiles" checkout -q -- apps/vim/files/.vimrc
+expect_full sync
+if grep -q 'fp-local-edit' "$VIMRC"; then fail "reverted edit still deployed"; fi
+echo untracked > "$HOSTS_FP/UNTRACKED"
+expect_full sync
+rm -f "$HOSTS_FP/UNTRACKED"
+expect_full sync
+expect_skip sync
+pass "dirty repos deploy their edits, and reverting them deploys again"
+
+# Case 31
+info "Case 31: a failed sync is retried with the same commit"
+CONFIGURE_GOOD="$T/configure-good.sh"
+cp "$WORK/dotfiles/apps/vim/configure.sh" "$CONFIGURE_GOOD"
+author_commit apps/vim/configure.sh 'exit 1'
+fp_run sync
+[[ $RC -ne 0 ]] || fail "broken sync should fail: $OUT"
+fp_run sync
+[[ $RC -ne 0 ]] || fail "failed sync was not retried: $OUT"
+cp "$CONFIGURE_GOOD" "$WORK/author/apps/vim/configure.sh"
+git -C "$WORK/author" add apps/vim/configure.sh
+git -C "$WORK/author" commit -q -m "repair configure"
+git -C "$WORK/author" push -q origin HEAD
+expect_full sync
+expect_skip sync
+pass "failure leaves nothing to skip against; the repaired sync is skipped next time"
+
+# Case 32
+info "Case 32: going back to an earlier commit after a failure runs in full"
+GOOD_SHA=$(git -C "$WORK/dotfiles" rev-parse HEAD)
+echo '" fp-next' >> "$WORK/author/apps/vim/files/.vimrc"
+git -C "$WORK/author" add apps/vim/files/.vimrc
+git -C "$WORK/author" commit -q -m next
+printf 'exit 1\n' > "$WORK/author/apps/vim/configure.sh"
+git -C "$WORK/author" add apps/vim/configure.sh
+git -C "$WORK/author" commit -q -m "break configure"
+git -C "$WORK/author" push -q origin HEAD
+fp_run sync
+[[ $RC -ne 0 ]] || fail "broken sync should fail: $OUT"
+git -C "$WORK/dotfiles" reset -q --hard "$GOOD_SHA"
+rm -f "$VIMRC"
+fp_run sync --no-pull
+[[ $RC -eq 0 ]] || fail "sync at the good commit failed: $OUT"
+[[ -f "$VIMRC" ]] || fail "sync after a failure was skipped: $OUT"
+git -C "$WORK/author" revert --no-edit HEAD >/dev/null
+git -C "$WORK/author" push -q origin HEAD
+git -C "$WORK/dotfiles" pull -q --ff-only
+expect_full sync
+pass "a failed sync discards the earlier record"
+
+# Case 33
+info "Case 33: pending packages are retried"
+sed -i 's/^profile: .*/profile: fppending/' "$T/config-fp"
+rm -f "$T/fp-tool"
+export DOTFILES_TEST_MARKER="$T/marker"
+fp_run sync
+grep -qx faketool "$STATE/pending" || fail "faketool should be pending: $(cat "$STATE/pending")"
+touch "$T/fp-tool"
+expect_full sync
+[[ ! -s "$STATE/pending" ]] || fail "pending not emptied: $(cat "$STATE/pending")"
+expect_skip sync
+pass "a sync with pending packages is not skipped next time"
+
+# Case 34
+info "Case 34: a custom script without a check still runs on every sync"
+sed -i 's/^profile: .*/profile: fpnocheck/' "$T/config-fp"
+fp_run sync
+rm -f "$T/marker"
+expect_full sync
+[[ -e "$T/marker" ]] || fail "check-less script did not run: $OUT"
+unset DOTFILES_TEST_MARKER
+sed -i 's/^profile: .*/profile: fptest/' "$T/config-fp"
+pass "check-less custom scripts keep running"
+
+# Case 35
+info "Case 35: a changed profile, host or config runs in full"
+expect_full sync
+expect_skip sync
+expect_full sync --profile fpother
+expect_full sync
+expect_skip sync
+expect_full sync --hostname otherhost
+expect_full sync
+expect_skip sync
+sed -i 's/^profile: .*/profile: fpother/' "$T/config-fp"
+expect_full sync
+sed -i 's/^profile: .*/profile: fptest/' "$T/config-fp"
+expect_full sync
+pass "profile, hostname and config changes are noticed"
+
+# Case 36
+info "Case 36: uninstall means the next sync reinstalls"
+expect_skip sync
+fp_run uninstall
+[[ $RC -eq 0 ]] || fail "uninstall failed: $OUT"
+expect_full sync
+expect_skip sync
+fp_run uninstall --dry-run
+expect_skip sync
+pass "uninstall clears the record, its dry run does not"
+
+# Case 37
+info "Case 37: --auto skips when it can, but never records a sync as complete"
+age_last_sync
+rm -f "$VIMRC"
+DOTFILES_CONFIG="$T/config-fp" run sync --auto
+[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
+[[ ! -f "$VIMRC" ]] || fail "--auto ran in full on an unchanged system: $(cat "$LOG")"
+[[ -n "$(find "$STATE/last-sync" -mmin -1)" ]] || fail "skipped --auto did not update last-sync"
+fresh_env 10
+VIMRC="$HOME/.vimrc"
+DOTFILES_CONFIG="$T/config-fp" run sync --auto
+[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
+[[ -f "$VIMRC" ]] || fail "first --auto did not deploy: $(cat "$LOG")"
+expect_full sync
+expect_skip sync
+pass "--auto can skip, and a sync after --auto still does the full work"
+
+# Case 38
+info "Case 38: a repo without git history is never skipped"
+fresh_env 11
+VIMRC="$HOME/.vimrc"
+copy_tree "$HOSTS_FP" "$T/hosts-plain"
+rm -rf "$T/hosts-plain/.git"
+sed "s#^hosts_dir: .*#hosts_dir: $T/hosts-plain#" "$T/config-fp" > "$T/config-plain"
+for _ in 1 2; do
+    rm -f "$VIMRC"
+    DOTFILES_CONFIG="$T/config-plain" run sync
+    [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
+    [[ -f "$VIMRC" ]] || fail "sync with a plain hosts dir was skipped: $OUT"
+done
+pass "a plain hosts dir always runs in full"
+
+# Case 39
+info "Case 39: a copy inside another git repo is never skipped"
+fresh_env 12
+VIMRC="$HOME/.vimrc"
+PARENT="$T/parent"
+mkdir -p "$PARENT"
+git -C "$PARENT" init -q
+echo 'hosts-nested/' > "$PARENT/.gitignore"
+git -C "$PARENT" add .gitignore
+git -C "$PARENT" -c user.name=tester -c user.email=tester@example.com commit -q -m initial
+cp -R "$T/hosts-plain" "$PARENT/hosts-nested"
+sed "s#^hosts_dir: .*#hosts_dir: $PARENT/hosts-nested#" "$T/config-fp" > "$T/config-nested"
+for _ in 1 2; do
+    rm -f "$VIMRC"
+    DOTFILES_CONFIG="$T/config-nested" run sync
+    [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
+    [[ -f "$VIMRC" ]] || fail "sync with a nested hosts dir was skipped: $OUT"
+done
+pass "a pushed copy inside a clean parent repo always runs in full"
+
 echo
 echo "All sync tests passed"

@@ -534,7 +534,7 @@ Usage: dotfiles <command> [options]
 
 Commands:
   init                 Guided per-host setup: write the config file, then sync
-  sync                 Pull, then install if new, upgrade if exists (idempotent)
+  sync                 Pull, then install if new, upgrade if exists; stops early if nothing changed
   push HOST...         Copy committed repo snapshots to HOST over ssh and sync there
   push --init HOST...  Push, then run 'dotfiles init' there instead of sync (first-time setup)
   uninstall            Uninstall all configs
@@ -575,7 +575,7 @@ Options (passed through to each app's installer):
   --no-backup          Skip creating backups
   --verbose            Verbose output
   --quiet              Minimal output
-  --force              Force operation without prompts
+  --force              Force operation without prompts; sync redeploys even if nothing changed
   --skip-git-setup     Skip interactive git identity setup (for unattended runs)
   --shell-scripts-dir PATH  Set drop-in directory (default: ~/.bashrc.d)
   --log FILE           Log to file
@@ -790,13 +790,18 @@ resolve_settings() {
     AUTO_SYNC_SECONDS=$(config_interval_seconds "$CFG_AUTO_SYNC_INTERVAL")
 }
 
-# True if --dry-run was given
-is_dry_run() {
+# True if the given flag was passed on to the installers
+has_global_flag() {
     local flag
     for flag in "${GLOBAL_FLAGS[@]}"; do
-        [[ "$flag" == "--dry-run" ]] && return 0
+        [[ "$flag" == "$1" ]] && return 0
     done
     return 1
+}
+
+# True if --dry-run was given
+is_dry_run() {
+    has_global_flag --dry-run
 }
 
 # EXIT trap: remove the work dir and run registered cleanup commands
@@ -1079,11 +1084,26 @@ main() {
         is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
     fi
 
+    # Nothing changed since the last complete sync: nothing to do. Worked out
+    # after the pull, and before deploying so a change made meanwhile is seen.
+    local fingerprint=""
+    if [[ "$COMMAND" == "sync" ]] && ! is_dry_run; then
+        fingerprint=$(sync_fingerprint) || fingerprint=""
+        if ! has_global_flag --force && sync_is_complete "$fingerprint"; then
+            log_success "Already up to date (use --force to redeploy)"
+            exit 0
+        fi
+        sync_forget_complete
+    elif [[ "$COMMAND" == "uninstall" ]] && ! is_dry_run; then
+        sync_forget_complete
+    fi
+
     run_all "$PROFILE_ARG"
 
     # Pending packages are only worked out by sync
     if [[ "$COMMAND" == "sync" ]] && ! is_dry_run; then
         sync_write_pending ${PENDING[@]+"${PENDING[@]}"}
+        sync_record_complete "$fingerprint"
     fi
 
     print_summary

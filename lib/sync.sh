@@ -134,6 +134,56 @@ sync_clear_report() {
     rm -f "$dir/report"
 }
 
+# Print the commit of a clean git repo rooted at PATH.
+# Fails for anything else: not a repo, a pushed copy, uncommitted changes.
+sync_clean_head() {
+    local path="$1" top changes
+    top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
+    [[ "$(cd "$top" && pwd -P)" == "$(cd "$path" && pwd -P)" ]] || return 1
+    changes=$(git --no-optional-locks -C "$path" status --porcelain 2>/dev/null) || return 1
+    [[ -z "$changes" ]] || return 1
+    git -C "$path" rev-parse HEAD 2>/dev/null
+}
+
+# Print one line identifying what a sync would deploy, or fail when that cannot
+# be told from the repos (see sync_clean_head), so the sync must run in full.
+# Reads globals DOTFILES_REPO, HOSTS_DIR, HOSTNAME_ARG, PROFILE_ARG and SHELL_SCRIPTS_DIR.
+sync_fingerprint() {
+    local dotfiles_head hosts_head="none"
+    dotfiles_head=$(sync_clean_head "$DOTFILES_REPO") || return 1
+    if [[ -n "$HOSTS_DIR" ]]; then
+        hosts_head=$(sync_clean_head "$HOSTS_DIR") || return 1
+    fi
+    printf '%s %s %s %s %s %s\n' "$dotfiles_head" "$hosts_head" "$HOSTS_DIR" \
+        "${HOSTNAME_ARG:-$(hosts_local_name)}" "$PROFILE_ARG" "$SHELL_SCRIPTS_DIR"
+}
+
+# Forget the last complete sync, so the next one runs in full
+sync_forget_complete() {
+    rm -f "$(sync_state_dir)/last-complete"
+}
+
+# Succeed if the last complete sync recorded this fingerprint
+sync_is_complete() {
+    local fingerprint="$1" recorded=""
+    [[ -n "$fingerprint" ]] || return 1
+    recorded=$(cat "$(sync_state_dir)/last-complete" 2>/dev/null) || return 1
+    [[ "$recorded" == "$fingerprint" ]]
+}
+
+# Record a finished sync, if the next one may be skipped: nothing failed or is
+# pending, and no custom script without a check (those run on every sync). An
+# --auto run does not count: it skips git-setup and may skip installs.
+# Reads globals EXIT_CODE, PENDING, SYNC_AUTO, PKG_NAMES and PKG_CUSTOM_*.
+sync_record_complete() {
+    local fingerprint="$1" idx
+    [[ -n "$fingerprint" && "$EXIT_CODE" -eq 0 && ${#PENDING[@]} -eq 0 && "$SYNC_AUTO" != true ]] || return 0
+    for idx in "${!PKG_NAMES[@]}"; do
+        [[ -n "${PKG_CUSTOM_SCRIPT[$idx]}" && -z "${PKG_CUSTOM_CHECK[$idx]}" ]] && return 0
+    done
+    printf '%s\n' "$fingerprint" > "$(sync_state_dir)/last-complete"
+}
+
 # Modification time of a file in epoch seconds (GNU stat, then BSD stat)
 sync_mtime() {
     stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
