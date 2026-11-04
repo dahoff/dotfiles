@@ -16,3 +16,9 @@ backup:
 # Requirements (commands that must exist)
 requirements:
   - vim
+
+# How to install the tool
+install:
+  apt: vim
+  dnf: vim
+  brew: vim

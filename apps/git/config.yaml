@@ -26,3 +26,8 @@ requirements:
 # Post-install commands
 post_install:
   - git config --global core.excludesfile ~/.gitignore_global
+
+# How to install the tool
+install:
+  apt: git
+  dnf: git

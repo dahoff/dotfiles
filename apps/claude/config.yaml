@@ -23,3 +23,7 @@ backup:
 
 post_install:
   - mkdir -p ~/.claude
+
+# How to install the tool
+install:
+  check: command -v claude

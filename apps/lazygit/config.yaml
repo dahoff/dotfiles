@@ -1,0 +1,6 @@
+app:
+  name: lazygit
+
+install:
+  check: command -v lazygit
+  dropin: files/50-lazygit.sh

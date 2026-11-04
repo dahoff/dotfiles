@@ -339,5 +339,42 @@ grep -qF -- "--append" "$HOME/flagapp-args" || fail "13: flags not passed: $(cat
 [[ -f "$STATE_DIR/apps/deployed-name.yaml" ]] || fail "13: app.name lost: $(ls "$STATE_DIR/apps")"
 pass "phases follow what the folder holds"
 
+info "Case 14: the real profiles resolve to exactly what they always have"
+# name|apt|dnf|brew|check|script|dropin|config dir|config flags, from the real repo
+resolved() {
+    (
+        unset DOTFILES_HOSTS_DIR
+        cd "$ROOT_DIR"
+        bash -c '
+            set -euo pipefail
+            for f in logging yaml utils hosts overlay profile; do source lib/$f.sh; done
+            PROFILES_DIR="$PWD/profiles"; APPS_DIR="$PWD/apps"; HOSTS_DIR=""
+            declare -a PKG_NAMES PKG_APT PKG_DNF PKG_BREW PKG_CUSTOM_CHECK PKG_CUSTOM_SCRIPT
+            declare -a PKG_CUSTOM_DROPIN PKG_CONFIG_DIR PKG_CONFIG_FLAGS HOSTS_PROFILE_CHAIN
+            load_packages_for_profile "$1" nohost
+            for i in "${!PKG_NAMES[@]}"; do
+                echo "${PKG_NAMES[$i]}|${PKG_APT[$i]}|${PKG_DNF[$i]}|${PKG_BREW[$i]}|${PKG_CUSTOM_CHECK[$i]}|${PKG_CUSTOM_SCRIPT[$i]}|${PKG_CUSTOM_DROPIN[$i]}|${PKG_CONFIG_DIR[$i]}|${PKG_CONFIG_FLAGS[$i]}"
+            done
+        ' _ "$1"
+    )
+}
+WANT_COMPLETE='git|git|git|||||git|
+bash|||||||bash|--append
+tmux|tmux|tmux|tmux||||tmux|
+vim|vim|vim|vim||||vim|
+curl|curl|curl|curl|||||
+fzf|fzf|fzf|fzf|||||
+jq|jq|jq|jq|||||
+tree|tree|tree|tree|||||
+lazygit||||command -v lazygit|lazygit/install.sh|lazygit/files/50-lazygit.sh||
+lazyssh||||command -v lazyssh|lazyssh/install.sh|lazyssh/files/50-lazyssh.sh||
+scripts|||||||scripts|
+claude||||command -v claude|claude/install.sh||claude|'
+GOT=$(resolved complete) || fail "14: complete did not resolve: $GOT"
+[[ "$GOT" == "$WANT_COMPLETE" ]] || fail "14: complete changed: $(diff <(echo "$WANT_COMPLETE") <(echo "$GOT"))"
+GOT=$(resolved minimal | cut -d'|' -f1 | tr '\n' ' ') || fail "14: minimal did not resolve"
+[[ "$GOT" == "git bash tmux vim curl fzf jq tree scripts " ]] || fail "14: minimal changed: $GOT"
+pass "complete and minimal unchanged"
+
 echo
 echo -e "${GREEN}All resolution tests passed${NC}"

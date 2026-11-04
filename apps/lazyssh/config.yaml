@@ -1,0 +1,6 @@
+app:
+  name: lazyssh
+
+install:
+  check: command -v lazyssh
+  dropin: files/50-lazyssh.sh

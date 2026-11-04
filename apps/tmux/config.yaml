@@ -50,3 +50,9 @@ post_install:
   - chmod +x ~/.tmux/.tmux-cheatsheet.sh
   - tmux start-server \; set-environment -g TMUX_PLUGIN_MANAGER_PATH ~/.tmux/plugins/ && ~/.tmux/plugins/tpm/bin/install_plugins || true
   - tmux source-file ~/.tmux.conf || true
+
+# How to install the tool
+install:
+  apt: tmux
+  dnf: tmux
+  brew: tmux

@@ -51,26 +51,6 @@ else
     fail "dotfiles missing or not executable"
 fi
 
-# Test 2: complete.yaml has packages section with bash and tmux
-info "Test 2: complete.yaml has packages section with bash and tmux"
-if grep -q "^packages:" "$ROOT_DIR/profiles/complete.yaml" && \
-   grep -q "name: bash" "$ROOT_DIR/profiles/complete.yaml" && \
-   grep -q "name: tmux" "$ROOT_DIR/profiles/complete.yaml"; then
-    pass "complete.yaml has correct structure"
-else
-    fail "complete.yaml structure incorrect"
-fi
-
-# Test 3: bash listed before tmux in complete.yaml
-info "Test 3: bash listed before tmux in complete.yaml"
-bash_line=$(grep -n "name: bash" "$ROOT_DIR/profiles/complete.yaml" | head -1 | cut -d: -f1)
-tmux_line=$(grep -n "name: tmux" "$ROOT_DIR/profiles/complete.yaml" | head -1 | cut -d: -f1)
-if [[ "$bash_line" -lt "$tmux_line" ]]; then
-    pass "bash listed before tmux"
-else
-    fail "bash should be listed before tmux"
-fi
-
 # Test 4: help command
 info "Test 4: help command exits 0 and shows usage"
 if output=$(cd "$ROOT_DIR" && ./dotfiles help 2>&1) && echo "$output" | grep -q "Usage:"; then
@@ -145,24 +125,6 @@ if grep -q "^packages:" "$ROOT_DIR/profiles/complete.yaml" && \
     pass "Profile uses unified packages format"
 else
     fail "Profile should use packages: not apps:"
-fi
-
-# Test 12: Profile entries can have config.dir
-info "Test 12: Profile entries support config.dir"
-if grep -q "dir: git" "$ROOT_DIR/profiles/complete.yaml" && \
-   grep -q "dir: bash" "$ROOT_DIR/profiles/complete.yaml"; then
-    pass "Profile entries have config.dir"
-else
-    fail "Profile entries missing config.dir"
-fi
-
-# Test 13: Profile entries can have OS package fields
-info "Test 13: Profile entries support apt/dnf/brew fields"
-if grep -q "apt: git" "$ROOT_DIR/profiles/complete.yaml" && \
-   grep -q "dnf: git" "$ROOT_DIR/profiles/complete.yaml"; then
-    pass "Profile entries have OS package fields"
-else
-    fail "Profile entries missing OS package fields"
 fi
 
 # Test 14: Minimal profile excludes packages by name

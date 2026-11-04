@@ -38,9 +38,11 @@ Read this first when resuming. Sub-projects 1–3 are merged and on `origin/main
 - **Config:** YAML. No `dotfiles_repo` key. `hosts_dir` is "just a directory".
 - **Other assumptions:** everything else listed to the user (precedence, lock behaviour, throttle restarting even after a failed run, `updated` semantics, push refusals, status contents, the sub-project 3 init flow) was accepted as written.
 
-## Open questions for the user
+## Layout since 2026-11-03
 
-- **Merging `packages/` into `apps/`:** the user suggested each app folder hold both how to install the tool and its config. The design isn't settled.
+One folder per tool, per `docs/superpowers/specs/2026-11-03-apps-install-merge-design.md`: `apps/<name>/` holds `config.yaml` (with `install:`), `install.sh` (the tool) and `configure.sh` (its config). `apps/os-packages.yaml` defines package-only tools. Profiles list names. `packages/` is gone. Older specs and plans still describe the previous layout.
+
+**At upgrade, one failed sync per machine is expected (the user accepted this).** `sync` pulls and then keeps running the old code in memory, so the first sync after this ships stops with `No packages found` and changes nothing. A second sync works. Each machine then redeploys its apps once, because the version hash covers `configure.sh` and `config.yaml`.
 
 ## Rulings made autonomously (cost if wrong)
 

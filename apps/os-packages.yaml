@@ -1,0 +1,13 @@
+# apps/os-packages.yaml - Tools that need only an OS package, with no config or setup.
+# Defining a tool here installs it nowhere: list it in a profile or host.yaml too.
+# One line when the package name is the same on apt, dnf and brew; otherwise:
+#   - name: fd
+#     apt: fd-find
+#     dnf: fd-find
+#     brew: fd
+
+packages:
+  - curl
+  - fzf
+  - jq
+  - tree

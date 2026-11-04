@@ -25,3 +25,7 @@ requirements:
 
 post_install:
   - mkdir -p ~/.bashrc.d
+
+# How to install the tool
+install:
+  configure_flags: --append

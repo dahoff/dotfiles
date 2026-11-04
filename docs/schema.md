@@ -6,60 +6,60 @@ This document defines every YAML field recognized by the dotfiles system. Keep t
 
 ## Profile Schema (`profiles/*.yaml`)
 
-Profiles define the complete set of packages, custom tools, and configs for an environment. Each entry in the `packages:` list represents a single installable item that can have OS packages, custom install scripts, and/or dotfiles config.
+A profile says which tools an environment gets, by name. How to install and configure a tool lives with the tool, under `apps/`. Defining a tool selects it nowhere: it reaches a host only when a profile or `host.yaml` lists it.
 
 ### Top-Level Directives
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `extends` | string | No | — | Name of parent profile to inherit from (resolved as `profiles/<name>.yaml`). Supports chaining. |
-| `exclude` | array of strings | No | `[]` | Package names to remove from the inherited profile. Mutually exclusive with `include`. |
-| `include` | array of strings | No | `[]` | Package names to keep from the inherited profile (all others removed). Mutually exclusive with `exclude`. |
-| `extra` | array of objects | No | `[]` | Additional package entries to append after inheritance and filtering. Same format as `packages[]`. |
-| `packages` | array of objects | No | `[]` | Ordered list of packages. Present in base profiles; inherited profiles use `exclude`/`include`/`extra` instead. |
+| `exclude` | array of strings | No | `[]` | Tool names to remove from the inherited profile. An absent name is ignored. Mutually exclusive with `include`. |
+| `include` | array of strings | No | `[]` | Tool names to keep from the inherited profile (all others removed). A name that isn't inherited is an error. Mutually exclusive with `exclude`. |
+| `extra` | array | No | `[]` | Additional tools to append after inheritance and filtering. Same format as `packages`. |
+| `packages` | array | No | `[]` | Ordered list of tools. Present in base profiles; inherited profiles use `exclude`/`include`/`extra` instead. |
 
-### Package Entry Fields
+### Entries in `packages` and `extra`
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `packages[].name` | string | Yes | — | Package identifier. Used for `exclude`/`include` matching. |
-| `packages[].apt` | string | No | — | Package name for APT (Debian/Ubuntu). |
-| `packages[].dnf` | string | No | — | Package name for DNF (Fedora/RHEL). |
-| `packages[].brew` | string | No | — | Package name for Homebrew (macOS). |
-| `packages[].custom` | object | No | — | Custom install definition (for tools not in package managers). |
-| `packages[].custom.check` | string | Yes | — | Shell command to test if already installed (exit 0 = installed). |
-| `packages[].custom.script` | string | Yes | — | Install script path, relative to `apps/`. |
-| `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `apps/`), copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or the entry has no `check`). An existing copy is never removed. |
-| `packages[].config` | object | No | — | Dotfiles config deployment definition. |
-| `packages[].config.dir` | string | Yes | — | App module directory (relative to `apps/`) containing `configure.sh` and `files/`. |
-| `packages[].config.flags` | string | No | — | Extra flags passed to the app's `configure.sh` (e.g., `--append`). |
+Each entry is a name or an inline definition, and one list may mix them:
+
+```yaml
+packages:
+  - tmux                 # defined by apps/tmux/ or apps/os-packages.yaml
+  - name: docker         # defined right here
+    apt: docker.io
+```
+
+A plain name resolves to `apps/<name>/` if that folder has a `config.yaml`, otherwise to its entry in `apps/os-packages.yaml`. It's an error, aborting before any change, if a name is defined in neither or in both, or if a tool with an `install.sh` has no `install.check`.
+
+An inline definition replaces any definition of that name, with no merging, and is how a hosts repo adds a tool `dotfiles` doesn't define. An inline entry that defines nothing (`- name: tmux`) is an error.
+
+A tool listed twice in the final list runs once, at its first position, with the later definition.
+
+| Inline field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Tool name. Used for `exclude`/`include` matching. |
+| `apt` | string | No | Package name for APT (Debian/Ubuntu). |
+| `dnf` | string | No | Package name for DNF (Fedora/RHEL). |
+| `brew` | string | No | Package name for Homebrew (macOS). |
+| `custom.check` | string | With `custom.script` | Shell command to test if already installed (exit 0 = installed). |
+| `custom.script` | string | No | Install script path, relative to `apps/`. |
+| `custom.dropin` | string | No | Shell drop-in file path, relative to `apps/`, copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or there is no `check`). |
+| `config.dir` | string | No | Folder under `apps/` containing `configure.sh` and `files/`. |
+| `config.flags` | string | No | Extra flags passed to `configure.sh` (e.g., `--append`). |
 
 ### Processing Order
 
-dotfiles processes the unified list in three phases:
+dotfiles processes the final list in three phases:
 1. **Phase 1: OS packages** — Collect all `apt`/`dnf`/`brew` values, batch into one package manager call.
-2. **Phase 2: Custom installs** — Run each `custom` entry's script (if `check` fails), then install its dropin if `check` now passes (or there is no `check`); otherwise the log says `<name>: drop-in held until the tool is installed`.
-3. **Phase 3: Configs** — For each entry with `config.dir`, call `apps/<dir>/configure.sh deploy [flags]`.
+2. **Phase 2: Custom installs** — Run each tool's install script (if its `check` fails), then install its drop-in if `check` now passes (or there is no `check`); otherwise the log says the drop-in is held until the tool is installed.
+3. **Phase 3: Configs** — For each tool with a config, call `apps/<name>/configure.sh deploy [flags]`.
 
 **Example — base profile:**
 ```yaml
 packages:
-  - name: git
-    apt: git
-    dnf: git
-    config:
-      dir: git
-
-  - name: bash
-    config:
-      dir: bash
-      flags: --append
-
-  - name: lazygit
-    custom:
-      check: command -v lazygit
-      script: lazygit/install.sh
-      dropin: lazygit/files/50-lazygit.sh
+  - git
+  - bash
+  - lazygit
 ```
 
 **Example — derived profile:**
@@ -76,8 +76,43 @@ extends: complete
 exclude:
   - claude
 extra:
+  - htop
   - name: docker
     apt: docker.io
+```
+
+---
+
+## Tools (`apps/`)
+
+    apps/
+      os-packages.yaml      # tools that need only an OS package
+      <name>/
+        config.yaml         # what to deploy, plus how to install
+        install.sh          # installs the tool (needs install.check)
+        configure.sh        # sets up its config
+        files/
+
+### `apps/<name>/config.yaml`: `install:`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `install.apt` / `dnf` / `brew` | string | OS package name for that package manager. |
+| `install.check` | string | Shell command to test if already installed. Required when `install.sh` exists. |
+| `install.dropin` | string | Shell drop-in, relative to the app folder. |
+| `install.configure_flags` | string | Extra flags passed to `configure.sh`. |
+
+A tool's folder decides its phases: `install.sh` means a custom install, and `configure.sh` means a config phase. A folder without `config.yaml` doesn't define a tool.
+
+### `apps/os-packages.yaml`
+
+```yaml
+packages:
+  - curl                 # the same package name on apt, dnf and brew
+  - name: fd             # when package names differ
+    apt: fd-find
+    dnf: fd-find
+    brew: fd
 ```
 
 ---
@@ -168,7 +203,7 @@ Optional data-only repo, given with `--hosts-dir PATH` or env `DOTFILES_HOSTS_DI
 |-------|------|----------|-------------|
 | `profile` | string | Yes | Base profile. |
 | `exclude` / `include` | array of strings | No | As in profiles (mutually exclusive). |
-| `extra` | array of objects | No | As in profiles. Entries reference dotfiles app dirs and their scripts. |
+| `extra` | array | No | As in profiles. Same format as `packages` in a profile. |
 | `files` | map | No | `<app>/<src>: replace|merge` per-file strategy. |
 
 Hosts-repo profiles accept the same `files:` map.

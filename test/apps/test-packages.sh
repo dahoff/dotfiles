@@ -32,24 +32,6 @@ else
     fail "Profile missing packages section"
 fi
 
-# Test 2: Profile has OS package entries with apt/dnf/brew
-info "Test 2: Profile has OS package entries"
-if grep -q "apt:" profiles/complete.yaml && \
-   grep -q "dnf:" profiles/complete.yaml && \
-   grep -q "brew:" profiles/complete.yaml; then
-    pass "OS package fields present in profile"
-else
-    fail "Missing OS package fields in profile"
-fi
-
-# Test 3: Profile has custom install entries
-info "Test 3: Profile has custom installs"
-if grep -q "custom:" profiles/complete.yaml && grep -q "lazygit" profiles/complete.yaml; then
-    pass "Custom install for lazygit defined in profile"
-else
-    fail "Custom install section missing from profile"
-fi
-
 # Test 4: Custom install script exists
 info "Test 4: Custom install script exists"
 if [[ -f "apps/lazygit/install.sh" ]]; then
@@ -96,14 +78,6 @@ if grep -q "alias lg=" apps/lazygit/files/50-lazygit.sh; then
     pass "Lazygit alias defined in drop-in"
 else
     fail "Lazygit alias missing from drop-in"
-fi
-
-# Test 10: Profile maps dropin via custom section
-info "Test 10: Profile maps drop-in via custom dropin field"
-if grep -q 'dropin: lazygit/files/50-lazygit.sh' profiles/complete.yaml; then
-    pass "Drop-in mapped via profile custom dropin field"
-else
-    fail "Drop-in not mapped in profile"
 fi
 
 # Test 13: Custom install script handles architecture detection
