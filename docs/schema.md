@@ -240,7 +240,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 - Pull is `git pull --ff-only` and nothing else. A failed pull (diverged, no network, no access) is a warning, not a failure: the repo is left untouched, the sync continues with what is checked out, and the exit code stays 0. A repo that is not a git work tree, or has no upstream branch, is skipped silently.
 - `--no-pull` skips the pull of both repos.
-- `--auto` is the background mode used by the login drop-in (see Background sync). It never prompts. It installs OS packages and runs custom install scripts only when sudo works without a password and the run has no terminal; otherwise it only checks them and applies configs.
+- `--auto` is the background mode used by the login drop-in (see Background sync). It never prompts. It installs OS packages and runs custom install scripts only when sudo works without a password and the run has no terminal; otherwise it only checks them and applies configs. Without `setsid` (macOS, for example) the run keeps the login terminal, so background sync never installs: it only reminds you, and a manual `dotfiles sync` does the install.
 - A sync takes a lock in the state directory. A second concurrent sync exits with `dotfiles: sync already running` (an `--auto` run exits silently).
 - `--dry-run` previews without changing anything: no lock, no pull, no self-install, and the state files are not touched.
 - The other flags (`--profile`, `--hosts-dir`, `--hostname`, `--no-backup`, `--verbose`, `--quiet`, `--force`, `--skip-git-setup`, `--shell-scripts-dir`, `--log`) are listed in `dotfiles help`.
@@ -302,7 +302,7 @@ Re-running init is safe. The defaults offered are the values already in the conf
 
     dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST...
 
-For a host that cannot reach the repos. It ships the repos as `push` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `sync --no-pull`. The flags above are forwarded to the remote init and are valid only with `--init`; `--hostname` also needs exactly one HOST. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
+For a host that cannot reach the repos. It ships the repos as `push` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `sync --no-pull`. The flags above are forwarded to the remote init and are valid only with `--init`; `--hostname` also needs exactly one HOST. A malformed value is refused before anything is shipped; whether a `--profile` exists is checked by the remote init, after shipping. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
 
 ---
 

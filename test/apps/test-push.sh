@@ -63,6 +63,36 @@ run push --init --hostname x testuser@h1 testuser@h2
 printf '%s\n' "$OUT" | grep -qF "only valid with a single HOST" || fail "no usage message: $OUT"
 pass "--hostname with two hosts: usage error"
 
+info "Case 1d: invalid init flag values are refused before contacting the host"
+mkdir -p "$T/fakebin"
+# Records that it was called, then fails like an unreachable host
+cat > "$T/fakebin/ssh" <<EOF
+#!/bin/sh
+: > "$T/ssh-called"
+exit 255
+EOF
+chmod +x "$T/fakebin/ssh"
+push_fake_ssh() {
+    rm -f "$T/ssh-called"
+    RC=0
+    OUT=$(PATH="$T/fakebin:$PATH" ./dotfiles push --init --yes "$@" testuser@localhost 2>&1) || RC=$?
+}
+while IFS='|' read -r flag value want; do
+    push_fake_ssh "$flag" "$value"
+    [[ $RC -eq 1 ]] || fail "$flag '$value': expected exit 1, got $RC: $OUT"
+    printf '%s\n' "$OUT" | grep -qF "$want" || fail "$flag '$value': wrong error: $OUT"
+    [[ ! -e "$T/ssh-called" ]] || fail "$flag '$value': the host was contacted: $OUT"
+done <<'CASES'
+--interval|10x|interval must be <n>m, <n>h or <n>d: 10x
+--auto-sync|maybe|auto sync must be 'on' or 'off': maybe
+--hostname|a/b|invalid hostname 'a/b'
+--profile|a/b|invalid profile name 'a/b'
+CASES
+# Control: well-formed values do go on to the host
+push_fake_ssh --interval 4h --auto-sync on --hostname h1 --profile whatever
+[[ -e "$T/ssh-called" ]] || fail "valid flags should reach the host: $OUT"
+pass "invalid init flags refused locally"
+
 info "Case 2: unreachable hosts fail and are summarized; the next host still runs"
 export DOTFILES_SSH_OPTS="-o Port=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 run push testuser@localhost otheruser@localhost

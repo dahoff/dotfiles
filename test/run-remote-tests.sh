@@ -216,12 +216,12 @@ grep -qx 'profile: base' <<< "$CFG2" || fail "PI2: hand-set profile not kept unc
 test_ssh 'test ! -e ~/.config/dotfiles/config.yaml.bak' || fail "PI2: config.bak written, so the config changed: $CFG2"
 pass "PI2: existing values (hostname, hand-set profile) kept, no config.bak"
 
-info "PI3: push --init with an invalid --interval leaves the config alone"
-push --init --yes --interval 10x "$TARGET"
+info "PI3: push --init with a profile the remote lacks leaves the config alone"
+push --init --yes --profile no-such-profile "$TARGET"
 [[ $RC -eq 1 ]] || fail "PI3: expected exit 1, got $RC: $OUT"
-printf '%s\n' "$OUT" | grep -qF "interval must be <n>m, <n>h or <n>d: 10x" || fail "PI3: not refused by the remote init: $OUT"
+printf '%s\n' "$OUT" | grep -qF "profile 'no-such-profile' not found" || fail "PI3: not refused by the remote init: $OUT"
 [[ "$(test_ssh 'cat ~/.config/dotfiles/config.yaml')" == "$CFG2" ]] || fail "PI3: remote config changed"
-pass "PI3: invalid flag refused by the remote init, config unchanged"
+pass "PI3: unknown profile refused by the remote init, config unchanged"
 
 info "PI4: push --init without a local hosts dir keeps the remote's configured hosts_dir"
 # An empty local config and no default hosts dir under the local HOME: no hosts payload

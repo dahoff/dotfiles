@@ -119,14 +119,21 @@ init_set_hosts_dir() {
     INIT_HOSTS_DIR="$(cd "$value" && pwd)"
 }
 
-# Check a profile name resolves to a profile file (hosts repo first)
-# Usage: init_validate_profile NAME
-init_validate_profile() {
-    local name="$1" path
+# Check the form of a profile name, without looking for the profile
+# Usage: init_validate_profile_name NAME
+init_validate_profile_name() {
+    local name="$1"
     if [[ -z "$name" || "$name" == */* ]]; then
         log_error "invalid profile name '$name'"
         return 1
     fi
+}
+
+# Check a profile name resolves to a profile file (hosts repo first)
+# Usage: init_validate_profile NAME
+init_validate_profile() {
+    local name="$1" path
+    init_validate_profile_name "$name" || return 1
     path=$(hosts_resolve_profile_path "$PROFILES_DIR" "$INIT_HOSTS_DIR" "$name")
     if [[ ! -f "$path" ]]; then
         log_error "profile '$name' not found ($path)"

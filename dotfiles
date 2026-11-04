@@ -968,6 +968,7 @@ cmd_push() {
         echo "Usage: dotfiles push [--dry-run] [--init [init flags]] HOST..." >&2
         exit 1
     fi
+    push_validate_init_flags ${PUSH_INIT_ARGS[@]+"${PUSH_INIT_ARGS[@]}"} || exit 1
     local dry=false host failed=0
     is_dry_run && dry=true
     for host in "${PUSH_HOSTS[@]}"; do

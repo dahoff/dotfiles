@@ -115,6 +115,24 @@ printf 'dotfiles_repo=%s\nhosts_dir=%s\n' "$d" "$h"
 SNIPPET
 }
 
+# Check the init flags push --init forwards, so a bad value is refused before
+# anything is shipped. Whether a profile exists is left to the remote init: its
+# hosts dir may not be the local one. Logs every problem; returns 1 if any.
+# Usage: push_validate_init_flags [INIT_FLAG...]
+push_validate_init_flags() {
+    local ok=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --hostname)  init_validate_hostname "$2" || ok=1; shift 2 ;;
+            --profile)   init_validate_profile_name "$2" || ok=1; shift 2 ;;
+            --auto-sync) init_validate_auto_sync "$2" || ok=1; shift 2 ;;
+            --interval)  init_validate_interval "$2" || ok=1; shift 2 ;;
+            *)           shift ;;
+        esac
+    done
+    return $ok
+}
+
 # Push both repos to HOST and run the sync there, or with INIT=true the remote
 # 'dotfiles init' with INIT_FLAGS. Returns the remote exit code.
 # Usage: push_host HOST INIT(true|false) [DRY_RUN(true|false) [INIT_FLAG...]]
