@@ -422,7 +422,9 @@ cmd_upgrade() {
     fi
 
     # Create snapshot backup
-    if [[ "$NO_BACKUP" != true ]]; then
+    if [[ "$NO_BACKUP" != true ]] && is_dry_run; then
+        log_info "[DRY-RUN] Would create a backup snapshot"
+    elif [[ "$NO_BACKUP" != true ]]; then
         log_info "Creating backup snapshot..."
         local ts="" snap_ts
         snap_ts=$(timestamp)

@@ -98,9 +98,15 @@ pass "empty live file handled"
 # Test 8
 info "Test 8: dry-run reports merge and changes nothing"
 echo '{"liveOnly":3}' > "$LIVE"
+# Snapshot dirs are named to the second: a new one must not land in an existing dir
+sleep 1
+HOME_BEFORE=$(find "$HOME" | sort)
+STATE_BEFORE=$(find "$STATE_DIR" -type f -exec cat {} + 2>/dev/null)
 out=$(./install.sh upgrade --force --dry-run 2>&1) || fail "dry-run failed: $out"
 [[ "$out" == *"Would merge"* ]] || fail "dry-run should say 'Would merge'"
 [[ "$(cat "$LIVE")" == '{"liveOnly":3}' ]] || fail "dry-run modified live file"
+[[ "$(find "$HOME" | sort)" == "$HOME_BEFORE" ]] || fail "dry-run wrote under HOME: $(diff <(echo "$HOME_BEFORE") <(find "$HOME" | sort))"
+[[ "$(find "$STATE_DIR" -type f -exec cat {} + 2>/dev/null)" == "$STATE_BEFORE" ]] || fail "dry-run changed the app state"
 pass "dry-run merge"
 
 # Test 9

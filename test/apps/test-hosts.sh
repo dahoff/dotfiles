@@ -41,6 +41,17 @@ run() {
 }
 packages_line() { echo "$OUT" | grep -o 'Packages: .*' | head -1; }
 
+# Test 0
+info "Test 0: a dry run on a fresh install writes nothing under HOME"
+mkdir -p "$TEST_HOME/.claude"
+echo '{"liveOnly":1}' > "$TEST_HOME/.claude/settings.json"
+run sync --dry-run --no-pull --hostname testhost --hosts-dir "$HR"
+[[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
+WROTE=$(cd "$TEST_HOME" && find . -mindepth 1 | sort | tr '\n' ' ')
+[[ "$WROTE" == "./.claude ./.claude/settings.json " ]] || fail "dry-run wrote under HOME: $WROTE"
+rm -rf "$TEST_HOME/.claude"
+pass "dry run left HOME untouched"
+
 # Test 1
 info "Test 1: no hosts dir keeps today's resolution"
 run sync --dry-run --hostname testhost

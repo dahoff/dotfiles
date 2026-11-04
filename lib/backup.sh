@@ -9,6 +9,8 @@ backup_init() {
 
     log_debug "Initializing backup for $app_name at $backup_dir"
 
+    is_dry_run && return 0
+
     # Create backup directory
     ensure_dir "$backup_dir" || return 1
 
@@ -53,6 +55,11 @@ backup_create_original() {
     fi
 
     local dest="$backup_dir/original/$filename"
+
+    if is_dry_run; then
+        log_info "[DRY-RUN] Would create original backup: $filename"
+        return 0
+    fi
 
     log_info "Creating original backup: $filename"
 
