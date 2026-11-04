@@ -87,7 +87,7 @@ resolve_tool() {
     local line key value in_install=false
     local apt="" dnf="" brew="" check="" dropin="" flags=""
     while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" =~ ^install:[[:space:]]*$ ]]; then
+        if [[ "$line" =~ ^install:[[:space:]]*(#.*)?$ ]]; then
             in_install=true
         elif [[ "$line" =~ ^[[:alpha:]] ]]; then
             in_install=false
@@ -116,7 +116,21 @@ resolve_tool() {
         script="$name/install.sh"
     fi
     [[ -f "$dir/configure.sh" ]] && config_dir="$name"
-    [[ -n "$dropin" ]] && dropin="$name/$dropin"
+    if [[ -z "$apt$dnf$brew$script$config_dir" ]]; then
+        log_error "Tool '$name' in $source: apps/$name/ defines nothing to install or configure"
+        return 1
+    fi
+    if [[ -n "$dropin" ]]; then
+        if [[ -z "$script" ]]; then
+            log_error "Tool '$name' in $source: install.dropin needs apps/$name/install.sh"
+            return 1
+        fi
+        if [[ ! -f "$dir/$dropin" ]]; then
+            log_error "Tool '$name' in $source: drop-in not found: apps/$name/$dropin"
+            return 1
+        fi
+        dropin="$name/$dropin"
+    fi
 
     pkg_append "$name" "$apt" "$dnf" "$brew" "$check" "$script" "$dropin" "$config_dir" "$flags"
 }
@@ -213,9 +227,10 @@ load_manifest() {
         in_config=false
     }
 
-    while IFS= read -r line; do
-        # Skip comments and empty lines
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and empty lines, and drop a trailing comment
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        line="${line%%[[:space:]]#*}"
         [[ -z "$line" ]] && continue
 
         if [[ "$line" =~ ^packages: ]]; then
@@ -232,6 +247,10 @@ load_manifest() {
                 _reset_entry
                 current_name="${BASH_REMATCH[1]}"
                 current_name=$(echo "$current_name" | sed 's/[[:space:]]*$//')
+                if [[ -z "$current_name" ]]; then
+                    log_error "Cannot read '$line' in $source"
+                    return 1
+                fi
             # Plain name: "  - <name>", optionally followed by a comment
             elif [[ "$line" =~ ^[[:space:]]*-[[:space:]]+([^[:space:]#]+)[[:space:]]*(#.*)?$ ]]; then
                 local plain="${BASH_REMATCH[1]}"
@@ -242,8 +261,9 @@ load_manifest() {
                 else
                     resolve_tool "$plain" "$source" || return 1
                 fi
-            # Any other list item can't be read
-            elif [[ "$line" =~ ^[[:space:]]*-[[:space:]] ]]; then
+            # Any other list item, a bare word, or a field with no long-form
+            # entry to belong to can't be read
+            elif [[ "$line" =~ ^[[:space:]]*- || "$line" =~ ^[[:space:]]+[^[:space:]:]+[[:space:]]*$ || -z "$current_name" ]]; then
                 log_error "Cannot read '$line' in $source"
                 return 1
             # Top-level fields (2-4 space indent, no dash)
@@ -322,8 +342,9 @@ apply_profile_modifiers() {
     # Parse exclude/include lists
     local in_exclude=false
     local in_include=false
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        line="${line%%[[:space:]]#*}"
         [[ -z "$line" ]] && continue
 
         if [[ "$line" =~ ^exclude: ]]; then
@@ -505,8 +526,9 @@ load_profile() {
     local extends_name=""
     local has_packages=false
     local line
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        line="${line%%[[:space:]]#*}"
         [[ -z "$line" ]] && continue
 
         if [[ "$line" =~ ^extends:[[:space:]]*(.*) ]]; then

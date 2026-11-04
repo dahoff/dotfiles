@@ -339,6 +339,90 @@ grep -qF -- "--append" "$HOME/flagapp-args" || fail "13: flags not passed: $(cat
 [[ -f "$STATE_DIR/apps/deployed-name.yaml" ]] || fail "13: app.name lost: $(ls "$STATE_DIR/apps")"
 pass "phases follow what the folder holds"
 
+info "Case 15: comments on inline entries and on exclude items are not part of the value"
+profile comments <<'EOF'
+packages:
+  - name: commented   # defined right here
+    apt: first-pkg    # debian name
+    dnf: first-pkg    # fedora name
+    brew: first-pkg   # mac name
+  - onepkg
+  - twopkg
+EOF
+dry comments
+expect_packages "15a" "commented onepkg twopkg"
+grep -qw first-pkg <<< "$OUT" || fail "15a: package name lost: $OUT"
+grep -q 'debian name' <<< "$OUT" && fail "15a: comment reached the package list: $OUT"
+profile exc-comment <<'EOF'
+extends: comments
+exclude:
+  - onepkg   # not this one
+EOF
+dry exc-comment
+expect_packages "15b" "commented twopkg"
+pass "comments stripped"
+
+info "Case 16: a last line with no newline still counts"
+printf 'packages:\n  - onepkg\n  - twopkg' > "$HD/profiles/nonl.yaml"
+dry nonl
+expect_packages "16a" "onepkg twopkg"
+printf 'extends: dup-base\nexclude:\n  - nosuch\n  - twopkg' > "$HD/profiles/nonl-exc.yaml"
+dry nonl-exc
+expect_packages "16b" "onepkg"
+pass "missing final newline handled"
+
+info "Case 17: malformed items abort instead of being dropped"
+while IFS='|' read -r label body want; do
+    printf "$body" > "$HD/profiles/malformed.yaml"
+    dry malformed
+    expect_abort "17 $label" "$want"
+done <<'CASES'
+no space|packages:\n  -onepkg\n|-onepkg
+bare word|packages:\n  - twopkg\n  onepkg\n|onepkg
+empty name|packages:\n  - name:\n    apt: x\n|name:
+field under a plain name|packages:\n  - onepkg\n    apt: x\n|apt: x
+CASES
+pass "malformed items abort"
+
+info "Case 18: a folder must do something, and its drop-in must be usable"
+mkdir -p "$A/hollow" "$A/dropinonly" "$A/baddropin"
+echo 'install:' > "$A/hollow/config.yaml"
+printf 'install:\n  apt: x-pkg\n  dropin: files/50-x.sh\n' > "$A/dropinonly/config.yaml"
+printf 'install:\n  check: "true"\n  dropin: files/missing.sh\n' > "$A/baddropin/config.yaml"
+printf '#!/bin/sh\nexit 0\n' > "$A/baddropin/install.sh"
+chmod +x "$A/baddropin/install.sh"
+for tool in hollow dropinonly baddropin; do
+    profile folder-$tool <<EOF
+packages:
+  - $tool
+EOF
+    dry folder-$tool
+    expect_abort "18 $tool" "$tool"
+done
+pass "unusable folders abort"
+
+info "Case 19: install: with a trailing comment is still read"
+mkdir -p "$A/commented"
+printf 'install:  # how\n  apt: commented-pkg\n' > "$A/commented/config.yaml"
+profile comment-section <<'EOF'
+packages:
+  - commented
+EOF
+dry comment-section
+expect_packages "19" "commented"
+grep -qw commented-pkg <<< "$OUT" || fail "19: section lost: $OUT"
+pass "commented section read"
+
+info "Case 20: a dry run with the default state location writes nothing under HOME"
+T20="$T/home20"
+mkdir -p "$T20"
+RC=0
+OUT=$(env -u STATE_DIR -u XDG_STATE_HOME HOME="$T20" "$ROOT_DIR/dotfiles" sync --dry-run --no-pull --hostname nohost --profile minimal 2>&1) || RC=$?
+[[ $RC -eq 0 ]] || fail "20: dry-run failed: $OUT"
+WROTE=$(find "$T20" -mindepth 1)
+[[ -z "$WROTE" ]] || fail "20: dry run wrote: $WROTE"
+pass "dry run left HOME empty"
+
 info "Case 14: the real profiles resolve to exactly what they always have"
 # name|apt|dnf|brew|check|script|dropin|config dir|config flags, from the real repo
 resolved() {

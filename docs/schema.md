@@ -31,7 +31,7 @@ packages:
 
 A plain name resolves to `apps/<name>/` if that folder has a `config.yaml`, otherwise to its entry in `apps/os-packages.yaml`. It's an error, aborting before any change, if a name is defined in neither or in both, or if a tool with an `install.sh` has no `install.check`.
 
-An inline definition replaces any definition of that name, with no merging, and is how a hosts repo adds a tool `dotfiles` doesn't define. An inline entry that defines nothing (`- name: tmux`) is an error.
+An inline definition replaces any definition of that name, with no merging, and is how a hosts repo adds a tool `dotfiles` doesn't define. An inline entry that defines nothing (`- name: tmux`) is an error, as is a list item or line that can't be read.
 
 A tool listed twice in the final list runs once, at its first position, with the later definition.
 
@@ -41,7 +41,7 @@ A tool listed twice in the final list runs once, at its first position, with the
 | `apt` | string | No | Package name for APT (Debian/Ubuntu). |
 | `dnf` | string | No | Package name for DNF (Fedora/RHEL). |
 | `brew` | string | No | Package name for Homebrew (macOS). |
-| `custom.check` | string | With `custom.script` | Shell command to test if already installed (exit 0 = installed). |
+| `custom.check` | string | No | Shell command to test if already installed (exit 0 = installed). Without it, `custom.script` runs on every sync. |
 | `custom.script` | string | No | Install script path, relative to `apps/`. |
 | `custom.dropin` | string | No | Shell drop-in file path, relative to `apps/`, copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or there is no `check`). |
 | `config.dir` | string | No | Folder under `apps/` containing `configure.sh` and `files/`. |
@@ -99,10 +99,10 @@ extra:
 |-------|------|-------------|
 | `install.apt` / `dnf` / `brew` | string | OS package name for that package manager. |
 | `install.check` | string | Shell command to test if already installed. Required when `install.sh` exists. |
-| `install.dropin` | string | Shell drop-in, relative to the app folder. |
+| `install.dropin` | string | Shell drop-in, relative to the app folder. Requires `install.sh`, and the file must exist. |
 | `install.configure_flags` | string | Extra flags passed to `configure.sh`. |
 
-A tool's folder decides its phases: `install.sh` means a custom install, and `configure.sh` means a config phase. A folder without `config.yaml` doesn't define a tool.
+A tool's folder decides its phases: `install.sh` means a custom install, and `configure.sh` means a config phase. A folder without `config.yaml` doesn't define a tool, and selecting a folder that installs and configures nothing is an error.
 
 ### `apps/os-packages.yaml`
 

@@ -812,7 +812,7 @@ installer_main() {
     APP_VERSION=$(installer_version)
 
     # Initialize state
-    state_init || exit 1
+    is_dry_run || state_init || exit 1
 
     # Execute command
     case "$COMMAND" in
