@@ -17,15 +17,160 @@ reset_pkg_arrays() {
     PKG_CONFIG_FLAGS=()
 }
 
-# Load unified package manifest from a profile file
-# Parses the packages: section into parallel arrays
+# Definitions from apps/os-packages.yaml, loaded once
+declare -A OSPKG_APT=() OSPKG_DNF=() OSPKG_BREW=()
+OSPKG_LOADED=false
+
+# Append one tool to the PKG_* arrays
+# Usage: pkg_append name apt dnf brew check script dropin config_dir config_flags
+pkg_append() {
+    PKG_NAMES+=("$1")
+    PKG_APT+=("$2")
+    PKG_DNF+=("$3")
+    PKG_BREW+=("$4")
+    PKG_CUSTOM_CHECK+=("$5")
+    PKG_CUSTOM_SCRIPT+=("$6")
+    PKG_CUSTOM_DROPIN+=("$7")
+    PKG_CONFIG_DIR+=("$8")
+    PKG_CONFIG_FLAGS+=("$9")
+}
+
+# Load apps/os-packages.yaml into the OSPKG_* maps. A missing file is fine.
+load_os_packages() {
+    [[ "$OSPKG_LOADED" == true ]] && return 0
+    OSPKG_LOADED=true
+
+    local file="$APPS_DIR/os-packages.yaml"
+    [[ -f "$file" ]] || return 0
+
+    # Parse into local arrays, leaving the caller's PKG_* alone
+    local -a PKG_NAMES=() PKG_APT=() PKG_DNF=() PKG_BREW=()
+    local -a PKG_CUSTOM_CHECK=() PKG_CUSTOM_SCRIPT=() PKG_CUSTOM_DROPIN=()
+    local -a PKG_CONFIG_DIR=() PKG_CONFIG_FLAGS=()
+    load_manifest "$file" "$file" true || return 1
+
+    local idx name
+    for idx in "${!PKG_NAMES[@]}"; do
+        name="${PKG_NAMES[$idx]}"
+        OSPKG_APT["$name"]="${PKG_APT[$idx]}"
+        OSPKG_DNF["$name"]="${PKG_DNF[$idx]}"
+        OSPKG_BREW["$name"]="${PKG_BREW[$idx]}"
+    done
+}
+
+# Append the tool NAME, defined by a folder in apps/ or by os-packages.yaml, to
+# the PKG_* arrays. Logs an error naming SOURCE and returns 1 if it can't.
+# Usage: resolve_tool name source
+resolve_tool() {
+    local name="$1" source="$2"
+    local dir="$APPS_DIR/$name" in_folder=false in_os=false
+
+    if [[ "$name" != */* && "$name" != . && "$name" != .. ]]; then
+        [[ -f "$dir/config.yaml" ]] && in_folder=true
+        [[ -n "${OSPKG_APT[$name]+x}" ]] && in_os=true
+    fi
+
+    if [[ "$in_folder" == true && "$in_os" == true ]]; then
+        log_error "Tool '$name' in $source is defined twice: apps/$name/ and apps/os-packages.yaml"
+        return 1
+    fi
+    if [[ "$in_os" == true ]]; then
+        pkg_append "$name" "${OSPKG_APT[$name]}" "${OSPKG_DNF[$name]}" "${OSPKG_BREW[$name]}" "" "" "" "" ""
+        return 0
+    fi
+    if [[ "$in_folder" != true ]]; then
+        log_error "Unknown tool '$name' in $source: no apps/$name/config.yaml, and not in apps/os-packages.yaml"
+        return 1
+    fi
+
+    # The install: section of the tool's config.yaml
+    local line key value in_install=false
+    local apt="" dnf="" brew="" check="" dropin="" flags=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^install:[[:space:]]*$ ]]; then
+            in_install=true
+        elif [[ "$line" =~ ^[[:alpha:]] ]]; then
+            in_install=false
+        elif [[ "$in_install" == true && "$line" =~ ^[[:space:]]+(apt|dnf|brew|check|dropin|configure_flags):[[:space:]]*(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            value="${value%%[[:space:]]#*}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+                apt) apt="$value" ;;
+                dnf) dnf="$value" ;;
+                brew) brew="$value" ;;
+                check) check="$value" ;;
+                dropin) dropin="$value" ;;
+                configure_flags) flags="$value" ;;
+            esac
+        fi
+    done < "$dir/config.yaml"
+
+    local script="" config_dir=""
+    if [[ -f "$dir/install.sh" ]]; then
+        if [[ -z "$check" ]]; then
+            log_error "Tool '$name' in $source: apps/$name/install.sh needs install.check in its config.yaml"
+            return 1
+        fi
+        script="$name/install.sh"
+    fi
+    [[ -f "$dir/configure.sh" ]] && config_dir="$name"
+    [[ -n "$dropin" ]] && dropin="$name/$dropin"
+
+    pkg_append "$name" "$apt" "$dnf" "$brew" "$check" "$script" "$dropin" "$config_dir" "$flags"
+}
+
+# Keep each tool once, at its first position, with its last definition
+dedupe_packages() {
+    local -A pos=()
+    local -a keep=()
+    local idx name
+    for idx in "${!PKG_NAMES[@]}"; do
+        name="${PKG_NAMES[$idx]}"
+        if [[ -z "${pos[$name]+x}" ]]; then
+            keep+=("$idx")
+            pos["$name"]="$idx"
+        else
+            # The first position now takes this later definition
+            local first="${pos[$name]}"
+            PKG_APT[$first]="${PKG_APT[$idx]}"
+            PKG_DNF[$first]="${PKG_DNF[$idx]}"
+            PKG_BREW[$first]="${PKG_BREW[$idx]}"
+            PKG_CUSTOM_CHECK[$first]="${PKG_CUSTOM_CHECK[$idx]}"
+            PKG_CUSTOM_SCRIPT[$first]="${PKG_CUSTOM_SCRIPT[$idx]}"
+            PKG_CUSTOM_DROPIN[$first]="${PKG_CUSTOM_DROPIN[$idx]}"
+            PKG_CONFIG_DIR[$first]="${PKG_CONFIG_DIR[$idx]}"
+            PKG_CONFIG_FLAGS[$first]="${PKG_CONFIG_FLAGS[$idx]}"
+        fi
+    done
+
+    local arr i
+    for arr in PKG_NAMES PKG_APT PKG_DNF PKG_BREW PKG_CUSTOM_CHECK PKG_CUSTOM_SCRIPT \
+               PKG_CUSTOM_DROPIN PKG_CONFIG_DIR PKG_CONFIG_FLAGS; do
+        local -n ref="$arr"
+        local -a kept=()
+        for i in "${keep[@]}"; do
+            kept+=("${ref[$i]}")
+        done
+        ref=("${kept[@]}")
+        unset -n ref
+    done
+}
+
+# Load the packages: section of a file into the parallel PKG_* arrays. An entry
+# is a plain name (resolve_tool) or the long form (- name: ...). With DEFINITIONS
+# true, a plain name is an OS package with that name on every package manager.
+# Usage: load_manifest file [source_for_errors] [definitions]
 load_manifest() {
-    local config_file="$1"
+    local config_file="$1" source="${2:-$1}" definitions="${3:-false}"
 
     if [[ ! -f "$config_file" ]]; then
         log_error "Config not found: $config_file"
         return 1
     fi
+
+    [[ "$definitions" == true ]] || load_os_packages || return 1
 
     local in_packages=false
     local current_name=""
@@ -39,19 +184,18 @@ load_manifest() {
     local current_config_flags=""
     local in_custom=false
     local in_config=false
+    local bad_entry=false
 
     # Save current entry to arrays
     _save_entry() {
         if [[ -n "$current_name" ]]; then
-            PKG_NAMES+=("$current_name")
-            PKG_APT+=("$current_apt")
-            PKG_DNF+=("$current_dnf")
-            PKG_BREW+=("$current_brew")
-            PKG_CUSTOM_CHECK+=("$current_custom_check")
-            PKG_CUSTOM_SCRIPT+=("$current_custom_script")
-            PKG_CUSTOM_DROPIN+=("$current_custom_dropin")
-            PKG_CONFIG_DIR+=("$current_config_dir")
-            PKG_CONFIG_FLAGS+=("$current_config_flags")
+            if [[ -z "$current_apt$current_dnf$current_brew$current_custom_script$current_custom_dropin$current_config_dir" ]]; then
+                log_error "Entry '$current_name' in $source defines nothing; to use a defined tool, write: - $current_name"
+                bad_entry=true
+            fi
+            pkg_append "$current_name" "$current_apt" "$current_dnf" "$current_brew" \
+                "$current_custom_check" "$current_custom_script" "$current_custom_dropin" \
+                "$current_config_dir" "$current_config_flags"
         fi
     }
 
@@ -80,12 +224,28 @@ load_manifest() {
         fi
 
         if [[ "$in_packages" == true ]]; then
+            # A top-level key ends the section
+            [[ "$line" =~ ^[[:alpha:]] ]] && break
             # New package entry: "  - name: <name>"
             if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*name:[[:space:]]*(.*) ]]; then
                 _save_entry
                 _reset_entry
                 current_name="${BASH_REMATCH[1]}"
                 current_name=$(echo "$current_name" | sed 's/[[:space:]]*$//')
+            # Plain name: "  - <name>", optionally followed by a comment
+            elif [[ "$line" =~ ^[[:space:]]*-[[:space:]]+([^[:space:]#]+)[[:space:]]*(#.*)?$ ]]; then
+                local plain="${BASH_REMATCH[1]}"
+                _save_entry
+                _reset_entry
+                if [[ "$definitions" == true ]]; then
+                    pkg_append "$plain" "$plain" "$plain" "$plain" "" "" "" "" ""
+                else
+                    resolve_tool "$plain" "$source" || return 1
+                fi
+            # Any other list item can't be read
+            elif [[ "$line" =~ ^[[:space:]]*-[[:space:]] ]]; then
+                log_error "Cannot read '$line' in $source"
+                return 1
             # Top-level fields (2-4 space indent, no dash)
             elif [[ "$line" =~ ^[[:space:]]+apt:[[:space:]]*(.*) ]] && [[ "$in_custom" == false ]] && [[ "$in_config" == false ]]; then
                 current_apt="${BASH_REMATCH[1]}"
@@ -125,18 +285,17 @@ load_manifest() {
                     current_config_flags="${BASH_REMATCH[1]}"
                     current_config_flags=$(echo "$current_config_flags" | sed 's/[[:space:]]*$//')
                 fi
-            # Exit packages section on non-indented, non-packages line
-            elif [[ "$line" =~ ^[[:alpha:]] ]]; then
-                break
             fi
         fi
     done < "$config_file"
 
     # Save last entry
     _save_entry
+    [[ "$bad_entry" == false ]] || return 1
 
+    [[ "$definitions" == true ]] && return 0
     if [[ ${#PKG_NAMES[@]} -eq 0 ]]; then
-        log_error "No packages found in $config_file"
+        log_error "No packages found in $source"
         return 1
     fi
 
@@ -226,6 +385,17 @@ apply_profile_modifiers() {
         PKG_CONFIG_DIR=("${filtered_cdir[@]}")
         PKG_CONFIG_FLAGS=("${filtered_cflags[@]}")
     elif [[ ${#include_list[@]} -gt 0 ]]; then
+        local inc_name known
+        for inc_name in "${include_list[@]}"; do
+            known=false
+            for idx in "${!PKG_NAMES[@]}"; do
+                [[ "${PKG_NAMES[$idx]}" == "$inc_name" ]] && known=true
+            done
+            if [[ "$known" != true ]]; then
+                log_error "include '$inc_name' in $file: not in the inherited package list"
+                return 1
+            fi
+        done
         local -a filtered_names=() filtered_apt=() filtered_dnf=() filtered_brew=()
         local -a filtered_cc=() filtered_cs=() filtered_cd=()
         local -a filtered_cdir=() filtered_cflags=()
@@ -275,7 +445,7 @@ apply_profile_modifiers() {
         local -a save_cflags=("${PKG_CONFIG_FLAGS[@]}")
 
         reset_pkg_arrays
-        load_manifest "$tmp_extra" || { rm -f "$tmp_extra"; return 1; }
+        load_manifest "$tmp_extra" "$file" || { rm -f "$tmp_extra"; return 1; }
         rm -f "$tmp_extra"
 
         # Merge: restore saved + append extras
@@ -397,8 +567,9 @@ load_packages_for_profile() {
 
     if [[ -z "$HOST_YAML" ]]; then
         RESOLVED_PROFILE="${profile_arg:-complete}"
-        load_profile "$RESOLVED_PROFILE"
-        return
+        load_profile "$RESOLVED_PROFILE" || return 1
+        dedupe_packages
+        return 0
     fi
 
     local host_profile
@@ -415,7 +586,8 @@ load_packages_for_profile() {
     fi
 
     load_profile "$RESOLVED_PROFILE" || return 1
-    apply_profile_modifiers "$HOST_YAML" "host $hostname"
+    apply_profile_modifiers "$HOST_YAML" "host $hostname" || return 1
+    dedupe_packages
 }
 
 # Collect layer roots and the strategies file, then validate every app's
