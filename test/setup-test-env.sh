@@ -58,8 +58,8 @@ if docker ps --filter "name=dotfiles-test-server" --filter "status=running" | gr
     else
         warn "Container is running but SSH is not responding, restarting..."
         cd docker
-        docker-compose down
-        docker-compose up -d
+        docker compose down
+        docker compose up -d
         cd ..
     fi
 else
@@ -67,12 +67,12 @@ else
     info "Setting up test environment..."
     cd docker
     # Clean up any existing containers/networks
-    docker-compose down 2>/dev/null || true
+    docker compose down 2>/dev/null || true
 
     # Build Docker image (only if it doesn't exist)
     if ! docker images | grep -q "dotfiles-test-server.*latest"; then
         info "Building Docker image (first time)..."
-        docker-compose build
+        docker compose build
         success "Docker image built and cached"
     else
         info "Using cached Docker image"
@@ -80,7 +80,7 @@ else
 
     # Start container
     info "Starting test server container..."
-    docker-compose up -d
+    docker compose up -d
     cd ..
 fi
 
@@ -98,7 +98,7 @@ else
         sleep 1
         if [[ $i -eq 30 ]]; then
             error "SSH server did not start in time"
-            echo "Check logs with: cd docker && docker-compose logs"
+            echo "Check logs with: cd docker && docker compose logs"
             exit 1
         fi
     done
@@ -124,7 +124,7 @@ echo "  DOTFILES_SSH_OPTS=\"-o Port=2222 -o IdentityFile=test/ssh-key -o StrictH
 echo "    ./dotfiles push --dry-run testuser@localhost"
 echo
 echo "View container logs:"
-echo "  cd docker && docker-compose logs -f"
+echo "  cd docker && docker compose logs -f"
 echo
 echo "SSH into container:"
 echo "  ssh -i ssh-key -p 2222 testuser@localhost"

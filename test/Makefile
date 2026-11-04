@@ -51,11 +51,11 @@ run:
 		-i ssh-key -p 2222 testuser@localhost
 
 logs:
-	@cd docker && docker-compose logs -f
+	@cd docker && docker compose logs -f
 
 rebuild:
 	@echo "Forcing rebuild of Docker image..."
-	@cd docker && docker-compose build --no-cache
+	@cd docker && docker compose build --no-cache
 
 clean:
 	@./cleanup-test-env.sh

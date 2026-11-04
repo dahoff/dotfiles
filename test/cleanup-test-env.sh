@@ -22,7 +22,7 @@ echo
 # Stop and remove containers
 info "Stopping containers..."
 cd docker
-docker-compose down -v
+docker compose down -v
 cd ..
 
 success "Containers stopped and removed"
