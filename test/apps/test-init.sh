@@ -293,5 +293,96 @@ run_interactive "$HD"
 [[ ! -e "$CFG" ]] || fail "config written after EOF"
 pass "interactive prompts, defaults, re-prompts and EOF"
 
+# SSH access: a fake ssh refuses the number of connections in ssh-refusals, then
+# serves the real bare repo, as if the key was added while init waited.
+cat > "$T/fake-ssh" <<EOF
+#!/bin/sh
+n=\$(cat "$T/ssh-refusals")
+if [ "\$n" -gt 0 ]; then
+    echo \$((n - 1)) > "$T/ssh-refusals"
+    echo "git@host: Permission denied (publickey)." >&2
+    exit 255
+fi
+exec git upload-pack "$T/hosts.git"
+EOF
+chmod +x "$T/fake-ssh"
+export GIT_SSH_COMMAND="$T/fake-ssh"
+# Otherwise git probes the command with -G, which would use up a refusal
+export GIT_SSH_VARIANT=ssh
+SSH_URL="git@github.com:me/hosts.git"
+KEY="$HOME/.ssh/id_ed25519"
+ssh_reset() {
+    rm -rf "$HOME/.ssh" "$DEFAULT_HD"
+    rm -f "$CFG" "$CFG.bak"
+    echo "$1" > "$T/ssh-refusals"
+}
+
+info "Case SSH 1: no key: one is created and shown, and init retries until the clone works"
+ssh_reset 2
+run_interactive "$SSH_URL" "" "" testhost "" ""
+[[ $RC -eq 0 ]] || fail "SSH 1: init failed ($RC): $OUT"
+[[ "$(stat -c %a "$KEY")" == 600 ]] || fail "SSH 1: private key missing or wrong mode"
+ssh-keygen -y -P "" -f "$KEY" >/dev/null 2>&1 || fail "SSH 1: key needs a passphrase"
+[[ "$OUT" == *"$(cat "$KEY.pub")"* ]] || fail "SSH 1: public key not shown: $OUT"
+[[ "$OUT" == *"https://github.com/settings/keys"* ]] || fail "SSH 1: no link to add the key: $OUT"
+[[ -f "$DEFAULT_HD/hosts/testhost/host.yaml" ]] || fail "SSH 1: not cloned"
+has "hosts_dir: $DEFAULT_HD" || fail "SSH 1: hosts_dir not written: $(cat "$CFG")"
+pass "key created, shown and clone retried"
+
+info "Case SSH 2: an existing key is shown, not replaced"
+ssh_reset 1
+mkdir -p "$HOME/.ssh"
+ssh-keygen -q -t rsa -b 2048 -N "" -f "$HOME/.ssh/id_rsa" -C existing
+cp "$HOME/.ssh/id_rsa" "$T/id_rsa.before"
+run_interactive "$SSH_URL" "" testhost "" ""
+[[ $RC -eq 0 ]] || fail "SSH 2: init failed ($RC): $OUT"
+cmp -s "$HOME/.ssh/id_rsa" "$T/id_rsa.before" || fail "SSH 2: existing key changed"
+[[ ! -e "$KEY" ]] || fail "SSH 2: created a second key"
+[[ "$OUT" == *"$(cat "$HOME/.ssh/id_rsa.pub")"* ]] || fail "SSH 2: existing public key not shown: $OUT"
+pass "existing key reused"
+
+info "Case SSH 3: a private key with no .pub file is left alone"
+ssh_reset 1
+mkdir -p "$HOME/.ssh"
+echo "not a real key" > "$KEY"
+run_interactive "$SSH_URL" "" testhost "" ""
+[[ $RC -eq 1 ]] || fail "SSH 3: expected exit 1, got $RC: $OUT"
+[[ "$(cat "$KEY")" == "not a real key" ]] || fail "SSH 3: key overwritten"
+[[ ! -e "$CFG" ]] || fail "SSH 3: config written"
+pass "private key without .pub not overwritten"
+
+info "Case SSH 4: q stops without writing anything"
+ssh_reset 1
+run_interactive "$SSH_URL" q
+[[ $RC -eq 1 ]] || fail "SSH 4: expected exit 1, got $RC: $OUT"
+[[ "$OUT" == *"could not clone $SSH_URL"* ]] || fail "SSH 4: no clone error: $OUT"
+[[ ! -e "$CFG" ]] || fail "SSH 4: config written"
+[[ ! -e "$DEFAULT_HD" ]] || fail "SSH 4: hosts dir left behind"
+pass "q stops"
+
+info "Case SSH 5: --yes fails at once and creates no key"
+ssh_reset 1
+run_init --yes --no-sync --hosts-dir "$SSH_URL" --hostname testhost
+[[ $RC -eq 1 ]] || fail "SSH 5: expected exit 1, got $RC: $OUT"
+[[ ! -e "$HOME/.ssh" ]] || fail "SSH 5: touched ~/.ssh under --yes"
+[[ ! -e "$CFG" ]] || fail "SSH 5: config written"
+pass "--yes does not prompt or create a key"
+
+info "Case SSH 6: a failed clone that does not use ssh creates no key"
+ssh_reset 0
+run_interactive "file://$T/no-such-repo.git"
+[[ $RC -eq 1 ]] || fail "SSH 6: expected exit 1, got $RC: $OUT"
+[[ ! -e "$HOME/.ssh" ]] || fail "SSH 6: touched ~/.ssh for a non-ssh URL"
+pass "non-ssh URL creates no key"
+
+info "Case SSH 7: another git host is named, without a GitHub link"
+ssh_reset 1
+run_interactive "ssh://git@git.work.example:2222/me/hosts.git" "" testhost "" ""
+[[ $RC -eq 0 ]] || fail "SSH 7: init failed ($RC): $OUT"
+[[ "$OUT" == *"your account on git.work.example:"* ]] || fail "SSH 7: host not named: $OUT"
+[[ "$OUT" != *"github.com/settings/keys"* ]] || fail "SSH 7: GitHub link for another host: $OUT"
+pass "other git host named"
+unset GIT_SSH_COMMAND GIT_SSH_VARIANT
+
 echo
 echo -e "${GREEN}All init tests passed${NC}"

@@ -288,7 +288,7 @@ Pass init flags after `bash -s --`, for example the hosts repo:
 
 Init asks for the hosts repo, hostname, profile, auto sync and interval, writes the config file and runs a sync. A flag answers its question without asking. Before the profile question it lists the profile names found in the hosts repo, then the dotfiles repo. It ends with a summary and a reminder to open a new terminal.
 
-- `--hosts-dir`: a URL (contains `://`, or looks like `user@host:path`) is cloned to `~/.local/share/dotfiles/dotfiles-hosts`; a path must be an existing directory; `none` means no hosts repo. A failed clone exits 1 and writes nothing. If the default hosts path already holds a pushed (non-checkout) copy, a URL is refused with an error naming the path; the copy is never deleted.
+- `--hosts-dir`: a URL (contains `://`, or looks like `user@host:path`) is cloned to `~/.local/share/dotfiles/dotfiles-hosts`; a path must be an existing directory; `none` means no hosts repo. A failed clone exits 1 and writes nothing, except when an interactive run fails over ssh: init then shows a public key (your existing `~/.ssh/id_ed25519`, `id_ecdsa` or `id_rsa`, or a new `id_ed25519` with no passphrase, since background sync can't answer one) and where to add it, and retries when you press Enter (`q` stops). If the default hosts path already holds a pushed (non-checkout) copy, a URL is refused with an error naming the path; the copy is never deleted.
 - `--hostname`: same rules as everywhere else (no `/`, not `.` or `..`); the prompt applies them too.
 - `--profile`: a profile already set in the config stays active even if `hosts/<hostname>/host.yaml` exists.
 - `--yes` accepts every default (or flag value) without prompting. `--no-sync` writes the config and skips the first sync.

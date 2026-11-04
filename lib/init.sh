@@ -63,6 +63,60 @@ init_is_url() {
     [[ "$1" == *"://"* || "$1" =~ ^[^/[:space:]]+@[^:/[:space:]]+: ]]
 }
 
+# True if URL is cloned over ssh: ssh:// or scp-like user@host:path
+init_is_ssh_url() {
+    [[ "$1" == ssh://* || "$1" =~ ^[^/[:space:]]+@[^:/[:space:]]+: ]]
+}
+
+# Print the host name of an ssh URL
+init_ssh_url_host() {
+    local host="${1#ssh://}"
+    host="${host#*@}"
+    host="${host%%/*}"
+    echo "${host%%:*}"
+}
+
+# Print the path of the public key to use, creating ~/.ssh/id_ed25519 if the
+# user has no key. It has no passphrase: background sync pulls with
+# BatchMode=yes and could not answer one. An existing key is never replaced.
+init_ssh_public_key() {
+    local key="$HOME/.ssh/id_ed25519" t
+    for t in ed25519 ecdsa rsa; do
+        if [[ -f "$HOME/.ssh/id_$t.pub" ]]; then
+            echo "$HOME/.ssh/id_$t.pub"
+            return 0
+        fi
+    done
+    if [[ -e "$key" ]]; then
+        log_error "$key has no public key file; create it with: ssh-keygen -y -f $key > $key.pub"
+        return 1
+    fi
+    if ! command -v ssh-keygen >/dev/null 2>&1; then
+        log_error "ssh-keygen not found; install an ssh client"
+        return 1
+    fi
+    mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" || return 1
+    ssh-keygen -q -t ed25519 -N "" -C "dotfiles $(hosts_local_name)" -f "$key" </dev/null || return 1
+    echo "$key.pub"
+}
+
+# Show the public key and where to add it after an ssh clone failed
+# Usage: init_show_ssh_key URL
+init_show_ssh_key() {
+    local host pub
+    host=$(init_ssh_url_host "$1")
+    pub=$(init_ssh_public_key) || return 1
+    echo
+    if [[ "$host" == github.com ]]; then
+        echo "To clone $1, add this SSH key at https://github.com/settings/keys:"
+    else
+        echo "To clone $1, add this SSH key to your account on $host:"
+    fi
+    echo
+    cat "$pub"
+    echo
+}
+
 # Turn a hosts repo answer into INIT_HOSTS_DIR: none -> empty, a URL -> clone
 # (or pull) at DEFAULT_HOSTS_DIR, a path -> absolute directory.
 # Returns 1 for an invalid value; a failed clone exits 1.
@@ -96,11 +150,18 @@ init_set_hosts_dir() {
             mkdir -p "$(dirname "$target")"
             local -a envs=()
             [[ "$INIT_YES" == true ]] && envs=(GIT_TERMINAL_PROMPT=0)
-            if ! env ${envs[@]+"${envs[@]}"} git clone -q "$value" "$target"; then
-                log_error "could not clone $value. Fix access to it, or run" \
-                    "'dotfiles push --init' from a machine that has the hosts repo"
-                exit 1
-            fi
+            local retry
+            while ! env ${envs[@]+"${envs[@]}"} git clone -q "$value" "$target"; do
+                retry=q
+                if [[ "$INIT_YES" != true ]] && init_is_ssh_url "$value" && init_show_ssh_key "$value"; then
+                    init_ask retry "Press Enter to retry, or q to stop" retry
+                fi
+                if [[ "$retry" == q ]]; then
+                    log_error "could not clone $value. Fix access to it, or run" \
+                        "'dotfiles push --init' from a machine that has the hosts repo"
+                    exit 1
+                fi
+            done
         fi
         INIT_HOSTS_DIR="$target"
         return 0
