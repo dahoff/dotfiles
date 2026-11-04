@@ -423,6 +423,32 @@ WROTE=$(find "$T20" -mindepth 1)
 [[ -z "$WROTE" ]] || fail "20: dry run wrote: $WROTE"
 pass "dry run left HOME empty"
 
+info "Case 21: uninstall and verify run no install phases and leave pending reminders alone"
+profile phases <<'EOF'
+packages:
+  - toolonly
+  - flagapp
+  - name: missing-os-pkg
+    apt: dotfiles-nonexistent-pkg
+    dnf: dotfiles-nonexistent-pkg
+    brew: dotfiles-nonexistent-pkg
+EOF
+PENDING_FILE="$XDG_STATE_HOME/dotfiles/pending"
+for cmd in verify uninstall; do
+    rm -f "$HOME/toolonly-installed" "$HOME/.bashrc.d/50-toolonly.sh" "$HOME/flagapp-args"
+    mkdir -p "$(dirname "$PENDING_FILE")"
+    echo "toolonly" > "$PENDING_FILE"
+    RC=0
+    OUT=$("$DF/dotfiles" "$cmd" --hosts-dir "$HD" --hostname nohost --profile phases 2>&1) || RC=$?
+    [[ $RC -eq 0 ]] || fail "21 $cmd: exit $RC: $OUT"
+    [[ ! -e "$HOME/toolonly-installed" ]] || fail "21 $cmd: ran install.sh: $OUT"
+    [[ ! -e "$HOME/.bashrc.d/50-toolonly.sh" ]] || fail "21 $cmd: deployed a drop-in: $OUT"
+    grep -q dotfiles-nonexistent-pkg <<< "$OUT" && fail "21 $cmd: tried the OS package: $OUT"
+    [[ "$(cat "$HOME/flagapp-args")" == "$cmd"* ]] || fail "21 $cmd: configure.sh not called: $(cat "$HOME/flagapp-args" 2>&1)"
+    [[ "$(cat "$PENDING_FILE")" == toolonly ]] || fail "21 $cmd: pending changed: $(cat "$PENDING_FILE" 2>&1)"
+done
+pass "uninstall and verify only touch configs"
+
 info "Case 14: the real profiles resolve to exactly what they always have"
 # name|apt|dnf|brew|check|script|dropin|config dir|config flags, from the real repo
 resolved() {

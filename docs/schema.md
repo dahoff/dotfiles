@@ -267,8 +267,8 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 | `sync` | Pulls the dotfiles and hosts repos (fast-forward only), self-installs, then installs packages and deploys app configs. Idempotent: it installs what is new and upgrades what changed. |
 | `push HOST...` | Ships the repos to each HOST over ssh and runs `dotfiles sync --no-pull` there. Meant for hosts without access to the repos. |
 | `status` | Read-only. Shows the repos (branch and commit, or the pushed copy's `PUSHED` line), host and profile, auto sync state, pending packages and per-app state. |
-| `uninstall` | Removes the deployed configs and restores the originals (unless `--no-backup`). |
-| `verify` | Checks every installation. |
+| `uninstall` | Removes the deployed configs and restores the originals (unless `--no-backup`). Installs nothing and leaves tools in place. |
+| `verify` | Checks every installation. Installs nothing. |
 | `help` | Prints the usage text. |
 
 ### `sync`

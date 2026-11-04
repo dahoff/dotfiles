@@ -466,13 +466,16 @@ run_all() {
         return 1
     fi
 
-    # Phase 1: OS packages (batch install)
-    log_info "[$target] Phase 1: OS packages"
-    run_phase_os_packages || true
+    # Only sync installs tools; uninstall and verify act on configs alone
+    if [[ "$COMMAND" == "sync" ]]; then
+        # Phase 1: OS packages (batch install)
+        log_info "[$target] Phase 1: OS packages"
+        run_phase_os_packages || true
 
-    # Phase 2: Custom installs
-    log_info "[$target] Phase 2: Custom installs"
-    run_phase_custom_installs || true
+        # Phase 2: Custom installs
+        log_info "[$target] Phase 2: Custom installs"
+        run_phase_custom_installs || true
+    fi
 
     # Phase 3: Config deployments
     log_info "[$target] Phase 3: Config deployments"
@@ -1078,7 +1081,10 @@ main() {
 
     run_all "$PROFILE_ARG"
 
-    is_dry_run || sync_write_pending "${PENDING[@]}"
+    # Pending packages are only worked out by sync
+    if [[ "$COMMAND" == "sync" ]] && ! is_dry_run; then
+        sync_write_pending ${PENDING[@]+"${PENDING[@]}"}
+    fi
 
     print_summary
 
