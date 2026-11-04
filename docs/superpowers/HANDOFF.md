@@ -1,30 +1,31 @@
-# Handoff — dotfiles-hosts / sync / bootstrap work (state as of 2026-10-02, evening)
+# Handoff — dotfiles-hosts / sync / bootstrap work (state as of 2026-11-03)
 
-Read this first when resuming. Everything below is on branch `dotfiles-sync-init`.
+Read this first when resuming. Sub-projects 1–3 are merged and on `origin/main`.
 
 ## Where things are
 
 | What | Where |
 |---|---|
-| Main checkout | `/home/david/git/dotfiles` — branch `main` at `10aa592`. 11 commits ahead of `origin/main`. **Not pushed.** User has an uncommitted WIP edit to `claude/files/settings.json` there; leave it alone. |
-| Work branch | `dotfiles-sync-init`. Worktree at `/home/david/git/dotfiles/.claude/worktrees/sync-init`. 30+ commits on top of `main`; all work complete and reviewed. **Not merged, not pushed.** |
-| SDD workspaces (git-ignored scratch) | `<worktree>/.superpowers/sdd/2026-10-01-dotfiles-sync-push/` holds sub-project 2's ledger. The revisions and sub-project 3 workspaces were deleted after a clean final review; their rulings and parked items are recorded at the end of this file. |
+| Dotfiles | `/home/david/git/dotfiles`, branch `main`. Check `git status -sb` for commits not yet pushed. The feature branch and worktree are gone. |
+| Personal hosts repo | `git@github.com:dahoff/dotfiles-hosts.git` (private), checked out at `/home/david/git/dotfiles-hosts`. Holds `hosts/koi/host.yaml` (`profile: complete`). |
+| Work hosts repo | The user creates and manages it. Claude has no access to it. |
+| This machine (koi) | `~/.config/dotfiles/config.yaml` didn't exist when last checked, so `dotfiles sync` doesn't use the hosts repo here until `dotfiles init` has run. |
 
 ## The three sub-projects
 
 1. **Sub-project 1: dotfiles-hosts overlays and merge.** DONE and merged to local `main`.
    - Spec: `docs/superpowers/specs/2026-09-30-dotfiles-hosts-design.md`
-2. **Sub-project 2: the `dotfiles` command (sync, `--auto` background sync, push, status).** DONE on the branch. It passed per-task reviews, a final review (opus) and a fix wave. Core tests 34/34, app tests 14/14, and the Docker push suite pass.
+2. **Sub-project 2: the `dotfiles` command (sync, `--auto` background sync, push, status).** DONE and pushed. It passed per-task reviews, a final review (opus) and a fix wave. Core tests 34/34, app tests 14/14, and the Docker push suite pass.
    - Spec: `docs/superpowers/specs/2026-10-01-dotfiles-sync-push-design.md`. Its **"Revisions (2026-10-02)"** section at the end overrides earlier text.
    - Plan (executed): `docs/superpowers/plans/2026-10-01-dotfiles-sync-push.md`
-3. **Sub-project 3: `bootstrap.sh`, `dotfiles init`, `dotfiles push --init`.** DONE on the branch (Tasks 1–4), after the revisions plan R1–R3 (`docs/superpowers/plans/2026-10-02-dotfiles-sync-revisions.md`, also DONE). Final review of `763c17e..aab5003` (opus) plus one fix wave (`e990448`). Core 34/34, apps 16/16, Docker P1–P7 and PI1–PI4 pass.
+3. **Sub-project 3: `bootstrap.sh`, `dotfiles init`, `dotfiles push --init`.** DONE and pushed (Tasks 1–4), after the revisions plan R1–R3 (`docs/superpowers/plans/2026-10-02-dotfiles-sync-revisions.md`, also DONE). Final review of `763c17e..aab5003` (opus) plus one fix wave (`e990448`). Core 34/34, apps 16/16, Docker P1–P7 and PI1–PI4 pass.
    - Spec: `docs/superpowers/specs/2026-10-01-dotfiles-bootstrap-init-design.md`
    - Plan: `docs/superpowers/plans/2026-10-01-dotfiles-bootstrap-init.md` (Tasks 1–4)
 
-## Next steps, in order
+## Next steps
 
-1. **The user decides** whether to merge `dotfiles-sync-init` into `main` and whether to push. Nothing is merged or pushed.
-2. Optional follow-ups (parked, non-blocking): see "Rulings made 2026-10-02 (evening)" at the end of this file.
+1. Try bootstrap on a fresh machine with a real terminal. The `/dev/tty` path has no automated test.
+2. Open design decisions are listed under "Open questions for the user".
 
 ## Decisions the user made (2026-10-01/02)
 
@@ -39,12 +40,13 @@ Read this first when resuming. Everything below is on branch `dotfiles-sync-init
 
 ## Open questions for the user
 
-- **Is `github.com/dahoff/dotfiles` public?** `bootstrap.sh` defaults to cloning it over HTTPS with no SSH key. If it's private, bootstrap needs credentials or a different approach.
-- **The real `dotfiles-hosts` repos** (one on personal GitHub, one on work GitHub) haven't been created. That is the user's job; don't create them.
+- **SSH key step in bootstrap:** a private hosts repo needs a GitHub key on the new machine before the clone. The user suggested prompting for it; the design isn't settled.
+- **Rate limit bars by host type:** the user wants them on for personal hosts and always off for work hosts. `CLAUDE_STATUS_RATE_LIMITS` is currently in the base `claude/files/settings.json`; moving it to a hosts-repo profile layer isn't settled.
+- **Repo layout:** the user is considering moving the app dirs under a new top-level folder (`apps` or `config`).
 
 ## Rulings made autonomously (cost if wrong)
 
-- **Sub-project 2 rulings** (also in the ledger):
+- **Sub-project 2 rulings:**
   - A failed pull is a warning and exits 0. Cost: none.
   - Forced `-c merge.autoStash=false -c rebase.autoStash=false -c pull.rebase=false` on pulls. Cost: none.
   - `auto_sync_interval: 0m` means always sync. Cost: none.
@@ -53,17 +55,19 @@ Read this first when resuming. Everything below is on branch `dotfiles-sync-init
   - A config error under `--auto` is reported as `sync failed (config)`, throttled by a fixed 4h. Cost: an error is reported at most every 4h.
 - **Sub-project 1 ruling:** merge semantics are `live ⊕ (repo layers pre-merged)`. Cost: one jq edge case differs from strict left-to-right merging.
 
-## Known deferred minors (not blocking)
+## Known minor issues (not blocking)
 
 - A relative `hosts_dir` / old relative `dotfiles_repo` edge case. Moot after R1 for `dotfiles_repo`.
 - A config error while the config also says `auto_sync: off` still runs one background report.
 - A pull killed by the timeout may show an empty reason.
-- `sync --dry-run` creates empty `~/.bak/<app>/original` dirs. This predates this branch.
-- The full list is in the sub-project 2 ledger (`progress.md`), under lines marked `minor (deferred)`.
+- `init` doesn't re-prompt for a hostname with no `hosts/<name>/`; it lists the available ones instead.
+- The push snippet parses `#a #b` differently from `config_load`; the difference only affects a warning.
+- A dangling link target is accepted when its directory has `lib/`; the refusal guard still protects it.
+- test-sync Case 25 is skipped on hosts without `setsid` when run from a terminal.
+- A sudoers rule granting NOPASSWD for apt-get without SETENV refuses background apt. It fails closed: packages stay pending.
 
 ## Practical notes for whoever implements
 
-- **Session guard:** this session runs isolated in the worktree. Shell commands that mention git with runtime variables, `sed -f`, or complex constructs get refused. Put the commands in a script file under the scratchpad and run it with `bash <file>`, or use plain literal commands.
 - **Docker tests:** `docker-compose` v1 is broken on this machine. Use a shim at `/tmp/dcshim/docker-compose` containing `exec docker compose "$@"`, put on PATH only for those commands, never in `~/.local/bin`. `chmod 600 test/ssh-key`. Run `test/cleanup-test-env.sh` (not `--full`) afterwards.
 - **Test isolation:** tests must never touch the real HOME. Set `HOME`, `XDG_STATE_HOME`, `STATE_DIR` and `DOTFILES_CONFIG` to temp paths, and unset the hosts env var.
 - **Commits:** never add a `Co-Authored-By` or any Claude attribution trailer (user preference). Use `git add <explicit paths>`.
@@ -82,10 +86,4 @@ Read this first when resuming. Everything below is on branch `dotfiles-sync-init
 - **Test-only package:** `packages/custom/testtool` and `files/50-testtool.sh` live in the real package tree. Only the `pendingtest` fixture profile references them.
 - **Remote snippet:** its internal output key stays `dotfiles_repo=`.
 - **Final review scope:** it covered `763c17e..aab5003` only, since SP2 was reviewed earlier.
-- **Parked:**
-  - `init` doesn't re-prompt for a hostname with no `hosts/<name>/`; it lists the available ones instead.
-  - The push snippet parses `#a #b` differently from `config_load`; the difference only affects a warning.
-  - A dangling link target is accepted when its directory has `lib/`; the refusal guard still protects it.
-  - The payload is unpacked before the remote init validates flags.
-  - test-sync Case 25 is skipped on hosts without `setsid` when run from a terminal.
 - **Running tests:** the suites share `/tmp/home-test-localtest`. Never run two suites at the same time.
