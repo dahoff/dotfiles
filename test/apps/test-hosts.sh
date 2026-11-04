@@ -229,6 +229,48 @@ for bad in "../x" "a/b" "." ".."  ""; do
 done
 pass "hostname validated"
 
+# Test 22
+info "Test 22: an extends profile's overlay reaches its hosts, and only its hosts"
+mkdir -p "$HR/profiles/layered/apps/claude/files" "$HR/hosts/layeredhost" "$HR/hosts/plainhost"
+cat > "$HR/profiles/cfgonly.yaml" <<'EOF'
+packages:
+  - name: claude
+    config:
+      dir: claude
+EOF
+echo 'extends: cfgonly' > "$HR/profiles/layered.yaml"
+echo '# layered statusline' > "$HR/profiles/layered/apps/claude/files/statusline-command.sh"
+echo 'profile: layered' > "$HR/hosts/layeredhost/host.yaml"
+echo 'profile: cfgonly' > "$HR/hosts/plainhost/host.yaml"
+# Each host gets its own HOME and state, so neither sees the other's deploy
+for h in layeredhost plainhost; do
+    mkdir -p "$TEST_HOME-$h" "$TEST_STATE-$h/apps"
+    RC=0
+    OUT=$(HOME="$TEST_HOME-$h" STATE_DIR="$TEST_STATE-$h" XDG_STATE_HOME="$TEST_HOME-$h/.xdg-state" \
+        ./dotfiles sync --no-pull --no-backup --hosts-dir "$HR" --hostname "$h" 2>&1) || RC=$?
+    [[ $RC -eq 0 ]] || fail "$h: sync failed: $OUT"
+done
+[[ "$(cat "$TEST_HOME-layeredhost/.claude/statusline-command.sh")" == "# layered statusline" ]] \
+    || fail "extends profile's overlay not deployed"
+cmp -s "$TEST_HOME-plainhost/.claude/statusline-command.sh" "$ROOT_DIR/apps/claude/files/statusline-command.sh" \
+    || fail "a host on another profile should keep the base file"
+rm -rf "$TEST_HOME-layeredhost" "$TEST_STATE-layeredhost" "$TEST_HOME-plainhost" "$TEST_STATE-plainhost"
+pass "overlay limited to the extends profile's hosts"
+
+# Test 23: the shape of personal -> complete. A dry run can't show the deployed
+# file, but a misnamed overlay only aborts if this profile's layer is in use.
+info "Test 23: a profile extending complete contributes its overlay layer"
+mkdir -p "$HR/profiles/oncomplete/apps/claude/files"
+echo 'extends: complete' > "$HR/profiles/oncomplete.yaml"
+run sync --dry-run --no-pull --hosts-dir "$HR" --hostname nohost --profile oncomplete
+[[ $RC -eq 0 ]] || fail "extends complete failed: $OUT"
+[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
+    || fail "extends complete changed the list: $(packages_line)"
+echo '# wrong name' > "$HR/profiles/oncomplete/apps/claude/files/statusbar.sh"
+run sync --dry-run --no-pull --hosts-dir "$HR" --hostname nohost --profile oncomplete
+[[ $RC -ne 0 && "$OUT" == *"statusbar.sh"* ]] || fail "overlay layer of a profile extending complete not used: $OUT"
+pass "extends complete keeps the profile's layer"
+
 rm -rf "$TEST_STATE" "$TEST_HOME" "$HR"
 echo
 echo "======================================"
