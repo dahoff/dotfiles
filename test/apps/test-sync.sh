@@ -721,7 +721,7 @@ packages:
   - name: faketool
     custom:
       check: true
-      script: custom/testtool/install.sh
+      script: ../test/fixtures/testtool/install.sh
 EOS
 echo "dotfiles: stale" > "$STATE/pending"
 DOTFILES_CONFIG="$T/config-dt" run sync --no-pull --profile onlytool

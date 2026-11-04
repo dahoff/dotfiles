@@ -1,5 +1,5 @@
 # Config-only apps plus one missing OS package and one missing custom tool.
-# faketool uses the test fixture packages/custom/testtool, never a real tool.
+# faketool uses the test fixture test/fixtures/testtool, never a real tool.
 packages:
   - name: claude
     config:
@@ -16,5 +16,5 @@ packages:
   - name: faketool
     custom:
       check: false
-      script: custom/testtool/install.sh
-      dropin: custom/testtool/files/50-testtool.sh
+      script: ../test/fixtures/testtool/install.sh
+      dropin: ../test/fixtures/testtool/files/50-testtool.sh

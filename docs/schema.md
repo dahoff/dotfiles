@@ -28,8 +28,8 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 | `packages[].brew` | string | No | — | Package name for Homebrew (macOS). |
 | `packages[].custom` | object | No | — | Custom install definition (for tools not in package managers). |
 | `packages[].custom.check` | string | Yes | — | Shell command to test if already installed (exit 0 = installed). |
-| `packages[].custom.script` | string | Yes | — | Install script path, relative to `packages/`. |
-| `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `packages/`), copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or the entry has no `check`). An existing copy is never removed. |
+| `packages[].custom.script` | string | Yes | — | Install script path, relative to `apps/`. |
+| `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `apps/`), copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or the entry has no `check`). An existing copy is never removed. |
 | `packages[].config` | object | No | — | Dotfiles config deployment definition. |
 | `packages[].config.dir` | string | Yes | — | App module directory (relative to `apps/`) containing `configure.sh` and `files/`. |
 | `packages[].config.flags` | string | No | — | Extra flags passed to the app's `configure.sh` (e.g., `--append`). |
@@ -58,8 +58,8 @@ packages:
   - name: lazygit
     custom:
       check: command -v lazygit
-      script: custom/lazygit/install.sh
-      dropin: custom/lazygit/files/50-lazygit.sh
+      script: lazygit/install.sh
+      dropin: lazygit/files/50-lazygit.sh
 ```
 
 **Example — derived profile:**
@@ -168,7 +168,7 @@ Optional data-only repo, given with `--hosts-dir PATH` or env `DOTFILES_HOSTS_DI
 |-------|------|----------|-------------|
 | `profile` | string | Yes | Base profile. |
 | `exclude` / `include` | array of strings | No | As in profiles (mutually exclusive). |
-| `extra` | array of objects | No | As in profiles. Entries reference dotfiles app dirs and `packages/` scripts. |
+| `extra` | array of objects | No | As in profiles. Entries reference dotfiles app dirs and their scripts. |
 | `files` | map | No | `<app>/<src>: replace|merge` per-file strategy. |
 
 Hosts-repo profiles accept the same `files:` map.

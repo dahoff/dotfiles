@@ -293,11 +293,11 @@ run_phase_custom_installs() {
                 log_info "[$target] $name: no check defined, install skipped"
             fi
         elif [[ "$dry_run" == true ]]; then
-            log_info "[$target] [DRY-RUN] Would run: $SCRIPT_DIR/packages/$script"
+            log_info "[$target] [DRY-RUN] Would run: $APPS_DIR/$script"
         else
             log_info "[$target] Running custom install: $name"
 
-            local script_path="$SCRIPT_DIR/packages/$script"
+            local script_path="$APPS_DIR/$script"
             if [[ ! -x "$script_path" ]]; then
                 log_error "Custom install script not found or not executable: $script_path"
                 PENDING+=("$name")
@@ -325,7 +325,7 @@ run_phase_custom_installs() {
         if [[ -n "$dropin" && -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
             log_info "[$target] $name: drop-in held until the tool is installed"
         elif [[ -n "$dropin" ]]; then
-            local dropin_src="$SCRIPT_DIR/packages/$dropin"
+            local dropin_src="$APPS_DIR/$dropin"
             local dropin_dest="$SHELL_SCRIPTS_DIR/$(basename "$dropin")"
             if [[ -f "$dropin_src" ]]; then
                 if [[ "$dry_run" == true ]]; then
