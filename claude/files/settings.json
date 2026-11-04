@@ -26,5 +26,8 @@
         ]
       }
     ]
+  },
+  "env": {
+    "CLAUDE_STATUS_RATE_LIMITS": "1"
   }
 }
