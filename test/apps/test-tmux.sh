@@ -42,7 +42,7 @@ cleanup_test() {
 }
 
 setup_test
-cd "$ROOT_DIR/tmux"
+cd "$ROOT_DIR/apps/tmux"
 
 # Test 1: Tmux configuration files exist
 info "Test 1: Check tmux config files exist"

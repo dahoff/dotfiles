@@ -30,6 +30,7 @@ source "$SCRIPT_DIR/lib/init.sh"
 
 # Configuration
 PROFILES_DIR="$SCRIPT_DIR/profiles"
+APPS_DIR="$SCRIPT_DIR/apps"
 
 # Parsed package manifest (parallel arrays)
 declare -a PKG_NAMES=()
@@ -356,7 +357,7 @@ run_phase_configs() {
 
         [[ -z "$dir" ]] && continue
 
-        local installer="$SCRIPT_DIR/$dir/install.sh"
+        local installer="$APPS_DIR/$dir/install.sh"
 
         if [[ ! -f "$installer" ]]; then
             log_error "Installer not found: $installer"
@@ -367,9 +368,9 @@ run_phase_configs() {
 
         # Compose this app's files from all layers
         local -a stage_args=()
-        if [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]]; then
+        if [[ -f "$APPS_DIR/$dir/config.yaml" ]]; then
             local stage="$STAGE_ROOT/apps/$dir"
-            if ! overlay_stage_app "$SCRIPT_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}"; then
+            if ! overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}"; then
                 log_error "[$target] $name: could not stage files"
                 RESULTS+=("$target|$name|FAIL")
                 EXIT_CODE=1
@@ -400,8 +401,8 @@ run_phase_configs() {
 
         # State name is app.name from config.yaml (dir name as fallback)
         local app_name="" ver_before="" ver_after="" installed_ok=false
-        if [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]]; then
-            yaml_load "$SCRIPT_DIR/$dir/config.yaml"
+        if [[ -f "$APPS_DIR/$dir/config.yaml" ]]; then
+            yaml_load "$APPS_DIR/$dir/config.yaml"
             app_name=$(yaml_get app.name)
         fi
         [[ -n "$app_name" ]] || app_name=$(basename "$dir")
@@ -935,14 +936,14 @@ cmd_status() {
         local idx dir name app_name stage ver_fresh ver_state state_file state
         for idx in "${!PKG_NAMES[@]}"; do
             dir="${PKG_CONFIG_DIR[$idx]}"
-            [[ -n "$dir" && -f "$SCRIPT_DIR/$dir/config.yaml" ]] || continue
+            [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
             name="${PKG_NAMES[$idx]}"
-            yaml_load "$SCRIPT_DIR/$dir/config.yaml"
+            yaml_load "$APPS_DIR/$dir/config.yaml"
             app_name=$(yaml_get app.name)
             [[ -n "$app_name" ]] || app_name=$(basename "$dir")
             stage="$STAGE_ROOT/apps/$dir"
             ver_fresh=""
-            if overlay_stage_app "$SCRIPT_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
+            if overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
                 ver_fresh=$(cat "$stage/version" 2>/dev/null || true)
             fi
             state_file=$(state_get_file "$app_name")

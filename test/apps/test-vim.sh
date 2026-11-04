@@ -42,7 +42,7 @@ cleanup_test() {
 }
 
 setup_test
-cd "$ROOT_DIR/vim"
+cd "$ROOT_DIR/apps/vim"
 
 # Test 1: Config files exist in source
 info "Test 1: Check vim source files exist"

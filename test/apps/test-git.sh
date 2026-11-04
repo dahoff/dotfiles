@@ -42,7 +42,7 @@ cleanup_test() {
 }
 
 setup_test
-cd "$ROOT_DIR/git"
+cd "$ROOT_DIR/apps/git"
 
 # Test 1: Config files exist in source
 info "Test 1: Check git source files exist"

@@ -7,8 +7,8 @@ Read this first when resuming. Sub-projects 1–3 are merged and on `origin/main
 | What | Where |
 |---|---|
 | Dotfiles | `/home/david/git/dotfiles`, branch `main`. Check `git status -sb` for commits not yet pushed. The feature branch and worktree are gone. |
-| Personal hosts repo | `git@github.com:dahoff/dotfiles-hosts.git` (private), checked out at `/home/david/git/dotfiles-hosts`. Holds `hosts/koi/host.yaml` (`profile: complete`). |
-| Work hosts repo | The user creates and manages it. Claude has no access to it. |
+| Personal hosts repo | `git@github.com:dahoff/dotfiles-hosts.git` (private), checked out at `/home/david/git/dotfiles-hosts`. Holds `profiles/personal.yaml` (`extends: complete`, turns on the Claude rate limit bars) and `hosts/koi/host.yaml` (`profile: personal`). |
+| Work hosts repo | The user creates and manages it. Claude has no access to it. It needs its own profile setting `CLAUDE_STATUS_RATE_LIMITS` to `"0"`: `merge` never deletes live keys, so leaving it out does not guarantee off. |
 | This machine (koi) | `~/.config/dotfiles/config.yaml` didn't exist when last checked, so `dotfiles sync` doesn't use the hosts repo here until `dotfiles init` has run. |
 
 ## The three sub-projects
@@ -40,9 +40,7 @@ Read this first when resuming. Sub-projects 1–3 are merged and on `origin/main
 
 ## Open questions for the user
 
-- **SSH key step in bootstrap:** a private hosts repo needs a GitHub key on the new machine before the clone. The user suggested prompting for it; the design isn't settled.
-- **Rate limit bars by host type:** the user wants them on for personal hosts and always off for work hosts. `CLAUDE_STATUS_RATE_LIMITS` is currently in the base `claude/files/settings.json`; moving it to a hosts-repo profile layer isn't settled.
-- **Repo layout:** the user is considering moving the app dirs under a new top-level folder (`apps` or `config`).
+- **Merging `packages/` into `apps/`:** the user suggested each app folder hold both how to install the tool and its config. The design isn't settled.
 
 ## Rulings made autonomously (cost if wrong)
 

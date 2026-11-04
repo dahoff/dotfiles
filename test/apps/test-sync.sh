@@ -235,8 +235,8 @@ info "Case 10: children do not inherit the lock"
 if [[ "$HAVE_FLOCK" != true ]]; then
     info "skipped (no flock)"
 else
-    mkdir -p "$WORK/dotfiles/sleeptest"
-    cat > "$WORK/dotfiles/sleeptest/install.sh" <<'EOS'
+    mkdir -p "$WORK/dotfiles/apps/sleeptest"
+    cat > "$WORK/dotfiles/apps/sleeptest/install.sh" <<'EOS'
 #!/usr/bin/env bash
 # Starts a detached long-lived child, like a tmux server would
 (setsid sleep 4711 >/dev/null 2>&1 &)

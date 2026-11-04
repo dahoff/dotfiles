@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# bash/install.sh - Bash configuration installer
+# apps/bash/install.sh - Bash configuration installer
 # Usage: ./install.sh <command> [options]
 
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$(dirname "$APP_DIR")/lib/installer.sh"
+source "$APP_DIR/../../lib/installer.sh"
 
 # Bash-specific flags
 APPEND_MODE=false

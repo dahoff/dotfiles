@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# vim/install.sh - Vim configuration installer
+# apps/scripts/install.sh - Utility scripts installer
 # Usage: ./install.sh <command> [options]
 
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$(dirname "$APP_DIR")/lib/installer.sh"
+source "$APP_DIR/../../lib/installer.sh"
 
 installer_main "$@"

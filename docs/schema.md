@@ -31,7 +31,7 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 | `packages[].custom.script` | string | Yes | — | Install script path, relative to `packages/`. |
 | `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `packages/`), copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or the entry has no `check`). An existing copy is never removed. |
 | `packages[].config` | object | No | — | Dotfiles config deployment definition. |
-| `packages[].config.dir` | string | Yes | — | App module directory (relative to repo root) containing `install.sh` and `files/`. |
+| `packages[].config.dir` | string | Yes | — | App module directory (relative to `apps/`) containing `install.sh` and `files/`. |
 | `packages[].config.flags` | string | No | — | Extra flags passed to the app's `install.sh` (e.g., `--append`). |
 
 ### Processing Order
@@ -39,7 +39,7 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 dotfiles processes the unified list in three phases:
 1. **Phase 1: OS packages** — Collect all `apt`/`dnf`/`brew` values, batch into one package manager call.
 2. **Phase 2: Custom installs** — Run each `custom` entry's script (if `check` fails), then install its dropin if `check` now passes (or there is no `check`); otherwise the log says `<name>: drop-in held until the tool is installed`.
-3. **Phase 3: Configs** — For each entry with `config.dir`, call `<dir>/install.sh deploy [flags]`.
+3. **Phase 3: Configs** — For each entry with `config.dir`, call `apps/<dir>/install.sh deploy [flags]`.
 
 **Example — base profile:**
 ```yaml
@@ -82,7 +82,7 @@ extra:
 
 ---
 
-## App Config Schema (`<app>/config.yaml`)
+## App Config Schema (`apps/<app>/config.yaml`)
 
 Each app module has a `config.yaml` describing its metadata, files, backup policy, requirements, and post-install hooks. These files define *how* to deploy config, not *what* to install (that's the profile's job).
 
@@ -98,8 +98,8 @@ Each app module has a `config.yaml` describing its metadata, files, backup polic
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `files` | array of objects | No | `[]` | List of files to install from `<app>/files/` to their destinations. |
-| `files[].src` | string | Yes | — | Source filename, relative to `<app>/files/`. |
+| `files` | array of objects | No | `[]` | List of files to install from `apps/<app>/files/` to their destinations. |
+| `files[].src` | string | Yes | — | Source filename, relative to `apps/<app>/files/`. |
 | `files[].dest` | string | Yes | — | Destination path. Supports `${SHELL_SCRIPTS_DIR}` variable (default `~/.bashrc.d`). |
 | `files[].mode` | string | Yes | — | File permissions as an octal string (e.g., `'0644'`, `'0755'`). |
 | `files[].strategy` | string | No | `replace` | `replace` copies the file over the live one. `merge` (JSON only) deep-merges into the live file with jq `*`: objects merge recursively, arrays and scalars are replaced, keys only in the live file are kept. Can be overridden per host (see Hosts Repo). |
@@ -153,7 +153,7 @@ Optional data-only repo, given with `--hosts-dir PATH` or env `DOTFILES_HOSTS_DI
       hosts/<hostname>/host.yaml              # host settings (required for the directory to apply)
       hosts/<hostname>/apps/<app>/files/<src> # file overlays for this host
 
-`<app>` is the dotfiles app directory (e.g. `claude`); `<src>` is a `src` from that app's `config.yaml`.
+`<app>` is the directory under `apps/` in dotfiles (e.g. `claude`); `<src>` is a `src` from that app's `config.yaml`.
 
 ### Resolution
 
@@ -175,7 +175,7 @@ Hosts-repo profiles accept the same `files:` map.
 
 ### File layers and strategy
 
-Layers, lowest to highest: `dotfiles/<app>/files/<src>`, each hosts-dir profile in the chain (base-most first), the host directory.
+Layers, lowest to highest: `dotfiles/apps/<app>/files/<src>`, each hosts-dir profile in the chain (base-most first), the host directory.
 `replace`: the highest layer that has the file wins. `merge`: live ⊕ all layers in order.
 In practice the repo layers are pre-merged and then merged onto the live file: live ⊕ (dotfiles ⊕ profiles ⊕ host). This differs from strict left-to-right only when a lower layer sets a scalar or null and a higher layer sets an object at the same path; the result then keeps more live data.
 

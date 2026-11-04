@@ -42,7 +42,7 @@ cleanup_test() {
 }
 
 setup_test
-cd "$ROOT_DIR/bash"
+cd "$ROOT_DIR/apps/bash"
 
 # Test 1: Bash configuration files exist
 info "Test 1: Check bash config files exist"

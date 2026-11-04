@@ -30,9 +30,9 @@ export HOME="$TEST_HOME"
 export XDG_STATE_HOME="$TEST_HOME/.xdg-state"
 export DOTFILES_CONFIG="$TEST_HOME/nonexistent-config"
 
-REPO_SETTINGS="$ROOT_DIR/claude/files/settings.json"
+REPO_SETTINGS="$ROOT_DIR/apps/claude/files/settings.json"
 LIVE="$HOME/.claude/settings.json"
-cd "$ROOT_DIR/claude"
+cd "$ROOT_DIR/apps/claude"
 
 state_version() { grep "^  version:" "$STATE_DIR/apps/claude.yaml" | awk '{print $2}'; }
 

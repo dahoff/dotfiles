@@ -467,8 +467,8 @@ prepare_overlays() {
 
     local dir ok=0
     for dir in "${dirs[@]}"; do
-        [[ -f "$SCRIPT_DIR/$dir/config.yaml" ]] || continue
-        overlay_validate_app "$SCRIPT_DIR/$dir" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" || ok=1
+        [[ -f "$APPS_DIR/$dir/config.yaml" ]] || continue
+        overlay_validate_app "$APPS_DIR/$dir" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" || ok=1
     done
     return $ok
 }

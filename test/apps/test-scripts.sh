@@ -42,7 +42,7 @@ cleanup_test() {
 }
 
 setup_test
-cd "$ROOT_DIR/scripts"
+cd "$ROOT_DIR/apps/scripts"
 
 # Test 1: Source scripts exist
 info "Test 1: Check source scripts exist"

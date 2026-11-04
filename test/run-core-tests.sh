@@ -58,7 +58,7 @@ echo
 
 setup_test
 
-cd tmux
+cd apps/tmux
 
 # Ensure we cleanup on failure
 set +e  # Don't exit on error

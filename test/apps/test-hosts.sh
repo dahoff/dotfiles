@@ -184,7 +184,7 @@ S="$CL/settings.json"
 [[ "$(jq -c -S .permissions "$S")" == '{"allow":["Bash(ls)"],"defaultMode":"plan","deny":["Bash(rm)"]}' ]] \
     || fail "objects should merge recursively: $(jq -c -S .permissions "$S")"
 [[ "$(jq -r .statusLine.type "$S")" == command ]] || fail "dotfiles key missing"
-cmp -s "$CL/settings.local.json" "$ROOT_DIR/claude/files/settings.local.json" \
+cmp -s "$CL/settings.local.json" "$ROOT_DIR/apps/claude/files/settings.local.json" \
     || fail "host.yaml replace should override the profile's merge for settings.local.json"
 pass "layers and merge correct"
 

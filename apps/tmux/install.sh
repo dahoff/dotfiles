@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tmux/install.sh - Tmux configuration installer
+# apps/tmux/install.sh - Tmux configuration installer
 # Usage: ./install.sh <command> [options]
 
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$(dirname "$APP_DIR")/lib/installer.sh"
+source "$APP_DIR/../../lib/installer.sh"
 
 # TPM (Tmux Plugin Manager) bootstrap
 TPM_DIR="$HOME/.tmux/plugins/tpm"

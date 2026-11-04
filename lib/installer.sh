@@ -4,7 +4,7 @@
 # An app's install.sh sets APP_DIR, sources this file, redefines any app_*
 # hooks (or core functions) it needs, then calls: installer_main "$@"
 
-ROOT_DIR="$(dirname "$APP_DIR")"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 source "$ROOT_DIR/lib/logging.sh"
 source "$ROOT_DIR/lib/yaml.sh"
