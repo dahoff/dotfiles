@@ -402,6 +402,37 @@ else
     fail ".checksums files still created"
 fi
 
+# Test R6: a file added to an app after install keeps what it replaced
+info "Test R6: Upgrade saves the original of a newly managed file"
+./configure.sh uninstall --quiet &>/dev/null || true
+rm -rf "$HOME/.bak" "$HOME/.tmux" "$HOME/.tmux.conf"
+./configure.sh install &>/dev/null || true
+# As if the install predated this file: state does not list it yet
+sed -i '\#\.tmux-cheatsheet\.txt$#d' "$STATE_DIR/apps/tmux.yaml"
+echo "user file" > "$HOME/.tmux/.tmux-cheatsheet.txt"
+./configure.sh upgrade --force &>/dev/null || true
+if [[ "$(cat "$HOME/.tmux/.tmux-cheatsheet.txt" 2>/dev/null)" == "user file" ]]; then
+    fail "Upgrade did not deploy the newly managed file"
+fi
+./configure.sh uninstall &>/dev/null || true
+if [[ "$(cat "$HOME/.tmux/.tmux-cheatsheet.txt" 2>/dev/null)" == "user file" ]]; then
+    pass "Uninstall restored the file the upgrade replaced"
+else
+    fail "File replaced by an upgrade was lost on uninstall"
+fi
+
+# Test R7: a file dotfiles created is not mistaken for an original
+info "Test R7: Upgrade does not save its own files as originals"
+rm -rf "$HOME/.bak" "$HOME/.tmux" "$HOME/.tmux.conf"
+./configure.sh install &>/dev/null || true
+./configure.sh upgrade --force &>/dev/null || true
+./configure.sh uninstall &>/dev/null || true
+if [[ ! -e "$HOME/.tmux.conf" ]]; then
+    pass "Uninstall removed a file that had no original"
+else
+    fail "Uninstall restored a dotfiles-deployed file as an original"
+fi
+
 # Test 37: Final cleanup
 info "Test 37: Final cleanup"
 ./configure.sh uninstall --quiet 2>/dev/null || true
@@ -413,7 +444,7 @@ cd ..
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 34 core library tests passed!${NC}"
+echo -e "${GREEN}All 37 core library tests passed!${NC}"
 echo "======================================"
 
 # Cleanup at end

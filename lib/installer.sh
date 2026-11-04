@@ -421,6 +421,19 @@ cmd_upgrade() {
         fi
     fi
 
+    # Files new to this app since install: what they replace is an original.
+    # Files already in state are skipped: their live copy came from dotfiles.
+    if [[ "$NO_BACKUP" != true ]]; then
+        backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
+        local -a managed=()
+        mapfile -t managed < <(state_get_files "$APP_NAME")
+        for dest in "${CONFIG_DESTS[@]}"; do
+            if [[ -f "$dest" ]] && ! list_contains "$dest" ${managed[@]+"${managed[@]}"}; then
+                backup_create_original "$dest" "$BACKUP_DIR" || return 1
+            fi
+        done
+    fi
+
     # Create snapshot backup
     if [[ "$NO_BACKUP" != true ]] && is_dry_run; then
         log_info "[DRY-RUN] Would create a backup snapshot"
