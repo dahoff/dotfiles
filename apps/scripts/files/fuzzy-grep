@@ -12,7 +12,8 @@
 #                   typed verbatim as grep arguments. The header always shows the
 #                   exact command that would run, so it can be copied/tweaked directly.
 #
-# File list (one entry per file; preview lists every match in it):
+# File list (one entry per file, shown relative to Directory; the preview below
+# it starts with the full path, then lists every match in the file):
 #   Enter      - pick this file — if it has only one match, jumps straight to
 #                it; otherwise opens a line list to pick which match
 #   Ctrl-y     - copy file path to clipboard
@@ -39,9 +40,12 @@ fi
 
 # --show-matches mode: called by fzf's preview binding to list every match in
 # the highlighted file (not just the one on the highlighted row), full width.
+# Starts with the full path: the preview wraps, so it's always readable in full
+# even when the path is too long for its row in the file list.
 if [[ "${1:-}" == "--show-matches" ]]; then
     matches_file="$2"
     target_file="$3"
+    printf '\033[1m%s\033[0m\n' "$target_file"
     awk -F: -v f="$target_file" '$1==f' "$matches_file" | \
         cut -d: -f2- | \
         sed -E 's/^([0-9]+):/\n\x1b[1;34mL\1:\x1b[0m /'
@@ -109,13 +113,40 @@ quote_grep_argv() {
     done
 }
 
+# Path as shown to the user: relative to the search directory, so a long common
+# prefix doesn't push the part that tells files apart off the screen.
+display_path() {
+    printf '%s' "${1#"$dir"/}"
+}
+
+# File list entry: "<path>\t<display path>". fzf shows only the second field
+# (--with-nth), while bindings and the final selection use the real path.
+file_entry() {
+    printf '%s\t%s\n' "$1" "$(display_path "$1")"
+}
+
+# fzf cuts off header lines that don't fit, so break long text across several
+# lines. Leaves room for fzf's indent and the 📄 prefix.
+file_header() {
+    local text="$1" cols width
+    cols=$(stty size 2>/dev/null </dev/tty | cut -d' ' -f2 || true)
+    width=$(( ${cols:-80} - 6 ))
+    (( width < 20 )) && width=20
+    printf '📄 '
+    while (( ${#text} > width )); do
+        printf '%s\n' "${text:0:width}"
+        text="${text:width}"
+    done
+    printf '%s' "$text"
+}
+
 # grep --color=always wraps filename/linenumber/match in ANSI codes (GREP_COLORS
 # below keeps filename/linenumber/separator uncolored, only the match itself is
 # highlighted). fzf's {1}/{2} delimiter fields need to be plain text though, so
 # rebuild each line as clean-file:clean-line:colored-rest — the colored part is
 # only ever displayed, never parsed.
 #
-# Also dedupes: prints each file's name to stdout only the first time it's
+# Also dedupes: prints each file's entry to stdout only the first time it's
 # seen (this is pick_file's live source on the first search of a filter set),
 # while every match still gets appended to MATCHES_FILE for the preview and
 # the line picker. Safe to stream straight into fzf: grep -r finishes a file
@@ -132,7 +163,7 @@ stream_matches() {
         printf '%s:%s:%s\n' "$file" "$lineno" "$colored_rest" >> "$MATCHES_FILE"
         if [[ -z "${seen[$file]:-}" ]]; then
             seen[$file]=1
-            printf '%s\n' "$file"
+            file_entry "$file"
         fi
     done
 }
@@ -146,13 +177,18 @@ file_source() {
         first_pick=false
         GREP_COLORS='fn=:ln=:se=:mt=01;31' grep "${grep_argv[@]}" 2>/dev/null | stream_matches
     else
-        cut -d: -f1 "$MATCHES_FILE" | sort -u
+        cut -d: -f1 "$MATCHES_FILE" | sort -u | while IFS= read -r f; do
+            file_entry "$f"
+        done
     fi
 }
 
 # Pick a file (deduplicated, one entry per file — the preview lists every
 # match in it). Sets $selected_file on success (return 0). Ctrl-e/ESC ask to
 # go back to the filter menu (return 1); Ctrl-g closes.
+#
+# The preview goes below the list so the list gets the full popup width;
+# --keep-right keeps the end of the path visible if it still doesn't fit.
 pick_file() {
     HEADER="🔎 grep ${raw}
 Enter=select file | Ctrl-y=copy path | Esc/Ctrl-e=back to filters | Ctrl-g=close"
@@ -161,10 +197,13 @@ Enter=select file | Ctrl-y=copy path | Esc/Ctrl-e=back to filters | Ctrl-g=close
         fzf --header="$HEADER" \
             --ansi \
             --layout=reverse \
-            --preview="$SELF --show-matches '$MATCHES_FILE' {}" \
-            --preview-window=right:60%:wrap \
+            --delimiter=$'\t' \
+            --with-nth=2 \
+            --keep-right \
+            --preview="$SELF --show-matches '$MATCHES_FILE' {1}" \
+            --preview-window=down:50%:wrap \
             --preview-label="📄 matches in this file" \
-            --bind="ctrl-y:execute-silent($SELF --copy {})+abort" \
+            --bind="ctrl-y:execute-silent($SELF --copy {1})+abort" \
             --bind="ctrl-e:execute-silent(touch '$EDIT_FLAG')+abort" \
             --bind="esc:execute-silent(touch '$EDIT_FLAG')+abort" \
             --bind="ctrl-g:abort" \
@@ -176,6 +215,7 @@ Enter=select file | Ctrl-y=copy path | Esc/Ctrl-e=back to filters | Ctrl-g=close
     fi
 
     [[ -z "$selected_file" ]] && exit 0
+    selected_file="${selected_file%%$'\t'*}"
     return 0
 }
 
@@ -193,7 +233,7 @@ pick_line() {
     fi
 
     line_choice=$(awk -F: -v f="$target_file" '$1==f' "$MATCHES_FILE" | cut -d: -f2- | \
-        fzf --header="📄 ${target_file}
+        fzf --header="$(file_header "$(display_path "$target_file")")
 Enter=jump to this match | Ctrl-y=copy path:line | ESC=back to file list" \
             --ansi \
             --delimiter=':' \
@@ -302,7 +342,7 @@ done
 if [[ -n "${FUZZY_GREP_TARGET_PANE:-}" ]]; then
     # Running in tmux popup — ask whether to open in the current or a new window
     choice=$(printf '%s\n' "Current window" "New window" | \
-        fzf --header="📄 ${file}:${line}
+        fzf --header="$(file_header "$(display_path "$file"):${line}")
 Open in:" \
             --layout=reverse \
             --prompt="" \

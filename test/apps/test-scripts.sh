@@ -134,9 +134,31 @@ else
     fail "Scripts not removed on uninstall"
 fi
 
+# Test 12: fuzzy-grep's preview starts with the full path of a long filename
+info "Test 12: fuzzy-grep preview shows the full path"
+long_path="/some/dir/a_really_long_descriptive_filename_that_only_differs_at_the_end_alpha.txt"
+matches="$TEST_STATE/matches"
+printf '%s:7:needle\n/other/file:9:needle\n' "$long_path" > "$matches"
+preview=$(files/fuzzy-grep --show-matches "$matches" "$long_path" | sed -E $'s/\x1b\\[[0-9;]*m//g')
+if [[ "$(head -n1 <<< "$preview")" == "$long_path" ]] && grep -q '^L7: needle$' <<< "$preview" \
+    && ! grep -q 'L9' <<< "$preview"; then
+    pass "Preview starts with the full path and lists only that file's matches"
+else
+    fail "Unexpected preview output: $preview"
+fi
+
+# Test 13: fuzzy-grep's file list leaves room for long filenames
+info "Test 13: fuzzy-grep file list uses the full popup width"
+if grep -q -- '--preview-window=down:' files/fuzzy-grep && grep -q -- '--keep-right' files/fuzzy-grep \
+    && grep -q -- '--with-nth=2' files/fuzzy-grep; then
+    pass "File list is full width, relative, and keeps the end of long paths"
+else
+    fail "File list options changed"
+fi
+
 cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 11 scripts module tests passed!${NC}"
+echo -e "${GREEN}All 13 scripts module tests passed!${NC}"
 echo "======================================"
