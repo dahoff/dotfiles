@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# apps/vim/install.sh - Vim configuration installer
-# Usage: ./install.sh <command> [options]
+# apps/claude/configure.sh - Claude Code configuration installer
+# Usage: ./configure.sh <command> [options]
 
 set -euo pipefail
 

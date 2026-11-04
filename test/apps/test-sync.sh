@@ -236,7 +236,7 @@ if [[ "$HAVE_FLOCK" != true ]]; then
     info "skipped (no flock)"
 else
     mkdir -p "$WORK/dotfiles/apps/sleeptest"
-    cat > "$WORK/dotfiles/apps/sleeptest/install.sh" <<'EOS'
+    cat > "$WORK/dotfiles/apps/sleeptest/configure.sh" <<'EOS'
 #!/usr/bin/env bash
 # Starts a detached long-lived child, like a tmux server would
 (setsid sleep 4711 >/dev/null 2>&1 &)

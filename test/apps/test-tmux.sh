@@ -102,7 +102,7 @@ fi
 
 # Test 8: Install and verify tmux-specific files
 info "Test 8: Install and verify tmux files"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.tmux.conf" ]] && [[ -f "$HOME/.tmux/.tmux-cheatsheet.sh" ]] && [[ -f "$HOME/.tmux/.tmux-cheatsheet.txt" ]]; then
     pass "All tmux files installed correctly"
 else
@@ -262,12 +262,12 @@ else
     fail "Cheatsheet missing save/restore lines or PLUGINS section"
 fi
 
-# Test 27: install.sh defines bootstrap_tpm and cleanup_tpm
-info "Test 27: Verify install.sh has TPM helpers"
-if grep -q "^bootstrap_tpm()" install.sh && grep -q "^cleanup_tpm()" install.sh; then
+# Test 27: configure.sh defines bootstrap_tpm and cleanup_tpm
+info "Test 27: Verify configure.sh has TPM helpers"
+if grep -q "^bootstrap_tpm()" configure.sh && grep -q "^cleanup_tpm()" configure.sh; then
     pass "bootstrap_tpm and cleanup_tpm defined"
 else
-    fail "TPM helper functions missing from install.sh"
+    fail "TPM helper functions missing from configure.sh"
 fi
 
 cleanup_test

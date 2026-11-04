@@ -102,13 +102,13 @@ fi
 
 # Test 8: Fresh machine install (no existing .gitconfig)
 info "Test 8: Install on fresh machine (no existing .gitconfig)"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.gitconfig" ]] && [[ ! -f "$HOME/.gitconfig.local" ]]; then
     pass "Fresh install: .gitconfig deployed, no .gitconfig.local created"
 else
     fail "Fresh install: unexpected state"
 fi
-./install.sh uninstall &>/dev/null
+./configure.sh uninstall &>/dev/null
 
 # Test 9: Install preserves existing .gitconfig as .gitconfig.local
 info "Test 9: Existing .gitconfig renamed to .gitconfig.local"
@@ -120,7 +120,7 @@ cat > "$HOME/.gitconfig" << 'GITCFG'
 [credential]
     helper = cache
 GITCFG
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.gitconfig.local" ]] && grep -q "Test User" "$HOME/.gitconfig.local" && grep -q "credential" "$HOME/.gitconfig.local"; then
     pass "Existing .gitconfig preserved as .gitconfig.local (all settings retained)"
 else
@@ -137,20 +137,20 @@ fi
 
 # Test 11: .gitconfig.local is not overwritten on re-install
 info "Test 11: Re-install does not overwrite .gitconfig.local"
-./install.sh uninstall &>/dev/null
+./configure.sh uninstall &>/dev/null
 echo "# custom addition" >> "$HOME/.gitconfig.local"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if grep -q "custom addition" "$HOME/.gitconfig.local"; then
     pass "Re-install preserves existing .gitconfig.local"
 else
     fail "Re-install overwrote .gitconfig.local"
 fi
-./install.sh uninstall &>/dev/null
+./configure.sh uninstall &>/dev/null
 rm -f "$HOME/.gitconfig.local"
 
 # Test 12: Install deploys files correctly
 info "Test 12: Install and verify git files"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.gitconfig" ]] && [[ -f "$HOME/.gitignore_global" ]]; then
     pass "Git files installed correctly"
 else
@@ -176,7 +176,7 @@ fi
 
 # Test 15: Uninstall removes files
 info "Test 15: Uninstall removes git files"
-./install.sh uninstall &>/dev/null
+./configure.sh uninstall &>/dev/null
 if [[ ! -f "$HOME/.gitconfig" ]] && [[ ! -f "$HOME/.gitignore_global" ]]; then
     pass "Git files removed on uninstall"
 else

@@ -44,7 +44,7 @@ info "Test 1: config declares merge for settings.json"
 # Test 2
 info "Test 2: deploy merges into an existing live file"
 echo '{"model":"live-model","liveOnly":1,"enabledPlugins":{"x@y":true}}' > "$LIVE"
-./install.sh deploy --no-backup &>/dev/null || fail "deploy failed"
+./configure.sh deploy --no-backup &>/dev/null || fail "deploy failed"
 [[ "$(jq -r .liveOnly "$LIVE")" == 1 ]] || fail "unmanaged live key lost"
 [[ "$(jq -c .enabledPlugins "$LIVE")" == '{"x@y":true}' ]] || fail "unmanaged live object lost"
 [[ "$(jq -c .model "$LIVE")" == "$(jq -c .model "$REPO_SETTINGS")" ]] || fail "repo key not applied"
@@ -54,13 +54,13 @@ pass "merge keeps live keys, applies repo keys"
 # Test 3
 info "Test 3: version is a content hash; redeploy is a no-op"
 [[ "$(state_version)" =~ ^[0-9a-f]{12}$ ]] || fail "version: $(state_version)"
-out=$(./install.sh deploy --no-backup 2>&1) || fail "redeploy failed"
+out=$(./configure.sh deploy --no-backup 2>&1) || fail "redeploy failed"
 [[ "$out" == *"already up to date"* ]] || fail "redeploy should skip"
 pass "content-hash version"
 
 # Test 4
 info "Test 4: diff of a merged file compares against the merge result"
-out=$(./install.sh diff 2>&1) || true
+out=$(./configure.sh diff 2>&1) || true
 [[ "$out" == *"No differences found"* ]] || fail "diff should be clean after deploy"
 pass "merge-aware diff"
 
@@ -70,13 +70,13 @@ echo '{oops' > "$LIVE"
 cp "$LIVE" "$HOME/live.bak"
 echo "# stale" > "$HOME/.claude/statusline-command.sh"
 rc=0
-./install.sh upgrade --force --no-backup &>/dev/null || rc=$?
+./configure.sh upgrade --force --no-backup &>/dev/null || rc=$?
 [[ $rc -ne 0 ]] || fail "upgrade should fail"
 cmp -s "$LIVE" "$HOME/live.bak" || fail "live file was modified"
 cmp -s "$HOME/.claude/statusline-command.sh" files/statusline-command.sh || fail "other files should still deploy"
 [[ "$(state_version)" == incomplete ]] || fail "version should be 'incomplete', got $(state_version)"
 echo '{"liveOnly":2}' > "$LIVE"
-out=$(./install.sh deploy --no-backup 2>&1) || fail "retry failed: $out"
+out=$(./configure.sh deploy --no-backup 2>&1) || fail "retry failed: $out"
 [[ "$out" != *"already up to date"* ]] || fail "incomplete install was skipped"
 [[ "$(jq -r .liveOnly "$LIVE")" == 2 ]] || fail "retry did not merge"
 pass "per-file failure handled and retried"
@@ -84,14 +84,14 @@ pass "per-file failure handled and retried"
 # Test 6
 info "Test 6: non-object live JSON fails and is left untouched"
 echo '[]' > "$LIVE"
-./install.sh upgrade --force --no-backup &>/dev/null && fail "upgrade should fail on []"
+./configure.sh upgrade --force --no-backup &>/dev/null && fail "upgrade should fail on []"
 [[ "$(cat "$LIVE")" == "[]" ]] || fail "live [] was modified"
 pass "non-object rejected"
 
 # Test 7
 info "Test 7: empty live file is treated as absent"
 : > "$LIVE"
-./install.sh upgrade --force --no-backup &>/dev/null || fail "upgrade failed on empty live file"
+./configure.sh upgrade --force --no-backup &>/dev/null || fail "upgrade failed on empty live file"
 [[ "$(jq -c -S . "$LIVE")" == "$(jq -c -S . "$REPO_SETTINGS")" ]] || fail "empty live should become repo settings"
 pass "empty live file handled"
 
@@ -102,7 +102,7 @@ echo '{"liveOnly":3}' > "$LIVE"
 sleep 1
 HOME_BEFORE=$(find "$HOME" | sort)
 STATE_BEFORE=$(find "$STATE_DIR" -type f -exec cat {} + 2>/dev/null)
-out=$(./install.sh upgrade --force --dry-run 2>&1) || fail "dry-run failed: $out"
+out=$(./configure.sh upgrade --force --dry-run 2>&1) || fail "dry-run failed: $out"
 [[ "$out" == *"Would merge"* ]] || fail "dry-run should say 'Would merge'"
 [[ "$(cat "$LIVE")" == '{"liveOnly":3}' ]] || fail "dry-run modified live file"
 [[ "$(find "$HOME" | sort)" == "$HOME_BEFORE" ]] || fail "dry-run wrote under HOME: $(diff <(echo "$HOME_BEFORE") <(find "$HOME" | sort))"
@@ -117,12 +117,12 @@ for f in /usr/bin/* /bin/*; do
     [[ "$(basename "$f")" == jq ]] && continue
     ln -sf "$f" "$NOJQ/" 2>/dev/null || true
 done
-out=$(PATH="$NOJQ" ./install.sh upgrade --force --no-backup 2>&1) && fail "should fail without jq"
+out=$(PATH="$NOJQ" ./configure.sh upgrade --force --no-backup 2>&1) && fail "should fail without jq"
 [[ "$out" == *"jq is required"* ]] || fail "message was: $out"
 [[ "$(cat "$LIVE")" == '{"liveOnly":3}' ]] || fail "live file changed without jq"
 pass "missing jq reported"
 
-./install.sh uninstall &>/dev/null || true
+./configure.sh uninstall &>/dev/null || true
 rm -rf "$TEST_STATE" "$TEST_HOME"
 
 echo

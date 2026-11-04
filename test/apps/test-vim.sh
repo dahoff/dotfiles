@@ -78,7 +78,7 @@ fi
 
 # Test 5: Install deploys files correctly
 info "Test 5: Install and verify vim files"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.vimrc" ]]; then
     pass "Vim files installed correctly"
 else
@@ -95,7 +95,7 @@ fi
 
 # Test 7: Uninstall removes files
 info "Test 7: Uninstall removes vim files"
-./install.sh uninstall &>/dev/null
+./configure.sh uninstall &>/dev/null
 if [[ ! -f "$HOME/.vimrc" ]]; then
     pass "Vim files removed on uninstall"
 else

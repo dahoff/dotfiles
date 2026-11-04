@@ -357,7 +357,7 @@ run_phase_configs() {
 
         [[ -z "$dir" ]] && continue
 
-        local installer="$APPS_DIR/$dir/install.sh"
+        local installer="$APPS_DIR/$dir/configure.sh"
 
         if [[ ! -f "$installer" ]]; then
             log_error "Installer not found: $installer"

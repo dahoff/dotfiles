@@ -123,9 +123,9 @@ fi
 
 # Test 9: app installers use the shared core
 info "Test 9: app installers source lib/installer.sh"
-for app in apps/bash apps/claude apps/git packages apps/scripts apps/tmux apps/vim; do
-    if ! grep -q 'lib/installer.sh' "$ROOT_DIR/$app/install.sh"; then
-        fail "$app/install.sh does not source lib/installer.sh"
+for app in bash claude git scripts tmux vim; do
+    if ! grep -q 'lib/installer.sh' "$ROOT_DIR/apps/$app/configure.sh"; then
+        fail "apps/$app/configure.sh does not source lib/installer.sh"
     fi
 done
 pass "All app installers source lib/installer.sh"
@@ -180,7 +180,7 @@ setup_test
 # Test 15: bash deploy on clean system (installs)
 info "Test 15: bash deploy on clean system"
 cd "$ROOT_DIR/apps/bash"
-if ./install.sh deploy --no-backup &>/dev/null && [[ -f "$HOME/.bashrc" ]]; then
+if ./configure.sh deploy --no-backup &>/dev/null && [[ -f "$HOME/.bashrc" ]]; then
     pass "bash deploy installs on clean system"
 else
     fail "bash deploy failed on clean system"
@@ -188,14 +188,14 @@ fi
 
 # Test 16: bash deploy is idempotent (upgrades when already installed)
 info "Test 16: bash deploy idempotent (upgrades)"
-if ./install.sh deploy --no-backup &>/dev/null && [[ -f "$HOME/.bashrc" ]]; then
+if ./configure.sh deploy --no-backup &>/dev/null && [[ -f "$HOME/.bashrc" ]]; then
     pass "bash deploy upgrades when already installed"
 else
     fail "bash deploy idempotent failed"
 fi
 
 # Clean up for dotfiles tests
-./install.sh uninstall &>/dev/null 2>&1 || true
+./configure.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
@@ -244,7 +244,7 @@ fi
 # Test 21: Upgrade skips when current (same version)
 info "Test 21: Upgrade skips when current"
 cd "$ROOT_DIR/apps/bash"
-OUTPUT=$(./install.sh deploy --no-backup 2>&1)
+OUTPUT=$(./configure.sh deploy --no-backup 2>&1)
 if echo "$OUTPUT" | grep -q "already up to date"; then
     pass "Deploy skips when already at current version"
 else
@@ -254,7 +254,7 @@ fi
 # Test 22: --force overrides version skip
 info "Test 22: --force overrides version skip"
 cd "$ROOT_DIR/apps/bash"
-OUTPUT=$(./install.sh deploy --no-backup --force 2>&1)
+OUTPUT=$(./configure.sh deploy --no-backup --force 2>&1)
 if echo "$OUTPUT" | grep -q "upgraded successfully"; then
     pass "--force overrides version check"
 else
@@ -290,8 +290,8 @@ else
 fi
 
 # Cleanup
-cd "$ROOT_DIR/apps/bash" && ./install.sh uninstall &>/dev/null 2>&1 || true
-cd "$ROOT_DIR/apps/tmux" && ./install.sh uninstall &>/dev/null 2>&1 || true
+cd "$ROOT_DIR/apps/bash" && ./configure.sh uninstall &>/dev/null 2>&1 || true
+cd "$ROOT_DIR/apps/tmux" && ./configure.sh uninstall &>/dev/null 2>&1 || true
 cleanup_test
 
 echo

@@ -65,7 +65,7 @@ set +e  # Don't exit on error
 
 # Test 1: Status (not installed)
 info "Test 1: Status check (not installed)"
-if ./install.sh status 2>&1 | grep -q "Not installed"; then
+if ./configure.sh status 2>&1 | grep -q "Not installed"; then
     pass "Status shows not installed"
 else
     fail "Status check failed"
@@ -73,7 +73,7 @@ fi
 
 # Test 2: Help command
 info "Test 2: Help command"
-if ./install.sh help 2>&1 | grep -q "Usage:"; then
+if ./configure.sh help 2>&1 | grep -q "Usage:"; then
     pass "Help command works"
 else
     fail "Help command failed"
@@ -81,7 +81,7 @@ fi
 
 # Test 3: Dry-run install
 info "Test 3: Dry-run install"
-OUTPUT=$(./install.sh install --dry-run 2>&1)
+OUTPUT=$(./configure.sh install --dry-run 2>&1)
 if echo "$OUTPUT" | grep -q "DRY-RUN"; then
     pass "Dry-run mode works"
 else
@@ -98,7 +98,7 @@ mkdir -p "$HOME/.tmux"
 echo "#!/bin/bash" > "$HOME/.tmux/.tmux-cheatsheet.sh"
 echo "# original cheatsheet" > "$HOME/.tmux/.tmux-cheatsheet.txt"
 
-if ./install.sh install 2>&1 | grep -q "installed successfully"; then
+if ./configure.sh install 2>&1 | grep -q "installed successfully"; then
     pass "Install completed"
 else
     fail "Install failed"
@@ -106,7 +106,7 @@ fi
 
 # Test 5: Verify after install
 info "Test 5: Verify installation"
-if ./install.sh verify &>/dev/null; then
+if ./configure.sh verify &>/dev/null; then
     pass "Verify passed"
 else
     fail "Verify failed"
@@ -115,7 +115,7 @@ fi
 # Test 6: Status (installed)
 info "Test 6: Status check (installed)"
 # Check exit code instead of grepping output (avoids pipe issues)
-if ./install.sh status &>/dev/null; then
+if ./configure.sh status &>/dev/null; then
     pass "Status shows installed"
 else
     fail "Status check failed"
@@ -123,7 +123,7 @@ fi
 
 # Test 7: Diff (no changes)
 info "Test 7: Diff command (no changes)"
-if ./install.sh diff &>/dev/null; then
+if ./configure.sh diff &>/dev/null; then
     pass "Diff shows no differences"
 else
     fail "Diff failed"
@@ -132,7 +132,7 @@ fi
 # Test 7b: Diff (with changes)
 info "Test 7b: Diff command (with changes)"
 echo "# modified" >> "$HOME/.tmux.conf"
-OUTPUT=$(./install.sh diff 2>&1)
+OUTPUT=$(./configure.sh diff 2>&1)
 if echo "$OUTPUT" | grep -qi "differ\|modified\|changed"; then
     pass "Diff detects differences"
 else
@@ -143,7 +143,7 @@ fi
 
 # Test 8: Upgrade (also restores file from test 7b)
 info "Test 8: Upgrade operation"
-if ./install.sh upgrade --force &>/dev/null; then
+if ./configure.sh upgrade --force &>/dev/null; then
     pass "Upgrade completed"
 else
     fail "Upgrade failed"
@@ -151,7 +151,7 @@ fi
 
 # Test 12: Uninstall
 info "Test 12: Uninstall operation"
-if ./install.sh uninstall &>/dev/null; then
+if ./configure.sh uninstall &>/dev/null; then
     pass "Uninstall completed"
 else
     fail "Uninstall failed"
@@ -161,7 +161,7 @@ fi
 info "Test 13: Status check (after uninstall)"
 # After uninstall, status returns exit code 0 but with "Not installed" message
 # Just check that it runs successfully
-if ./install.sh status &>/dev/null; then
+if ./configure.sh status &>/dev/null; then
     pass "Status shows not installed after uninstall"
 else
     fail "Status check failed after uninstall"
@@ -174,7 +174,7 @@ echo "original" > "$TEST_HOME/.tmux.conf"
 mkdir -p "$TEST_HOME/.tmux"
 echo "#!/bin/bash" > "$TEST_HOME/.tmux/.tmux-cheatsheet.sh"
 echo "original" > "$TEST_HOME/.tmux/.tmux-cheatsheet.txt"
-if ./install.sh install &>/dev/null; then
+if ./configure.sh install &>/dev/null; then
     pass "Install with backup completed"
 else
     fail "Install with backup failed"
@@ -182,9 +182,9 @@ fi
 
 # Test 16: Multiple upgrades (backup pruning)
 info "Test 16: Multiple upgrades (pruning test)"
-./install.sh install &>/dev/null || true
+./configure.sh install &>/dev/null || true
 for i in 1 2 3 4 5; do
-    ./install.sh upgrade --force &>/dev/null || true
+    ./configure.sh upgrade --force &>/dev/null || true
     sleep 0.1
 done
 SNAP_COUNT=$(find "$HOME/.bak/tmux" -mindepth 1 -maxdepth 1 -type d ! -name original | wc -l)
@@ -197,7 +197,7 @@ fi
 # Test 17: Error - reinstall attempt
 info "Test 17: Error handling (reinstall attempt)"
 # Reinstall should fail with exit code 1
-if ! ./install.sh install &>/dev/null; then
+if ! ./configure.sh install &>/dev/null; then
     pass "Error handling works for reinstall"
 else
     fail "Reinstall error handling failed"
@@ -205,7 +205,7 @@ fi
 
 # Test 18: Verbose flag
 info "Test 18: Verbose flag"
-OUTPUT=$(./install.sh status --verbose 2>&1)
+OUTPUT=$(./configure.sh status --verbose 2>&1)
 if echo "$OUTPUT" | grep -qi "verbose\|debug\|info"; then
     pass "Verbose flag produces extra output"
 else
@@ -216,7 +216,7 @@ fi
 # Test 19: Log flag
 info "Test 19: Log flag"
 LOG_FILE="$TEST_HOME/test-install.log"
-./install.sh status --log "$LOG_FILE" &>/dev/null || true
+./configure.sh status --log "$LOG_FILE" &>/dev/null || true
 if [[ -f "$LOG_FILE" ]] && [[ -s "$LOG_FILE" ]]; then
     pass "Log flag creates log file"
 else
@@ -225,8 +225,8 @@ fi
 
 # Test 20: Error - upgrade when not installed
 info "Test 20: Error handling (upgrade when not installed)"
-./install.sh uninstall &>/dev/null || true
-if ! ./install.sh upgrade &>/dev/null; then
+./configure.sh uninstall &>/dev/null || true
+if ! ./configure.sh upgrade &>/dev/null; then
     pass "Upgrade error handling works"
 else
     fail "Upgrade should fail when not installed"
@@ -234,7 +234,7 @@ fi
 
 # Test 22: Error - uninstall when not installed
 info "Test 22: Error handling (uninstall when not installed)"
-if ! ./install.sh uninstall &>/dev/null; then
+if ! ./configure.sh uninstall &>/dev/null; then
     pass "Uninstall error handling works"
 else
     fail "Uninstall should fail when not installed"
@@ -242,8 +242,8 @@ fi
 
 # Test 23: Verify with --verbose
 info "Test 23: Verify with verbose flag"
-./install.sh install &>/dev/null || true
-if ./install.sh verify --verbose &>/dev/null; then
+./configure.sh install &>/dev/null || true
+if ./configure.sh verify --verbose &>/dev/null; then
     pass "Verify with verbose works"
 else
     fail "Verify with verbose failed"
@@ -251,7 +251,7 @@ fi
 
 # Test 25: Error - invalid command
 info "Test 25: Error handling (invalid command)"
-if ! ./install.sh invalid-command &>/dev/null; then
+if ! ./configure.sh invalid-command &>/dev/null; then
     pass "Invalid command rejected"
 else
     fail "Invalid command should fail"
@@ -259,7 +259,7 @@ fi
 
 # Test 26: Error - invalid flag
 info "Test 26: Error handling (invalid flag)"
-if ! ./install.sh status --invalid-flag &>/dev/null; then
+if ! ./configure.sh status --invalid-flag &>/dev/null; then
     pass "Invalid flag rejected"
 else
     fail "Invalid flag should fail"
@@ -267,21 +267,21 @@ fi
 
 # Test 27: Error - verify with missing installed file
 info "Test 27: Error handling (verify with missing file)"
-./install.sh install &>/dev/null || true
+./configure.sh install &>/dev/null || true
 rm -f "$HOME/.tmux.conf"
-if ! ./install.sh verify &>/dev/null; then
+if ! ./configure.sh verify &>/dev/null; then
     pass "Verify detects missing file"
 else
     fail "Verify should fail when an installed file is missing"
 fi
 # Restore
-./install.sh upgrade --force &>/dev/null || true
+./configure.sh upgrade --force &>/dev/null || true
 
 # Test 29: Error - source file missing
 info "Test 29: Error handling (source file missing)"
 # Save original file
 mv files/.tmux.conf files/.tmux.conf.backup
-if ! ./install.sh install &>/dev/null; then
+if ! ./configure.sh install &>/dev/null; then
     pass "Install detects missing source file"
 else
     fail "Install should fail with missing source"
@@ -291,10 +291,10 @@ mv files/.tmux.conf.backup files/.tmux.conf
 
 # Test 30: Error - corrupted state file
 info "Test 30: Error handling (corrupted state file)"
-./install.sh install &>/dev/null || true
+./configure.sh install &>/dev/null || true
 # Corrupt state file
 echo "invalid: yaml: content:" > "$STATE_DIR/apps/tmux.yaml"
-if ! ./install.sh verify &>/dev/null; then
+if ! ./configure.sh verify &>/dev/null; then
     pass "Detects corrupted state file"
 else
     # Some operations might still work with partial state
@@ -302,12 +302,12 @@ else
 fi
 # Clean up
 rm -f "$STATE_DIR/apps/tmux.yaml"
-./install.sh uninstall &>/dev/null || true
+./configure.sh uninstall &>/dev/null || true
 
 # Test 31: Error - missing config.yaml
 info "Test 31: Error handling (missing config.yaml)"
 mv config.yaml config.yaml.backup
-if ! ./install.sh install &>/dev/null; then
+if ! ./configure.sh install &>/dev/null; then
     pass "Install detects missing config.yaml"
 else
     fail "Install should fail without config"
@@ -319,7 +319,7 @@ mv config.yaml.backup config.yaml
 info "Test 32: Error handling (invalid config.yaml)"
 mv config.yaml config.yaml.backup
 echo "invalid yaml content {{{ ]]]: bad" > config.yaml
-if ! ./install.sh install &>/dev/null; then
+if ! ./configure.sh install &>/dev/null; then
     pass "Install detects invalid YAML"
 else
     fail "Install should fail with invalid YAML"
@@ -329,7 +329,7 @@ mv config.yaml.backup config.yaml
 
 # Test 33: Input sanitization - command with special chars
 info "Test 33: Input sanitization (command with special chars)"
-if ! ./install.sh 'install;rm -rf /' &>/dev/null; then
+if ! ./configure.sh 'install;rm -rf /' &>/dev/null; then
     pass "Command with special chars rejected"
 else
     fail "Malicious command should be rejected"
@@ -337,7 +337,7 @@ fi
 
 # Test 35: Missing required argument - --log
 info "Test 35: Missing argument (--log without filename)"
-if ! ./install.sh status --log &>/dev/null 2>&1; then
+if ! ./configure.sh status --log &>/dev/null 2>&1; then
     pass "--log without filename rejected"
 else
     fail "--log requires a filename argument"
@@ -345,10 +345,10 @@ fi
 
 # Test R1: upgrade creates a timestamped snapshot
 info "Test R1: Upgrade creates snapshot"
-./install.sh uninstall --quiet &>/dev/null || true
+./configure.sh uninstall --quiet &>/dev/null || true
 rm -rf "$HOME/.bak"
-./install.sh install &>/dev/null || true
-./install.sh upgrade --force &>/dev/null || true
+./configure.sh install &>/dev/null || true
+./configure.sh upgrade --force &>/dev/null || true
 SNAP=$(find "$HOME/.bak/tmux" -mindepth 1 -maxdepth 1 -type d -name "[0-9]*_[0-9]*" | head -1)
 if [[ -n "$SNAP" && -f "$SNAP/.tmux.conf" ]]; then
     pass "Snapshot created with .tmux.conf"
@@ -364,7 +364,7 @@ fi
 
 # Test R2: rollback command removed
 info "Test R2: rollback is an unknown command"
-OUTPUT=$(./install.sh rollback 2>&1); RC=$?
+OUTPUT=$(./configure.sh rollback 2>&1); RC=$?
 if [[ $RC -ne 0 ]] && echo "$OUTPUT" | grep -q "Unknown command"; then
     pass "rollback rejected as unknown command"
 else
@@ -373,7 +373,7 @@ fi
 
 # Test R3: backups command removed
 info "Test R3: backups is an unknown command"
-if ! ./install.sh backups &>/dev/null; then
+if ! ./configure.sh backups &>/dev/null; then
     pass "backups rejected"
 else
     fail "backups should fail"
@@ -381,11 +381,11 @@ fi
 
 # Test R4: uninstall restores the original file
 info "Test R4: Uninstall restores original"
-./install.sh uninstall --quiet &>/dev/null || true
+./configure.sh uninstall --quiet &>/dev/null || true
 rm -rf "$HOME/.bak"
 echo "original" > "$HOME/.tmux.conf"
-./install.sh install &>/dev/null || true
-./install.sh uninstall &>/dev/null || true
+./configure.sh install &>/dev/null || true
+./configure.sh uninstall &>/dev/null || true
 if [[ "$(cat "$HOME/.tmux.conf" 2>/dev/null)" == "original" ]]; then
     pass "Uninstall restored original content"
 else
@@ -394,8 +394,8 @@ fi
 
 # Test R5: no checksum files
 info "Test R5: No .checksums files"
-./install.sh install &>/dev/null || true
-./install.sh upgrade --force &>/dev/null || true
+./configure.sh install &>/dev/null || true
+./configure.sh upgrade --force &>/dev/null || true
 if [[ -z "$(find "$HOME/.bak/tmux" -name .checksums 2>/dev/null)" ]]; then
     pass "No .checksums files created"
 else
@@ -404,7 +404,7 @@ fi
 
 # Test 37: Final cleanup
 info "Test 37: Final cleanup"
-./install.sh uninstall --quiet 2>/dev/null || true
+./configure.sh uninstall --quiet 2>/dev/null || true
 pass "Cleanup completed"
 
 cd ..

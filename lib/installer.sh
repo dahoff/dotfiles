@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # installer.sh - Shared app installer core
 #
-# An app's install.sh sets APP_DIR, sources this file, redefines any app_*
+# An app's configure.sh sets APP_DIR, sources this file, redefines any app_*
 # hooks (or core functions) it needs, then calls: installer_main "$@"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

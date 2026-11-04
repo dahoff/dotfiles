@@ -31,15 +31,15 @@ Profiles define the complete set of packages, custom tools, and configs for an e
 | `packages[].custom.script` | string | Yes | — | Install script path, relative to `packages/`. |
 | `packages[].custom.dropin` | string | No | — | Shell drop-in file path (relative to `packages/`), copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or the entry has no `check`). An existing copy is never removed. |
 | `packages[].config` | object | No | — | Dotfiles config deployment definition. |
-| `packages[].config.dir` | string | Yes | — | App module directory (relative to `apps/`) containing `install.sh` and `files/`. |
-| `packages[].config.flags` | string | No | — | Extra flags passed to the app's `install.sh` (e.g., `--append`). |
+| `packages[].config.dir` | string | Yes | — | App module directory (relative to `apps/`) containing `configure.sh` and `files/`. |
+| `packages[].config.flags` | string | No | — | Extra flags passed to the app's `configure.sh` (e.g., `--append`). |
 
 ### Processing Order
 
 dotfiles processes the unified list in three phases:
 1. **Phase 1: OS packages** — Collect all `apt`/`dnf`/`brew` values, batch into one package manager call.
 2. **Phase 2: Custom installs** — Run each `custom` entry's script (if `check` fails), then install its dropin if `check` now passes (or there is no `check`); otherwise the log says `<name>: drop-in held until the tool is installed`.
-3. **Phase 3: Configs** — For each entry with `config.dir`, call `apps/<dir>/install.sh deploy [flags]`.
+3. **Phase 3: Configs** — For each entry with `config.dir`, call `apps/<dir>/configure.sh deploy [flags]`.
 
 **Example — base profile:**
 ```yaml
@@ -179,7 +179,7 @@ Layers, lowest to highest: `dotfiles/apps/<app>/files/<src>`, each hosts-dir pro
 `replace`: the highest layer that has the file wins. `merge`: live ⊕ all layers in order.
 In practice the repo layers are pre-merged and then merged onto the live file: live ⊕ (dotfiles ⊕ profiles ⊕ host). This differs from strict left-to-right only when a lower layer sets a scalar or null and a higher layer sets an object at the same path; the result then keeps more live data.
 
-Running an app's `install.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `dotfiles sync` with the hosts repo to keep host overlays.
+Running an app's `configure.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `dotfiles sync` with the hosts repo to keep host overlays.
 Strategy: last declaration among the app `config.yaml`, the hosts-dir profile `files:` maps (base-most first), and `host.yaml` `files:`.
 
 ### Errors

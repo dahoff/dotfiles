@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# apps/bash/install.sh - Bash configuration installer
-# Usage: ./install.sh <command> [options]
+# apps/bash/configure.sh - Bash configuration installer
+# Usage: ./configure.sh <command> [options]
 
 set -euo pipefail
 

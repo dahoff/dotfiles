@@ -86,7 +86,7 @@ fi
 
 # Test 6: Install deploys scripts
 info "Test 6: Install and verify scripts"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.local/bin/git-branch-clean" ]] && [[ -f "$HOME/.local/bin/extract" ]]; then
     pass "Scripts installed to ~/.local/bin/"
 else
@@ -127,7 +127,7 @@ fi
 
 # Test 11: Uninstall removes scripts
 info "Test 11: Uninstall removes scripts"
-./install.sh uninstall &>/dev/null
+./configure.sh uninstall &>/dev/null
 if [[ ! -f "$HOME/.local/bin/git-branch-clean" ]] && [[ ! -f "$HOME/.local/bin/extract" ]]; then
     pass "Scripts removed on uninstall"
 else

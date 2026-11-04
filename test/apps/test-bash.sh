@@ -142,7 +142,7 @@ fi
 
 # Test 13: Install and verify .bashrc + ~/.bashrc.d/ directory
 info "Test 13: Install and verify bash files"
-./install.sh install --no-backup &>/dev/null
+./configure.sh install --no-backup &>/dev/null
 if [[ -f "$HOME/.bashrc" ]] && [[ -d "$HOME/.bashrc.d" ]]; then
     pass "Bashrc installed and .bashrc.d created"
 else
@@ -150,7 +150,7 @@ else
 fi
 
 # Clean up for next test
-./install.sh uninstall &>/dev/null 2>&1 || true
+./configure.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
@@ -160,7 +160,7 @@ mkdir -p "$TEST_STATE/apps"
 info "Test 14: Append mode preserves existing .bashrc"
 echo '# MY EXISTING CONFIG' > "$HOME/.bashrc"
 echo 'export MY_VAR=hello' >> "$HOME/.bashrc"
-./install.sh install --no-backup --append &>/dev/null
+./configure.sh install --no-backup --append &>/dev/null
 if grep -q 'MY EXISTING CONFIG' "$HOME/.bashrc" && \
    grep -q 'export MY_VAR=hello' "$HOME/.bashrc" && \
    grep -q 'bashrc.d' "$HOME/.bashrc"; then
@@ -170,7 +170,7 @@ else
 fi
 
 # Clean up for next test
-./install.sh uninstall &>/dev/null 2>&1 || true
+./configure.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
@@ -181,7 +181,7 @@ info "Test 15: Supplement single file"
 SUPP_DIR="/tmp/dotfiles-supp-bashtest"
 mkdir -p "$SUPP_DIR"
 echo 'export SECRET=abc123' > "$SUPP_DIR/90-secrets.sh"
-./install.sh install --no-backup --supplement "$SUPP_DIR/90-secrets.sh" &>/dev/null
+./configure.sh install --no-backup --supplement "$SUPP_DIR/90-secrets.sh" &>/dev/null
 if [[ -f "$HOME/.bashrc.d/90-secrets.sh" ]] && \
    grep -q 'SECRET=abc123' "$HOME/.bashrc.d/90-secrets.sh"; then
     pass "Supplement file installed correctly"
@@ -190,7 +190,7 @@ else
 fi
 
 # Clean up for next test
-./install.sh uninstall &>/dev/null 2>&1 || true
+./configure.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
@@ -200,7 +200,7 @@ mkdir -p "$TEST_STATE/apps"
 info "Test 16: Supplement multiple files"
 echo 'export PATH="/opt/bin:$PATH"' > "$SUPP_DIR/10-path.sh"
 echo 'export API_KEY=xyz' > "$SUPP_DIR/90-keys.sh"
-./install.sh install --no-backup --supplement "$SUPP_DIR/10-path.sh" --supplement "$SUPP_DIR/90-keys.sh" &>/dev/null
+./configure.sh install --no-backup --supplement "$SUPP_DIR/10-path.sh" --supplement "$SUPP_DIR/90-keys.sh" &>/dev/null
 if [[ -f "$HOME/.bashrc.d/10-path.sh" ]] && [[ -f "$HOME/.bashrc.d/90-keys.sh" ]]; then
     pass "Multiple supplement files installed"
 else
@@ -208,7 +208,7 @@ else
 fi
 
 # Clean up for next test
-./install.sh uninstall &>/dev/null 2>&1 || true
+./configure.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
@@ -216,7 +216,7 @@ mkdir -p "$TEST_STATE/apps"
 
 # Test 17: Error handling for missing supplement file
 info "Test 17: Error: missing supplement file"
-if ./install.sh install --no-backup --supplement "/tmp/nonexistent-file.sh" &>/dev/null 2>&1; then
+if ./configure.sh install --no-backup --supplement "/tmp/nonexistent-file.sh" &>/dev/null 2>&1; then
     fail "Should have failed for missing supplement"
 else
     pass "Correctly rejected missing supplement file"
@@ -225,7 +225,7 @@ fi
 # Test 18: --shell-scripts-dir custom path
 info "Test 18: Custom shell-scripts-dir"
 CUSTOM_DIR="$HOME/.config/shell.d"
-./install.sh install --no-backup --shell-scripts-dir "$CUSTOM_DIR" &>/dev/null
+./configure.sh install --no-backup --shell-scripts-dir "$CUSTOM_DIR" &>/dev/null
 if [[ -d "$CUSTOM_DIR" ]]; then
     pass "Custom shell-scripts-dir created"
 else
@@ -233,7 +233,7 @@ else
 fi
 
 # Clean up for next test
-./install.sh uninstall &>/dev/null 2>&1 || true
+./configure.sh uninstall &>/dev/null 2>&1 || true
 rm -f "$HOME/.bashrc"
 rm -rf "$CUSTOM_DIR"
 rm -rf "$HOME/.bashrc.d"

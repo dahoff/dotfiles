@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# apps/git/install.sh - Git configuration installer
-# Usage: ./install.sh <command> [options]
+# apps/git/configure.sh - Git configuration installer
+# Usage: ./configure.sh <command> [options]
 
 set -euo pipefail
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# apps/tmux/install.sh - Tmux configuration installer
-# Usage: ./install.sh <command> [options]
+# apps/tmux/configure.sh - Tmux configuration installer
+# Usage: ./configure.sh <command> [options]
 
 set -euo pipefail
 
