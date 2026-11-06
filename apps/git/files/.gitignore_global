@@ -12,6 +12,9 @@ Desktop.ini
 .vscode/
 .idea/
 
+# Git worktrees
+.worktrees/
+
 # Environment files
 .env
 .env.local
