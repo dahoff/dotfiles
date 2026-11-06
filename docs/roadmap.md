@@ -19,6 +19,10 @@ Ideas and loose ends. Nothing here is scheduled.
 - **`dotfiles` on `PATH` from bootstrap.** `init --no-sync` creates no link, and `PATH` depends on the `bash` app. Waiting on trying bootstrap on a fresh machine.
 - **`dotfiles --sync`.** It was the form first asked for, and it errors; the command is `dotfiles sync`. Decide whether to accept it.
 
+## App config
+
+- **Trailing comments in `files:`.** `load_config` in `lib/installer.sh` doesn't strip them, so `dest: ~/x   # note` deploys to a file with the comment in its name. The README warns about it; remove that warning once this is fixed.
+
 ## Releases
 
 - **Tag the first release.** `dotfiles versions` lists nothing until a tag exists.
