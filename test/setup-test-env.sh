@@ -40,9 +40,10 @@ fi
 success "Docker is installed and running"
 
 # Generate SSH key for testing if it doesn't exist
-if [[ ! -f ssh-key ]]; then
+if [[ ! -f ssh-key || ! -f ssh-key.pub ]]; then
     info "Generating test SSH key..."
-    ssh-keygen -t ed25519 -f ssh-key -N "" -C "test-key-for-dotfiles"
+    rm -f ssh-key ssh-key.pub
+    ssh-keygen -q -t ed25519 -f ssh-key -N "" -C "test-key-for-dotfiles"
     success "SSH key generated"
 else
     info "Using existing SSH key"

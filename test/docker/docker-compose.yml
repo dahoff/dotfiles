@@ -4,7 +4,8 @@ services:
     image: dotfiles-test-server:latest
     container_name: dotfiles-test-server
     ports:
-      - "2222:22"  # Map container port 22 to host port 2222
+      # This machine only: the test user has a known password and sudo
+      - "127.0.0.1:2222:22"
     volumes:
       # Mount SSH key (will be created by setup script)
       - ../ssh-key.pub:/tmp/ssh-key.pub:ro

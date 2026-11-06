@@ -68,7 +68,7 @@ One folder per tool, per `docs/superpowers/specs/2026-11-03-apps-install-merge-d
 
 ## Practical notes for whoever implements
 
-- **Docker tests:** `docker-compose` v1 is broken on this machine. Use a shim at `/tmp/dcshim/docker-compose` containing `exec docker compose "$@"`, put on PATH only for those commands, never in `~/.local/bin`. `chmod 600 test/ssh-key`. Run `test/cleanup-test-env.sh` (not `--full`) afterwards.
+- **Docker tests:** `docker-compose` v1 is broken on this machine. Use a shim at `/tmp/dcshim/docker-compose` containing `exec docker compose "$@"`, put on PATH only for those commands, never in `~/.local/bin`. `test/setup-test-env.sh` generates the test SSH key. Run `test/cleanup-test-env.sh` (not `--full`) afterwards.
 - **Test isolation:** tests must never touch the real HOME. Set `HOME`, `XDG_STATE_HOME`, `STATE_DIR` and `DOTFILES_CONFIG` to temp paths, and unset the hosts env var.
 - **Commits:** never add a `Co-Authored-By` or any Claude attribution trailer (user preference). Use `git add <explicit paths>`.
 - **Suites:** run from `test/`: `./run-core-tests.sh`, `./run-app-tests.sh`, and `./run-remote-tests.sh` (Docker).
