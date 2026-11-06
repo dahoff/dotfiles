@@ -49,7 +49,7 @@ dirty the git checkouts and break unattended `git pull --ff-only`.
    removal of `lib/remote.sh` and `--host`/`--hosts-file`.
 3. **Bootstrap and init**: `bootstrap.sh`, `dotfiles init`, `dotfiles push --init`.
 
-Deferred: drift detection and `dotfiles commit` (see `docs/notes/deferred-drift-and-commit.md`).
+Deferred: drift detection and `dotfiles commit` (see `docs/roadmap.md`).
 
 ## Sub-project 1 goals
 

@@ -266,7 +266,10 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 | `init` | Guided per-host setup: asks a few questions, writes the config file, then runs the first sync. See Setting up a new machine. |
 | `sync` | Pulls the dotfiles and hosts repos (fast-forward only), self-installs, then installs packages and deploys app configs. Idempotent: it installs what is new and upgrades what changed. |
 | `push HOST...` | Ships the repos to each HOST over ssh and runs `dotfiles sync --no-pull` there. Meant for hosts without access to the repos. |
-| `status` | Read-only. Shows the repos (branch and commit, or the pushed copy's `PUSHED` line), host and profile, auto sync state, pending packages and per-app state. |
+| `status` | Read-only. Shows the repos (branch and commit, or the pushed copy's `PUSHED` line), the version, host and profile, auto sync state, pending packages, per-app state and local edits. |
+| `versions` | Lists tagged versions, newest first. See Versions. |
+| `checkout REF` | Switches to a tag or commit, deploys it and stays there. See Versions. |
+| `add` | Reviews local edits one by one and stages the accepted ones in a repo layer. See Local edits. |
 | `uninstall` | Removes the deployed configs and restores the originals (unless `--no-backup`). Installs nothing and leaves tools in place. |
 | `verify` | Checks every installation. Installs nothing. |
 | `help` | Prints the usage text. |
@@ -291,6 +294,40 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 - It then runs `<remote dotfiles repo>/dotfiles sync --no-pull` with `ssh -t`, so prompts such as sudo work. The remote exit status is the push result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed.
 - `--dry-run` reports what would be sent and, if the remote already has dotfiles, runs a remote `sync --no-pull --dry-run`. Nothing is copied.
 - `push --init` sets up a host that has no dotfiles yet. See Setting up a new machine.
+
+### Versions
+
+    dotfiles versions
+    dotfiles checkout [--dry-run] REF
+
+- `versions` marks the current tag, and any tag too old to check out (one from before `checkout` existed).
+- `checkout` takes a tag, a commit or a branch. It refuses a checkout with uncommitted changes, an unknown ref and a version that is too old, leaving everything where it was. If the fetch fails, it uses what is already here. It then runs the new version's own `dotfiles sync --no-pull`.
+- A tag or commit pins the machine: the checkout is left on a detached HEAD, which `sync` doesn't pull. A manual `sync` warns that it is pinned, even when nothing changed. `--auto` stays pinned without warning.
+- `dotfiles checkout main` follows `main` again, with the latest commits.
+
+### Local edits
+
+- Each deploy records a hash of every file it wrote in `<state dir>/deployed/<app>.tsv`. The records hold hashes, not contents.
+- An update leaves a file alone if its live copy differs from the record. If the repo changed the same file, it warns as well. With no record to compare, as on a machine that was behind when records were introduced, an older deployed file looks the same as an edit. `--force` takes the repo's version; the upgrade snapshot keeps yours unless `--no-backup` is given.
+- `status` lists edited files, and a manual `sync` counts them.
+- Merged files are expected to change, so only the keys the repo manages are compared.
+
+`dotfiles add` shows a diff of each edit and asks whether to save it, then which layer to save it to: this host, a profile, or the default in the public repo.
+
+- It copies the file into that layer and stages it. It never commits or pushes, so you review it again in git or lazygit.
+- It only offers files dotfiles already manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in.
+- Saving to the public default needs typing `public`, and isn't offered while pinned or without git.
+- A target with uncommitted changes is skipped. A layer above the existing copy shadows lower layers from then on, and it warns when that happens.
+- Merged files are display-only: the same key can be set in several layers, and copying the whole file would pull in local keys.
+- There is no dry run: answer `n` to look without saving.
+
+### `~/.bashrc`
+
+`~/.bashrc` is an ordinary managed file: edit protection and `add` apply to it. A host-specific change can be saved as a host copy with `add`, which then shadows later changes to the public `.bashrc` on that host.
+
+On first install, what is already in `~/.bashrc` moves to `<shell scripts dir>/00-local.sh`, which dotfiles doesn't manage. It loads after the managed file, so its settings win. A distro's unchanged `/etc/skel/.bashrc` isn't moved, because loading it last would override the managed prompt and aliases; the backup still has it.
+
+Versions that appended to `~/.bashrc` are cleaned up the same way on the first deploy: the appended blocks go, and content outside them moves to `00-local.sh`. If a managed part differs from the repo, it may hold hand edits, so the old file is saved as `bashrc.before-cleanup.<timestamp>` in the app's backup directory, even with `--no-backup`, and sync warns.
 
 ### Self-install
 
@@ -402,7 +439,7 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 Sync follows the repo, so undo in the repo:
 
 - Revert and publish: `git revert <commit>` in the dotfiles (or hosts) repo, push it, and let each host pull on its next sync (or run `dotfiles sync`). For hosts that receive pushes, push again.
-- Roll one host back without publishing: `git checkout <old-commit>` in the repo, then `dotfiles sync --no-pull`. Return later with `git checkout <branch>`.
+- Roll one host back without publishing: `dotfiles checkout <tag-or-commit>`. Return later with `dotfiles checkout main`. See Versions.
 
 ---
 
