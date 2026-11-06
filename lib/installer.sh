@@ -288,7 +288,7 @@ installer_keep_edit() {
     fi
     # The repo changed too, or nothing says what was deployed: the safe mistake is
     # leaving the file behind the repo, not losing an edit
-    log_warn "Keeping local edit: $dest (the repo version changed too; 'dotfiles add' saves yours, 'dotfiles sync --force' takes the repo's)"
+    log_warn "Keeping local edit: $dest (the repo version changed too; 'dotfiles add' saves yours, 'dotfiles pull --force' takes the repo's)"
     if ! is_dry_run; then
         [[ -n "$recorded" ]] || deployed_set "$APP_NAME" "$name" "$dest" unknown
         if [[ -n "${DOTFILES_KEPT_FILE:-}" ]]; then

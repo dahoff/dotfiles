@@ -121,7 +121,7 @@ profile() { cat > "$HD/profiles/$1.yaml"; }
 # Dry run of a profile on a host with no host.yaml, or of HOST with host.yaml
 dry() {
     RC=0
-    OUT=$("$DF/dotfiles" sync --dry-run --no-pull --hosts-dir "$HD" --hostname "${2:-nohost}" ${1:+--profile "$1"} 2>&1) || RC=$?
+    OUT=$("$DF/dotfiles" pull --dry-run --no-fetch --hosts-dir "$HD" --hostname "${2:-nohost}" ${1:+--profile "$1"} 2>&1) || RC=$?
 }
 packages() { grep -o 'Packages: .*' <<< "$OUT" | head -1 | sed 's/^Packages: //'; }
 expect_packages() {
@@ -329,7 +329,7 @@ packages:
       dir: deployapp
 EOF
 RC=0
-OUT=$("$DF/dotfiles" sync --no-pull --no-backup --hosts-dir "$HD" --hostname nohost --profile realrun 2>&1) || RC=$?
+OUT=$("$DF/dotfiles" pull --no-fetch --no-backup --hosts-dir "$HD" --hostname nohost --profile realrun 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "13: sync failed: $OUT"
 [[ -e "$HOME/toolonly-installed" ]] || fail "13: install.sh not run: $OUT"
 [[ -f "$HOME/.bashrc.d/50-toolonly.sh" ]] || fail "13: drop-in not deployed: $OUT"
@@ -417,7 +417,7 @@ info "Case 20: a dry run with the default state location writes nothing under HO
 T20="$T/home20"
 mkdir -p "$T20"
 RC=0
-OUT=$(env -u STATE_DIR -u XDG_STATE_HOME HOME="$T20" "$ROOT_DIR/dotfiles" sync --dry-run --no-pull --hostname nohost --profile minimal 2>&1) || RC=$?
+OUT=$(env -u STATE_DIR -u XDG_STATE_HOME HOME="$T20" "$ROOT_DIR/dotfiles" pull --dry-run --no-fetch --hostname nohost --profile minimal 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "20: dry-run failed: $OUT"
 WROTE=$(find "$T20" -mindepth 1)
 [[ -z "$WROTE" ]] || fail "20: dry run wrote: $WROTE"

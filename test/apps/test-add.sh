@@ -71,9 +71,9 @@ add() {
     RC=0
     OUT=$(printf '%s\n' "$@" | DOTFILES_ADD_ASSUME_TTY=1 "$R/dotfiles" add 2>&1) || RC=$?
 }
-sync() {
-    run sync --no-backup "$@"
-    [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
+do_pull() {
+    run pull --no-backup "$@"
+    [[ $RC -eq 0 ]] || fail "pull failed: $OUT"
 }
 has_line() {
     printf '%s\n' "$OUT" | grep -qF -- "$1" || fail "missing '$1' in: $OUT"
@@ -90,7 +90,7 @@ reset_edit() {
     cp "$REPO_EXTRACT" "$EXTRACT"
 }
 
-sync
+do_pull
 
 info "Case 1: every managed file has a record, merged files marked"
 [[ -f "$MANIFEST" ]] || fail "no manifest"
@@ -104,7 +104,7 @@ pass "recorded"
 info "Case 2: an unedited file still updates"
 echo '# repo update 1' >> "$REPO_FFIND"
 commit_repo "update fuzzy-find"
-sync
+do_pull
 grep -q 'repo update 1' "$FFIND" || fail "unedited file did not update"
 pass "normal update"
 
@@ -113,7 +113,7 @@ echo '# my edit' >> "$EXTRACT"
 EDITED=$(cat "$EXTRACT")
 echo '# repo update 2' >> "$REPO_FFIND"
 commit_repo "update fuzzy-find again"
-sync
+do_pull
 [[ "$(cat "$EXTRACT")" == "$EDITED" ]] || fail "edit overwritten"
 grep -q 'repo update 2' "$FFIND" || fail "other file in the app did not update"
 has_line "1 file(s) have local edits, run 'dotfiles add'"
@@ -127,7 +127,7 @@ echo '# repo update 3' >> "$REPO_EXTRACT"
 commit_repo "update extract"
 rm -f "$XDG_STATE_HOME/dotfiles/last-sync"
 RC=0
-"$R/dotfiles" sync --auto --no-pull --no-backup >/dev/null 2>&1 </dev/null || RC=$?
+"$R/dotfiles" pull --auto --no-fetch --no-backup >/dev/null 2>&1 </dev/null || RC=$?
 [[ $RC -eq 0 ]] || fail "auto sync failed"
 [[ "$(cat "$EXTRACT")" == "$EDITED" ]] || fail "edit overwritten by auto"
 grep -qF "kept your edit to $EXTRACT" "$XDG_STATE_HOME/dotfiles/report" || fail "not in report"
@@ -136,7 +136,7 @@ has_line "~/.local/bin/extract  (the repo changed it too)"
 pass "conflict kept"
 
 info "Case 5: --force takes the repo's version, and a snapshot keeps the edit"
-run sync --force
+run pull --force
 [[ $RC -eq 0 ]] || fail "force sync failed: $OUT"
 cmp -s "$REPO_EXTRACT" "$EXTRACT" || fail "force did not overwrite"
 grep -rlF '# my edit' "$HOME/.bak/scripts" >/dev/null || fail "no snapshot of the edit"
@@ -150,7 +150,7 @@ cp "$REPO_EXTRACT" "$EXTRACT"
 commit_repo "update extract again"
 run status
 has_line "local edits:     none"
-sync
+do_pull
 cmp -s "$REPO_EXTRACT" "$EXTRACT" || fail "matching file changed"
 [[ "$(grep -F "$EXTRACT" "$MANIFEST" | cut -f1)" == "$(sha256sum "$EXTRACT" | cut -d' ' -f1)" ]] || fail "record not updated"
 pass "matching edit"
@@ -161,13 +161,13 @@ EDITED=$(cat "$EXTRACT")
 rm -rf "$STATE_DIR/deployed" "$XDG_STATE_HOME/dotfiles/last-complete"
 run status
 has_line "not tracked yet"
-sync
+do_pull
 [[ "$(grep -F "$EXTRACT" "$MANIFEST" | cut -f1)" == "$(sha256sum "$REPO_EXTRACT" | cut -d' ' -f1)" ]] || fail "baseline is not the repo version"
 run status
 has_line "~/.local/bin/extract"
 echo '# repo update 5' >> "$REPO_FFIND"
 commit_repo "update fuzzy-find a third time"
-sync
+do_pull
 [[ "$(cat "$EXTRACT")" == "$EDITED" ]] || fail "edit overwritten after baseline"
 pass "baseline"
 
@@ -175,13 +175,13 @@ info "Case 8: no record and a changed repo: keep the file, say so"
 rm -rf "$STATE_DIR/deployed"
 echo '# repo update 6' >> "$REPO_EXTRACT"
 commit_repo "update extract with no records"
-sync
+do_pull
 [[ "$(cat "$EXTRACT")" == "$EDITED" ]] || fail "file with no record overwritten"
 has_line "Keeping local edit: $EXTRACT"
 [[ "$(grep -F "$EXTRACT" "$MANIFEST" | cut -f1)" == unknown ]] || fail "not marked unknown"
 run status
 has_line "~/.local/bin/extract  (the repo changed it too)"
-run sync --force
+run pull --force
 reset_edit
 pass "unknown kept"
 
@@ -191,10 +191,10 @@ EDITED=$(cat "$EXTRACT")
 BEFORE=$(cat "$MANIFEST")
 echo '# repo update 7' >> "$REPO_EXTRACT"
 commit_repo "dry update"
-run sync --dry-run --no-backup
+run pull --dry-run --no-backup
 [[ $RC -eq 0 ]] || fail "dry run failed: $OUT"
 [[ "$(cat "$EXTRACT")" == "$EDITED" && "$(cat "$MANIFEST")" == "$BEFORE" ]] || fail "dry run wrote something"
-run sync --force --no-backup
+run pull --force --no-backup
 pass "dry run"
 
 info "Case 10: add needs a terminal"
@@ -234,7 +234,7 @@ has_line "local edits:     none"
 pass "staged only"
 
 info "Case 13: the staged change deploys, and the next add has nothing to do"
-sync
+do_pull
 cmp -s "$HOST_EXTRACT" "$EXTRACT" || fail "live file differs from the layer"
 add n
 has_line "No local edits"
@@ -253,7 +253,7 @@ cmp -s "$EXTRACT" "$PROFILE_EXTRACT" || fail "not saved to the profile"
 git -C "$H" reset -q --hard
 git -C "$H" clean -qfd
 cp "$HOST_EXTRACT" "$EXTRACT"
-sync
+do_pull
 pass "layers"
 
 info "Case 15: a new copy in a higher layer warns that it shadows lower ones"
@@ -268,9 +268,9 @@ printf '%s\n' "$FFIND_BEFORE" > "$FFIND"
 pass "shadow warning"
 
 info "Case 16: the public repo needs the word"
-sync
+do_pull
 cp "$REPO_FFIND" "$FFIND"
-sync
+do_pull
 echo '# public edit' >> "$FFIND"
 add y 3 no
 has_line "PUBLIC repo"
@@ -282,7 +282,7 @@ pass "public confirmed"
 
 info "Case 17: a target with uncommitted changes is not overwritten"
 cp "$REPO_FFIND" "$FFIND"
-run sync --force --no-backup
+run pull --force --no-backup
 echo '# public edit' >> "$FFIND"
 echo '# other wip' >> "$REPO_FFIND"
 WIP=$(cat "$REPO_FFIND")
@@ -291,7 +291,7 @@ has_line "uncommitted changes; skipped"
 [[ "$(cat "$REPO_FFIND")" == "$WIP" ]] || fail "uncommitted work overwritten"
 git -C "$R" checkout -q -- apps/scripts/files/fuzzy-find
 cp "$REPO_FFIND" "$FFIND"
-run sync --force --no-backup
+run pull --force --no-backup
 pass "uncommitted work kept"
 
 info "Case 18: pinned machines can't save to the public repo"
@@ -304,7 +304,7 @@ git -C "$H" reset -q --hard
 git -C "$H" clean -qfd
 git -C "$R" checkout -q main
 cp "$REPO_FFIND" "$FFIND"
-run sync --force --no-backup
+run pull --force --no-backup
 pass "public option hidden"
 
 info "Case 19: merged files show managed keys only and can't be accepted"
@@ -331,7 +331,7 @@ pass "merged display-only"
 
 info "Case 20: keys apps add to a merged file are not edits"
 git -C "$H" reset -q --hard
-run sync --force --no-backup
+run pull --force --no-backup
 jq '.claudeAddedThis = 1' "$CL" > "$T/s.json"
 cp "$T/s.json" "$CL"
 run status
@@ -372,7 +372,7 @@ has_line "Keeping local edit"
 pass "legacy gitconfig"
 
 info "Case 24: discarding a staged change makes it an edit again, and it survives"
-run sync --force --no-backup
+run pull --force --no-backup
 [[ $RC -eq 0 ]] || fail "force sync failed: $OUT"
 git -C "$H" status --porcelain | grep -q . && fail "hosts repo not clean: $(git -C "$H" status --porcelain)"
 FF_REL="hosts/testhost/apps/scripts/files/fuzzy-find"
@@ -389,10 +389,10 @@ add n
 has_line "=== ~/.local/bin/fuzzy-find ==="
 echo '# repo update 6' >> "$REPO_FFIND"
 commit_repo "update fuzzy-find a fourth time"
-sync
+do_pull
 grep -qF '# keep me' "$FFIND" || fail "discarded edit was overwritten"
 has_line "fuzzy-find"
-run sync --force --no-backup
+run pull --force --no-backup
 [[ $RC -eq 0 ]] || fail "force sync failed: $OUT"
 pass "backed-out edit kept"
 
@@ -401,7 +401,7 @@ echo '# my own bashrc' > "$HOME/.bashrc"
 sed -i 's/^packages:/packages:\n  - bash/' "$H/profiles/base.yaml"
 git -C "$H" add -A
 git -C "$H" commit -q -m "add bash"
-sync
+do_pull
 has_line "00-local.sh"
 cmp -s "$R/apps/bash/files/.bashrc" "$HOME/.bashrc" || fail ".bashrc is not the repo's file"
 grep -qF '# my own bashrc' "$HOME/.bashrc.d/00-local.sh" || fail "own content lost"
@@ -415,7 +415,7 @@ add y ""
 has_line "Staged hosts/testhost/apps/bash/files/.bashrc"
 grep -qxF 'alias mine=1' "$H/hosts/testhost/apps/bash/files/.bashrc" || fail "edit not saved to the layer"
 git -C "$H" commit -q -m "my bashrc"
-sync
+do_pull
 [[ "$(grep -cxF 'alias mine=1' "$HOME/.bashrc")" == 1 ]] || fail "edit duplicated or lost"
 [[ "$(grep -c 'BEGIN managed' "$HOME/.bashrc")" == 0 ]] || fail "a block was appended"
 pass ".bashrc round trip"

@@ -170,7 +170,7 @@ for bad in h 0x ""; do
 done
 pass "interval seconds"
 
-# Integration: dotfiles sync --dry-run
+# Integration: dotfiles pull --dry-run
 echo
 info "Integration: precedence in dotfiles"
 HR="$T/hosts-dir"
@@ -179,7 +179,7 @@ cd "$ROOT_DIR"
 
 run() {
     RC=0
-    OUT=$(./dotfiles sync --dry-run "$@" 2>&1) || RC=$?
+    OUT=$(./dotfiles pull --dry-run "$@" 2>&1) || RC=$?
 }
 fresh_home() {
     rm -rf "$T/home" "$T/state"

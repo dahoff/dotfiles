@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-remote-tests.sh - dotfiles push integration tests (need the Docker test server)
+# run-remote-tests.sh - dotfiles pull --remote and init --remote integration tests (need the Docker test server)
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ test_ssh() {
     ssh $SSH_OPTS -i "$SSH_KEY" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$@"
 }
 
-# What dotfiles push uses for ssh/scp
+# What dotfiles pull --remote uses for ssh/scp
 export DOTFILES_SSH_OPTS="-o Port=$SSH_PORT -o IdentityFile=$SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 TARGET="$SSH_USER@$SSH_HOST"
 
@@ -70,9 +70,15 @@ export GIT_CONFIG_GLOBAL="$T/gitconfig"
 
 OUT=""
 RC=0
+# push [--init] ARGS...: pull --remote ARGS, or with --init, init --remote ARGS
 push() {
+    local verb=pull a
+    local -a args=()
+    for a in "$@"; do
+        if [[ "$a" == --init ]]; then verb=init; else args+=("$a"); fi
+    done
     RC=0
-    OUT=$("${PUSH_BIN:-./dotfiles}" push "$@" 2>&1) || RC=$?
+    OUT=$("${PUSH_BIN:-./dotfiles}" "$verb" --remote "${args[@]}" 2>&1) || RC=$?
 }
 
 WORKTREE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
@@ -102,7 +108,7 @@ test_ssh 'grep -q "^source=" ~/dh-custom/PUSHED' || fail "P1: hosts PUSHED missi
 [[ "$(test_ssh 'cat ~/.claude/statusline-command.sh')" == "# host statusline" ]] || fail "P1: host statusline not deployed"
 test_ssh 'test -L ~/.local/bin/dotfiles' || fail "P1: remote not self-installed (~/.local/bin/dotfiles)"
 test_ssh 'test -f ~/.bashrc.d/90-dotfiles.sh' || fail "P1: remote login drop-in missing"
-printf '%s\n' "$OUT" | grep -qF "[$TARGET] push: push" || fail "P1: no summary: $OUT"
+printf '%s\n' "$OUT" | grep -qF "[$TARGET] remote: send" || fail "P1: no summary: $OUT"
 pass "P1: repos shipped, configs deployed, self-install ran remotely"
 
 info "P2: second push replaces the trees (removed file is gone)"
@@ -148,9 +154,9 @@ pass "P4: dry-run printed the plan and changed nothing"
 info "P5: unreachable host"
 RC=0
 OUT=$(DOTFILES_SSH_OPTS="-o Port=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-    ./dotfiles push "$TARGET" 2>&1) || RC=$?
+    ./dotfiles pull --remote "$TARGET" 2>&1) || RC=$?
 [[ $RC -eq 1 ]] || fail "P5: expected exit 1, got $RC: $OUT"
-printf '%s\n' "$OUT" | grep -qF "push FAILED" || fail "P5: no FAILED summary: $OUT"
+printf '%s\n' "$OUT" | grep -qF "send FAILED" || fail "P5: no FAILED summary: $OUT"
 pass "P5: unreachable host fails with a summary"
 
 info "P6: refuses to replace a foreign (non-pushed, non-git) directory"

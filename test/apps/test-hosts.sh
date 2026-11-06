@@ -45,7 +45,7 @@ packages_line() { echo "$OUT" | grep -o 'Packages: .*' | head -1; }
 info "Test 0: a dry run on a fresh install writes nothing under HOME"
 mkdir -p "$TEST_HOME/.claude"
 echo '{"liveOnly":1}' > "$TEST_HOME/.claude/settings.json"
-run sync --dry-run --no-pull --hostname testhost --hosts-dir "$HR"
+run pull --dry-run --no-fetch --hostname testhost --hosts-dir "$HR"
 [[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
 WROTE=$(cd "$TEST_HOME" && find . -mindepth 1 | sort | tr '\n' ' ')
 [[ "$WROTE" == "./.claude ./.claude/settings.json " ]] || fail "dry-run wrote under HOME: $WROTE"
@@ -54,7 +54,7 @@ pass "dry run left HOME untouched"
 
 # Test 1
 info "Test 1: no hosts dir keeps today's resolution"
-run sync --dry-run --hostname testhost
+run pull --dry-run --hostname testhost
 [[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
 [[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
     || fail "package list changed: $(packages_line)"
@@ -63,7 +63,7 @@ pass "unchanged without hosts dir"
 
 # Test 2
 info "Test 2: hosts-dir profile extending its own name continues in dotfiles"
-run sync --dry-run --hosts-dir "$HR" --hostname nohost --profile minimal
+run pull --dry-run --hosts-dir "$HR" --hostname nohost --profile minimal
 [[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
 [[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq scripts" ]] \
     || fail "expected dotfiles minimal minus tree: $(packages_line)"
@@ -71,14 +71,14 @@ pass "lookup order and self-extend"
 
 # Test 3
 info "Test 3: profile only in dotfiles is found"
-run sync --dry-run --hosts-dir "$HR" --hostname nohost --profile complete
+run pull --dry-run --hosts-dir "$HR" --hostname nohost --profile complete
 [[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
     || fail "fallback: $(packages_line)"
 pass "dotfiles fallback"
 
 # Test 4
 info "Test 4: host directory selects profile"
-run sync --dry-run --hosts-dir "$HR" --hostname testhost
+run pull --dry-run --hosts-dir "$HR" --hostname testhost
 [[ "$OUT" == *"Using profile 'base'"* ]] || fail "host.yaml profile not used"
 [[ "$OUT" == *"Host directory: hosts/testhost"* ]] || fail "host directory not reported"
 [[ "$(packages_line)" == "Packages: claude scripts" ]] || fail "packages: $(packages_line)"
@@ -86,58 +86,58 @@ pass "host.yaml profile"
 
 # Test 5
 info "Test 5: --profile overrides host.yaml with a warning"
-run sync --dry-run --hosts-dir "$HR" --hostname testhost --profile minimal
+run pull --dry-run --hosts-dir "$HR" --hostname testhost --profile minimal
 [[ "$OUT" == *"overrides profile 'base'"* ]] || fail "no override warning"
 [[ "$OUT" == *"Using profile 'minimal'"* ]] || fail "--profile did not win"
 pass "--profile wins"
 
 # Test 6
 info "Test 6: host.yaml exclude and extra"
-run sync --dry-run --hosts-dir "$HR" --hostname excludehost
+run pull --dry-run --hosts-dir "$HR" --hostname excludehost
 [[ "$(packages_line)" == "Packages: claude vim" ]] || fail "exclude/extra: $(packages_line)"
 pass "host.yaml exclude/extra"
 
 # Test 7
 info "Test 7: env DOTFILES_HOSTS_DIR works like --hosts-dir"
-OUT=$(DOTFILES_HOSTS_DIR="$HR" ./dotfiles sync --dry-run --hostname testhost 2>&1) || fail "env run failed"
+OUT=$(DOTFILES_HOSTS_DIR="$HR" ./dotfiles pull --dry-run --hostname testhost 2>&1) || fail "env run failed"
 [[ "$(packages_line)" == "Packages: claude scripts" ]] || fail "env not honored"
 pass "env hosts dir"
 
 # Test 8
 info "Test 8: missing hosts dir aborts before changes"
-run sync --hosts-dir /tmp/does-not-exist-hosts --hostname testhost
+run pull --hosts-dir /tmp/does-not-exist-hosts --hostname testhost
 [[ $RC -ne 0 ]] || fail "should abort"
 [[ ! -d "$HOME/.claude" ]] || fail "changes were made"
 pass "missing hosts dir aborts"
 
 # Test 9
 info "Test 9: host.yaml without profile: aborts"
-run sync --dry-run --hosts-dir "$HR" --hostname noprofile
+run pull --dry-run --hosts-dir "$HR" --hostname noprofile
 [[ $RC -ne 0 && "$OUT" == *"has no 'profile:'"* ]] || fail "should abort on missing profile:"
 pass "missing profile: aborts"
 
 # Test 10
 info "Test 10: unknown profile aborts"
-run sync --dry-run --hosts-dir "$HR" --hostname nohost --profile nope
+run pull --dry-run --hosts-dir "$HR" --hostname nohost --profile nope
 [[ $RC -ne 0 && "$OUT" == *"Profile not found"* ]] || fail "should abort on unknown profile"
 pass "unknown profile aborts"
 
 # Test 11
 info "Test 11: extends cycle aborts"
-run sync --dry-run --hosts-dir "$HR" --hostname nohost --profile cycle-a
+run pull --dry-run --hosts-dir "$HR" --hostname nohost --profile cycle-a
 [[ $RC -ne 0 && "$OUT" == *"extends cycle"* ]] || fail "cycle not detected: $(echo "$OUT" | tail -3)"
 pass "cycle detected"
 
 # Test 12
 info "Test 12: host directory without host.yaml is ignored with a warning"
-run sync --dry-run --hosts-dir "$HR" --hostname nohostyaml --profile base
+run pull --dry-run --hosts-dir "$HR" --hostname nohostyaml --profile base
 [[ $RC -eq 0 && "$OUT" == *"no host.yaml"* ]] || fail "no warning for hosts/nohostyaml"
 [[ "$OUT" != *"Host directory"* ]] || fail "directory without host.yaml was used"
 pass "host dir without host.yaml ignored"
 
 # Test 13
 info "Test 13: removed remote options are rejected"
-run sync --host x
+run pull --host x
 [[ $RC -ne 0 && "$OUT" == *"Unknown option"* ]] || fail "--host should be an unknown option: $OUT"
 pass "--host rejected"
 
@@ -150,28 +150,28 @@ seed_settings() {
 
 # Test 14
 info "Test 14: unknown overlay src aborts before changes"
-run sync --no-backup --hosts-dir "$HR" --hostname typo
+run pull --no-backup --hosts-dir "$HR" --hostname typo
 [[ $RC -ne 0 && "$OUT" == *"setings.json"* ]] || fail "typo overlay not rejected"
 [[ ! -d "$CL" ]] || fail "changes were made"
 pass "typo overlay aborts"
 
 # Test 15
 info "Test 15: merge on a non-JSON file aborts before changes"
-run sync --no-backup --hosts-dir "$HR" --hostname mergetxt
+run pull --no-backup --hosts-dir "$HR" --hostname mergetxt
 [[ $RC -ne 0 && "$OUT" == *"requires a .json file"* ]] || fail "merge on .sh not rejected"
 [[ ! -d "$CL" ]] || fail "changes were made"
 pass "merge on non-JSON aborts"
 
 # Test 16
 info "Test 16: overlays for an excluded app warn and are ignored"
-run sync --dry-run --hosts-dir "$HR" --hostname excludehost
+run pull --dry-run --hosts-dir "$HR" --hostname excludehost
 [[ $RC -eq 0 && "$OUT" == *"Ignoring overlays for 'scripts'"* ]] || fail "no warning for excluded app overlay"
 pass "excluded-app overlay warned"
 
 # Test 17
 info "Test 17: three-layer replace and merge with live file"
 seed_settings
-run sync --no-backup --hosts-dir "$HR" --hostname testhost
+run pull --no-backup --hosts-dir "$HR" --hostname testhost
 [[ $RC -eq 0 ]] || fail "deploy failed: $(echo "$OUT" | tail -20)"
 [[ "$(cat "$CL/statusline-command.sh")" == "# host statusline" ]] || fail "host layer should win"
 [[ "$(cat "$CL/tmux-notify.sh")" == "# profile notify" ]] || fail "profile layer should win over dotfiles"
@@ -190,10 +190,10 @@ pass "layers and merge correct"
 
 # Test 18
 info "Test 18: unchanged inputs skip; a hosts-dir change upgrades only that app"
-run sync --no-backup --hosts-dir "$HR" --hostname testhost
+run pull --no-backup --hosts-dir "$HR" --hostname testhost
 [[ "$OUT" == *"claude is already up to date"* ]] || fail "claude should be up to date"
 echo "# host statusline v2" > "$HR/hosts/testhost/apps/claude/files/statusline-command.sh"
-run sync --no-backup --hosts-dir "$HR" --hostname testhost
+run pull --no-backup --hosts-dir "$HR" --hostname testhost
 [[ "$OUT" == *"claude upgraded successfully"* ]] || fail "hosts-dir change should upgrade claude"
 [[ "$OUT" == *"scripts is already up to date"* ]] || fail "scripts should be untouched"
 [[ "$(cat "$CL/statusline-command.sh")" == "# host statusline v2" ]] || fail "new overlay not deployed"
@@ -202,7 +202,7 @@ pass "content-hash upgrades"
 # Test 19
 info "Test 19: profile files: strategy applies when the host doesn't override it"
 echo '{"liveLocal":1}' > "$CL/settings.local.json"
-run sync --no-backup --hosts-dir "$HR" --hostname mergelocal
+run pull --no-backup --hosts-dir "$HR" --hostname mergelocal
 [[ $RC -eq 0 ]] || fail "deploy failed"
 [[ "$(jq -r .liveLocal "$CL/settings.local.json")" == 1 ]] || fail "profile merge strategy not applied"
 pass "profile strategy"
@@ -211,7 +211,7 @@ pass "profile strategy"
 info "Test 20: invalid JSON in a layer fails that file only, reported in summary"
 seed_settings
 cp "$CL/settings.json" "$HOME/settings.before"
-run sync --no-backup --hosts-dir "$HR" --hostname badjson
+run pull --no-backup --hosts-dir "$HR" --hostname badjson
 [[ $RC -ne 0 ]] || fail "deploy should report failure"
 [[ "$OUT" == *"claude/settings.json: deploy FAILED"* ]] || fail "summary should name the file"
 cmp -s "$CL/settings.json" "$HOME/settings.before" || fail "live settings.json modified"
@@ -223,7 +223,7 @@ pass "bad layer isolated"
 # Test 21
 info "Test 21: --hostname rejects path-like values"
 for bad in "../x" "a/b" "." ".."  ""; do
-    run sync --dry-run --hostname "$bad"
+    run pull --dry-run --hostname "$bad"
     [[ $RC -ne 0 ]] || fail "--hostname '$bad' accepted"
     [[ "$OUT" == *"invalid --hostname"* || "$OUT" == *"requires a name"* ]] || fail "no message for '$bad': $OUT"
 done
@@ -247,7 +247,7 @@ for h in layeredhost plainhost; do
     mkdir -p "$TEST_HOME-$h" "$TEST_STATE-$h/apps"
     RC=0
     OUT=$(HOME="$TEST_HOME-$h" STATE_DIR="$TEST_STATE-$h" XDG_STATE_HOME="$TEST_HOME-$h/.xdg-state" \
-        ./dotfiles sync --no-pull --no-backup --hosts-dir "$HR" --hostname "$h" 2>&1) || RC=$?
+        ./dotfiles pull --no-fetch --no-backup --hosts-dir "$HR" --hostname "$h" 2>&1) || RC=$?
     [[ $RC -eq 0 ]] || fail "$h: sync failed: $OUT"
 done
 [[ "$(cat "$TEST_HOME-layeredhost/.claude/statusline-command.sh")" == "# layered statusline" ]] \
@@ -262,12 +262,12 @@ pass "overlay limited to the extends profile's hosts"
 info "Test 23: a profile extending complete contributes its overlay layer"
 mkdir -p "$HR/profiles/oncomplete/apps/claude/files"
 echo 'extends: complete' > "$HR/profiles/oncomplete.yaml"
-run sync --dry-run --no-pull --hosts-dir "$HR" --hostname nohost --profile oncomplete
+run pull --dry-run --no-fetch --hosts-dir "$HR" --hostname nohost --profile oncomplete
 [[ $RC -eq 0 ]] || fail "extends complete failed: $OUT"
 [[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
     || fail "extends complete changed the list: $(packages_line)"
 echo '# wrong name' > "$HR/profiles/oncomplete/apps/claude/files/statusbar.sh"
-run sync --dry-run --no-pull --hosts-dir "$HR" --hostname nohost --profile oncomplete
+run pull --dry-run --no-fetch --hosts-dir "$HR" --hostname nohost --profile oncomplete
 [[ $RC -ne 0 && "$OUT" == *"statusbar.sh"* ]] || fail "overlay layer of a profile extending complete not used: $OUT"
 pass "extends complete keeps the profile's layer"
 

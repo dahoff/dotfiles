@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# push.sh - dotfiles push: ship committed repo snapshots to a host over ssh
+# push.sh - dotfiles pull --remote and init --remote: send committed repo
+# snapshots from this machine to a host over ssh
 # Requires lib/logging.sh and lib/hosts.sh (hosts_local_name).
 # DOTFILES_SSH_OPTS: extra whitespace-split ssh/scp options (used by tests).
 
@@ -115,7 +116,7 @@ printf 'dotfiles_repo=%s\nhosts_dir=%s\n' "$d" "$h"
 SNIPPET
 }
 
-# Check the init flags push --init forwards, so a bad value is refused before
+# Check the init flags init --remote forwards, so a bad value is refused before
 # anything is shipped. Whether a profile exists is left to the remote init: its
 # hosts dir may not be the local one. Logs every problem; returns 1 if any.
 # Usage: push_validate_init_flags [INIT_FLAG...]
@@ -133,12 +134,16 @@ push_validate_init_flags() {
     return $ok
 }
 
-# Push both repos to HOST and run the sync there, or with INIT=true the remote
+# Send both repos to HOST and run 'pull --no-fetch' there, or with INIT=true the remote
 # 'dotfiles init' with INIT_FLAGS. Returns the remote exit code.
 # Usage: push_host HOST INIT(true|false) [DRY_RUN(true|false) [INIT_FLAG...]]
 push_host() {
     local host="$1" init="$2" dry_run="${3:-false}"
     local -a init_flags=("${@:4}")
+    # --force reaches the remote pull. The remote never fetches: what it
+    # received is all it has to pull from.
+    local force_flag=""
+    ! has_global_flag --force || force_flag="--force "
 
     local dir="$WORK_DIR/push"
     mkdir -p "$dir"
@@ -195,7 +200,7 @@ push_host() {
     local refused=false exists=false
     while IFS= read -r line; do
         if [[ "$line" == "git "* ]]; then
-            log_error "$host:${line#git } is a git checkout; run 'dotfiles sync' there instead"
+            log_error "$host:${line#git } is a git checkout; run 'dotfiles pull' there instead"
             refused=true
         elif [[ "$line" == "foreign "* ]]; then
             log_error "$host:${line#foreign } exists and is not a pushed dotfiles copy; refusing to replace it"
@@ -213,9 +218,9 @@ push_host() {
         if [[ "$init" == true ]]; then
             echo "Would run dotfiles init on $host"
         elif [[ "$exists" == true ]]; then
-            push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") sync --no-pull --dry-run"
+            push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") pull --no-fetch $force_flag--dry-run"
         else
-            echo "Would run dotfiles sync on $host"
+            echo "Would run dotfiles pull on $host"
         fi
         return $?
     fi
@@ -275,6 +280,6 @@ rm -rf $p.old
         return $?
     fi
 
-    log_info "[$host] Running dotfiles sync"
-    push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") sync --no-pull"
+    log_info "[$host] Running dotfiles pull"
+    push_ssh -t "$host" "$(push_quote "$rdot/dotfiles") pull --no-fetch${force_flag:+ ${force_flag% }}"
 }

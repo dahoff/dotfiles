@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-sync.sh - dotfiles sync pipeline: lock, ff-only pull, self-install, last-sync
+# test-sync.sh - dotfiles pull pipeline: lock, ff-only pull, self-install, last-sync
 
 set -euo pipefail
 
@@ -102,12 +102,12 @@ author_commit() {
 
 # Case 1
 info "Case 1: self-install"
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
 [[ -L "$HOME/.local/bin/dotfiles" ]] || fail "no symlink"
 [[ "$(readlink "$HOME/.local/bin/dotfiles")" == "$WORK/dotfiles/dotfiles" ]] || fail "wrong symlink target"
 cmp -s "$WORK/dotfiles/lib/login.sh" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "drop-in differs from lib/login.sh"
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "second sync failed: $OUT"
 [[ -L "$HOME/.local/bin/dotfiles" ]] && cmp -s "$WORK/dotfiles/lib/login.sh" "$HOME/.bashrc.d/90-dotfiles.sh" \
     || fail "self-install not kept"
@@ -116,18 +116,18 @@ pass "symlink and drop-in installed, idempotent"
 # Case 2
 info "Case 2: fast-forward pull"
 author_commit PULLTEST one
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
 [[ -f "$WORK/dotfiles/PULLTEST" ]] || fail "PULLTEST not pulled: $OUT"
 pass "pulled new commit"
 
 # Case 3
-info "Case 3: --no-pull"
+info "Case 3: --no-fetch"
 author_commit NOPULL two
-run sync --no-pull
+run pull --no-fetch
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
-[[ ! -f "$WORK/dotfiles/NOPULL" ]] || fail "--no-pull still pulled"
-pass "--no-pull skips pull"
+[[ ! -f "$WORK/dotfiles/NOPULL" ]] || fail "--no-fetch still pulled"
+pass "--no-fetch skips pull"
 
 # Case 4
 info "Case 4: diverged history"
@@ -136,7 +136,7 @@ git -C "$WORK/dotfiles" add LOCALONLY
 git -C "$WORK/dotfiles" commit -q -m "local commit"
 LOCAL_SHA=$(git -C "$WORK/dotfiles" rev-parse HEAD)
 author_commit OTHER three
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
 [[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
 [[ "$OUT" != *"operation(s) failed"* ]] || fail "pull failure counted as failed operation: $OUT"
@@ -149,7 +149,7 @@ git -C "$WORK/dotfiles" fetch -q
 git -C "$WORK/dotfiles" reset -q --hard '@{u}'
 author_commit PULLTEST changed-upstream
 echo changed-locally > "$WORK/dotfiles/PULLTEST"
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
 [[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
 [[ "$(cat "$WORK/dotfiles/PULLTEST")" == "changed-locally" ]] || fail "local modification lost"
@@ -163,7 +163,7 @@ git -C "$WORK/dotfiles" config merge.autoStash true
 git -C "$WORK/dotfiles" config rebase.autoStash true
 git -C "$WORK/dotfiles" config pull.rebase true
 echo changed-locally > "$WORK/dotfiles/PULLTEST"
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
 [[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
 [[ "$(cat "$WORK/dotfiles/PULLTEST")" == "changed-locally" ]] || fail "local modification lost"
@@ -182,7 +182,7 @@ hosts_dir: $T/hosts-dir
 hostname: testhost
 EOF
 RC=0
-OUT=$(DOTFILES_CONFIG="$T/config-nogit" "$T/nogit/dotfiles" sync --no-backup --skip-git-setup 2>&1) || RC=$?
+OUT=$(DOTFILES_CONFIG="$T/config-nogit" "$T/nogit/dotfiles" pull --no-backup --skip-git-setup 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
 [[ "$OUT" != *"pull failed"* ]] || fail "unexpected pull warning: $OUT"
 pass "non-git repo skipped silently"
@@ -200,14 +200,14 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 flock -n "$STATE/lock" true 2>/dev/null && fail "lock holder did not take the lock"
-run sync
+run pull
 [[ $RC -eq 1 ]] || fail "expected exit 1, got $RC: $OUT"
 [[ "$OUT" == *"already running"* ]] || fail "no 'already running': $OUT"
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "--auto should exit 0, got $RC: $OUT"
 [[ "$OUT" != *"Phase"* ]] || fail "--auto deployed while locked: $OUT"
 kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true; HOLDER=""
-run sync
+run pull
 [[ $RC -eq 0 ]] || fail "sync after release failed: $OUT"
 pass "lock held, then released"
 fi
@@ -215,10 +215,10 @@ fi
 # Case 8
 info "Case 8: last-sync"
 rm -f "$STATE/last-sync"
-run sync
+run pull
 [[ $RC -eq 0 && -f "$STATE/last-sync" ]] || fail "last-sync missing after success"
 touch -d '2000-01-01' "$STATE/last-sync"
-run sync --hostname typo
+run pull --hostname typo
 [[ $RC -ne 0 ]] || fail "expected validation failure: $OUT"
 [[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched after failure"
 pass "last-sync recorded on success and failure"
@@ -226,7 +226,7 @@ pass "last-sync recorded on success and failure"
 # Case 9
 info "Case 9: interactive sync clears report"
 echo x > "$STATE/report"
-run sync
+run pull
 [[ ! -e "$STATE/report" ]] || fail "report not cleared"
 pass "report cleared"
 
@@ -248,7 +248,7 @@ packages:
     config:
       dir: sleeptest
 EOS
-    run sync --profile sleeper --hostname nohost
+    run pull --profile sleeper --hostname nohost
     [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
     pgrep -f "^sleep 4711" >/dev/null || fail "test child was not started"
     LOCK_FREE=true
@@ -273,16 +273,16 @@ info "Case 11: throttle"
 rm -f "$LOG" "$STATE/report"
 touch "$STATE/last-sync"
 BEFORE=$(stat -c %Y "$STATE/last-sync")
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "throttled --auto should exit 0: $OUT"
 [[ ! -e "$LOG" ]] || fail "throttled --auto wrote a log"
 [[ ! -e "$STATE/report" ]] || fail "throttled --auto wrote a report"
 [[ "$(stat -c %Y "$STATE/last-sync")" == "$BEFORE" ]] || fail "throttled --auto touched last-sync"
 age_last_sync
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT"
 [[ -f "$LOG" ]] || fail "no log after --auto"
-[[ "$(head -1 "$LOG")" == "dotfiles sync --auto "* ]] || fail "bad log header: $(head -1 "$LOG")"
+[[ "$(head -1 "$LOG")" == "dotfiles pull --auto "* ]] || fail "bad log header: $(head -1 "$LOG")"
 [[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched by --auto"
 pass "throttle skips recent, runs old and logs"
 
@@ -292,7 +292,7 @@ echo "auto_sync: off" >> "$T/config"
 age_last_sync
 OLDSUM=$(cksum < "$LOG")
 OLDTIME=$(stat -c %Y "$STATE/last-sync")
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "--auto with auto_sync=off should exit 0: $OUT"
 [[ "$(cksum < "$LOG")" == "$OLDSUM" ]] || fail "log changed with auto_sync=off"
 [[ "$(stat -c %Y "$STATE/last-sync")" == "$OLDTIME" ]] || fail "last-sync touched with auto_sync=off"
@@ -306,7 +306,7 @@ echo "profile: pendingtest" >> "$T/config"
 rm -rf "$HOME/.bashrc.d/50-testtool.sh" "$HOME/.claude" "$STATE/report" "$T/sudo-called" "$T/sudo-args"
 age_last_sync
 RC=0
-OUT=$(PATH="$FAKEBIN:$PATH_ORIG" "$WORK/dotfiles/dotfiles" sync --auto --no-backup 2>&1) || RC=$?
+OUT=$(PATH="$FAKEBIN:$PATH_ORIG" "$WORK/dotfiles/dotfiles" pull --auto --no-backup 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
 # The only sudo call allowed is the passwordless probe (-n true)
 [[ ! -e "$T/sudo-called" ]] || [[ "$(cat "$T/sudo-args")" == "-n true" ]] || fail "--auto called sudo: $(cat "$T/sudo-args")"
@@ -327,15 +327,15 @@ OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STA
 export HOME="$T/home2" STATE_DIR="$T/state2" XDG_STATE_HOME="$T/xdg-state2"
 mkdir -p "$HOME" "$STATE_DIR/apps"
 STATE="$XDG_STATE_HOME/dotfiles"; LOG="$STATE/last-sync.log"
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
 grep -q '^dotfiles: updated claude, scripts' "$STATE/report" || fail "bad report: $(cat "$STATE/report" 2>&1)"
 age_last_sync
-run sync --auto
+run pull --auto
 [[ ! -e "$STATE/report" ]] || fail "report written without changes: $(cat "$STATE/report")"
 echo "# changed" >> "$T/hosts-dir/profiles/base/apps/claude/files/tmux-notify.sh"
 age_last_sync
-run sync --auto
+run pull --auto
 grep -q '^dotfiles: updated claude$' "$STATE/report" || fail "bad report after change: $(cat "$STATE/report" 2>&1)"
 pass "updated apps reported once"
 
@@ -348,7 +348,7 @@ echo local2 > "$WORK/dotfiles/LOCAL2"
 git -C "$WORK/dotfiles" add LOCAL2
 git -C "$WORK/dotfiles" commit -q -m "local commit 2"
 author_commit OTHER2 four
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "pull failure changed exit code: $OUT"
 grep -q "^dotfiles: $WORK/dotfiles: pull failed (.*) — see " "$STATE/report" \
     || fail "no pull failure in report: $(cat "$STATE/report" 2>&1)"
@@ -362,7 +362,7 @@ info "Case 16: validation failure in --auto"
 sed -i 's/^hostname: .*/hostname: typo/' "$T/config"
 age_last_sync
 rm -f "$STATE/report"
-run sync --auto
+run pull --auto
 [[ $RC -ne 0 ]] || fail "expected failure: $OUT"
 grep -q '^dotfiles: sync failed (' "$STATE/report" || fail "no failure report: $(cat "$STATE/report" 2>&1)"
 [[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched after failure"
@@ -378,7 +378,7 @@ sed -i "s#^hosts_dir: .*#hosts_dir: $T/hosts-bad#; s/^hostname: .*/hostname: bad
 export HOME="$T/home3" STATE_DIR="$T/state3" XDG_STATE_HOME="$T/xdg-state3"
 mkdir -p "$HOME" "$STATE_DIR/apps"
 STATE="$XDG_STATE_HOME/dotfiles"
-run sync --auto
+run pull --auto
 grep -q 'sync failed (' "$STATE/report" || fail "no failure report: $(cat "$STATE/report" 2>&1) / $OUT"
 if grep -q 'updated claude' "$STATE/report"; then fail "failed app reported as updated: $(cat "$STATE/report")"; fi
 export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
@@ -391,7 +391,7 @@ info "Case 16c: early abort still reports a failure"
 sed -i "s#^hosts_dir: .*#hosts_dir: /nonexistent#" "$T/config"
 age_last_sync
 rm -f "$STATE/report"
-run sync --auto
+run pull --auto
 [[ $RC -ne 0 ]] || fail "expected failure: $OUT"
 grep -q 'sync failed (setup)' "$STATE/report" || fail "no setup failure report: $(cat "$STATE/report" 2>&1)"
 [[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched"
@@ -403,7 +403,7 @@ info "Case 16d: last-sync in the future does not throttle"
 LOG="$STATE/last-sync.log"
 touch -d '+2 days' "$STATE/last-sync"
 rm -f "$LOG"
-run sync --auto
+run pull --auto
 [[ -f "$LOG" ]] || fail "future last-sync throttled the run"
 pass "clock skew runs the sync"
 
@@ -419,8 +419,8 @@ echo "dotfiles: hello" > "$STATE/report"
 LOGIN_OUT=$(PATH="$WORK/bin:$PATH_ORIG" bash --norc --noprofile -i -c "source '$DROPIN'" 2>/dev/null)
 [[ "$LOGIN_OUT" == *"dotfiles: hello"* ]] || fail "report not shown: $LOGIN_OUT"
 [[ ! -e "$STATE/report" ]] || fail "report not deleted"
-for _ in $(seq 1 20); do grep -q 'sync --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
-grep -q 'sync --auto' "$WORK/calls" || fail "background sync not started"
+for _ in $(seq 1 20); do grep -q 'pull --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
+grep -q 'pull --auto' "$WORK/calls" || fail "background sync not started"
 rm -f "$WORK/calls"
 PATH="$WORK/bin:$PATH_ORIG" DOTFILES_NO_AUTO_SYNC=1 bash --norc --noprofile -i -c "source '$DROPIN'" >/dev/null 2>&1
 sleep 0.5
@@ -457,7 +457,7 @@ OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STA
 export HOME="$T/home4" STATE_DIR="$T/state4" XDG_STATE_HOME="$T/xdg-state4"
 mkdir -p "$HOME" "$STATE_DIR/apps"
 SELF="$HOME/.local/bin/dotfiles"
-selfrun() { OUT=$("$WORK/other/dotfiles" sync --no-pull --no-backup --skip-git-setup 2>&1) || fail "sync from other checkout failed: $OUT"; }
+selfrun() { OUT=$("$WORK/other/dotfiles" pull --no-fetch --no-backup --skip-git-setup 2>&1) || fail "sync from other checkout failed: $OUT"; }
 # (a) no link: created, pointing at the running checkout
 selfrun
 [[ "$(readlink "$SELF")" == "$WORK/other/dotfiles" ]] || fail "(a) link not created: $(readlink "$SELF")"
@@ -486,24 +486,24 @@ info "Case 20: --auto with a bad config reports it, throttled by the default int
 cp "$T/config.orig" "$T/config"
 echo "auto_sync: maybe" >> "$T/config"
 rm -f "$STATE/report" "$STATE/last-sync"
-run sync --auto
+run pull --auto
 [[ $RC -ne 0 ]] || fail "bad config --auto should fail: $OUT"
 grep -q 'sync failed (config)' "$STATE/report" || fail "no config report: $(cat "$STATE/report" 2>&1)"
 grep -q 'auto_sync must be' "$STATE/last-sync.log" || fail "error text not in log: $(cat "$STATE/last-sync.log")"
 [[ -e "$STATE/last-sync" ]] || fail "last-sync not touched"
 rm -f "$STATE/report"
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "second --auto should be throttled (exit 0): $OUT"
 [[ ! -e "$STATE/report" ]] || fail "throttled run wrote a report"
 cp "$T/config.orig" "$T/config"
 echo "hostname: a/b" >> "$T/config"
 age_last_sync
-run sync --auto
+run pull --auto
 grep -q 'sync failed (config)' "$STATE/report" || fail "bad hostname not reported: $(cat "$STATE/report" 2>&1)"
 rm -f "$STATE/report"
 cp "$T/config.orig" "$T/config"
 echo "auto_sync: maybe" >> "$T/config"
-run sync
+run pull
 [[ $RC -eq 1 && "$OUT" == *"auto_sync must be"* ]] || fail "interactive bad config: rc=$RC $OUT"
 cp "$T/config.orig" "$T/config"
 pass "config error reported once per default interval; interactive still errors"
@@ -548,8 +548,8 @@ rm -f "$WORK/calls" "$STATE/launch.log"
 echo "dotfiles: hello" > "$STATE/report"
 LOGIN_OUT=$(PATH="$NOSETSID" bash --norc --noprofile -i -c "source '$DROPIN'" 2>/dev/null)
 [[ "$LOGIN_OUT" == *"dotfiles: hello"* ]] || fail "report not shown: $LOGIN_OUT"
-for _ in $(seq 1 20); do grep -q 'sync --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
-grep -q 'sync --auto' "$WORK/calls" || fail "background sync not started without setsid"
+for _ in $(seq 1 20); do grep -q 'pull --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
+grep -q 'pull --auto' "$WORK/calls" || fail "background sync not started without setsid"
 [[ -e "$STATE/launch.log" ]] || fail "launch.log not written"
 pass "drop-in falls back when setsid is missing"
 
@@ -583,7 +583,7 @@ auto_blocking_stdin() {
     writer=$!
     RC=0
     OUT=$(PATH="$SUDOBIN:$PATH_ORIG" timeout 20 ${DETACH[@]+"${DETACH[@]}"} "$WORK/dotfiles/dotfiles" \
-        sync --auto --no-backup < "$STDIN_FIFO" 2>&1) || RC=$?
+        pull --auto --no-backup < "$STDIN_FIFO" 2>&1) || RC=$?
     kill "$writer" 2>/dev/null || true
     wait "$writer" 2>/dev/null || true
 }
@@ -593,7 +593,7 @@ command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 && HAVE_SUD
 # Case 23
 info "Case 23: pending reminder at every terminal, report only once"
 LOGIN_SRC="$WORK/dotfiles/lib/login.sh"
-REMINDER="dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles sync'"
+REMINDER="dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles pull'"
 login_run() {
     LOGIN_OUT=$(DOTFILES_NO_AUTO_SYNC=1 PATH="$PATH_ORIG" bash --norc --noprofile -i -c "source '$LOGIN_SRC'" 2>/dev/null)
 }
@@ -703,17 +703,17 @@ SUDOBIN="$FAKEBIN"
 cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/hosts-dt"
 sed "s#^hosts_dir: .*#hosts_dir: $T/hosts-dt#" "$T/config-pt" > "$T/config-dt"
 rm -f "$T/marker"
-DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-dt" run sync --no-pull
+DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-dt" run pull --no-fetch
 [[ -e "$T/marker" ]] || fail "interactive sync did not run the install script: $OUT"
 [[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "interactive: drop-in deployed although check fails"
 [[ "$OUT" == *"faketool: drop-in held until the tool is installed"* ]] || fail "interactive: no held message: $OUT"
 age_last_sync
-DOTFILES_CONFIG="$T/config-dt" run sync --auto --no-pull
+DOTFILES_CONFIG="$T/config-dt" run pull --auto --no-fetch
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
 [[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "--auto: drop-in deployed although check fails"
 grep -q "faketool: drop-in held until the tool is installed" "$LOG" || fail "--auto: no held message: $(cat "$LOG")"
 sed -i 's/^      check: false$/      check: true/' "$T/hosts-dt/profiles/pendingtest.yaml"
-DOTFILES_CONFIG="$T/config-dt" run sync --no-pull
+DOTFILES_CONFIG="$T/config-dt" run pull --no-fetch
 [[ -f "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in not deployed once check passes: $OUT"
 if grep -qx faketool "$STATE/pending"; then fail "faketool still pending"; fi
 cat > "$T/hosts-dt/profiles/onlytool.yaml" <<'EOS'
@@ -724,7 +724,7 @@ packages:
       script: ../test/fixtures/testtool/install.sh
 EOS
 echo "dotfiles: stale" > "$STATE/pending"
-DOTFILES_CONFIG="$T/config-dt" run sync --no-pull --profile onlytool
+DOTFILES_CONFIG="$T/config-dt" run pull --no-fetch --profile onlytool
 [[ $RC -eq 0 ]] || fail "onlytool sync failed: $OUT"
 [[ -e "$STATE/pending" && ! -s "$STATE/pending" ]] || fail "pending not emptied: $(cat "$STATE/pending" 2>&1)"
 pass "drop-in held while check fails (interactive and --auto), deployed once it passes"
@@ -798,48 +798,48 @@ expect_skip() {
 
 # Case 27
 info "Case 27: an unchanged sync is skipped, and still counts as a sync"
-expect_full sync
+expect_full pull
 age_last_sync
-expect_skip sync
+expect_skip pull
 [[ -n "$(find "$STATE/last-sync" -mmin -1)" ]] || fail "skipped sync did not update last-sync"
 pass "second sync skipped, last-sync updated"
 
 # Case 28
 info "Case 28: --force and --dry-run are never skipped"
-expect_full sync --force
+expect_full pull --force
 rm -f "$VIMRC"
-fp_run sync --dry-run
+fp_run pull --dry-run
 [[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
 [[ "$OUT" == *"Would"* ]] || fail "dry-run was skipped: $OUT"
-expect_skip sync
+expect_skip pull
 pass "--force runs in full, --dry-run still reports and leaves the skip in place"
 
 # Case 29
 info "Case 29: a new commit in either repo runs in full"
 author_commit FPNEW one
-expect_full sync
+expect_full pull
 [[ -f "$WORK/dotfiles/FPNEW" ]] || fail "FPNEW not pulled: $OUT"
-expect_skip sync
+expect_skip pull
 echo "# new" > "$HOSTS_FP/NEW"
 hosts_commit "hosts change"
-expect_full sync
-expect_skip sync
+expect_full pull
+expect_skip pull
 pass "commits in the dotfiles and hosts repos each trigger a full sync"
 
 # Case 30
 info "Case 30: uncommitted changes run in full and deploy"
 VIMSRC="$WORK/dotfiles/apps/vim/files/.vimrc"
 echo '" fp-local-edit' >> "$VIMSRC"
-expect_full sync
+expect_full pull
 grep -q 'fp-local-edit' "$VIMRC" || fail "uncommitted edit not deployed"
 git -C "$WORK/dotfiles" checkout -q -- apps/vim/files/.vimrc
-expect_full sync
+expect_full pull
 if grep -q 'fp-local-edit' "$VIMRC"; then fail "reverted edit still deployed"; fi
 echo untracked > "$HOSTS_FP/UNTRACKED"
-expect_full sync
+expect_full pull
 rm -f "$HOSTS_FP/UNTRACKED"
-expect_full sync
-expect_skip sync
+expect_full pull
+expect_skip pull
 pass "dirty repos deploy their edits, and reverting them deploys again"
 
 # Case 31
@@ -847,16 +847,16 @@ info "Case 31: a failed sync is retried with the same commit"
 CONFIGURE_GOOD="$T/configure-good.sh"
 cp "$WORK/dotfiles/apps/vim/configure.sh" "$CONFIGURE_GOOD"
 author_commit apps/vim/configure.sh 'exit 1'
-fp_run sync
+fp_run pull
 [[ $RC -ne 0 ]] || fail "broken sync should fail: $OUT"
-fp_run sync
+fp_run pull
 [[ $RC -ne 0 ]] || fail "failed sync was not retried: $OUT"
 cp "$CONFIGURE_GOOD" "$WORK/author/apps/vim/configure.sh"
 git -C "$WORK/author" add apps/vim/configure.sh
 git -C "$WORK/author" commit -q -m "repair configure"
 git -C "$WORK/author" push -q origin HEAD
-expect_full sync
-expect_skip sync
+expect_full pull
+expect_skip pull
 pass "failure leaves nothing to skip against; the repaired sync is skipped next time"
 
 # Case 32
@@ -869,17 +869,17 @@ printf 'exit 1\n' > "$WORK/author/apps/vim/configure.sh"
 git -C "$WORK/author" add apps/vim/configure.sh
 git -C "$WORK/author" commit -q -m "break configure"
 git -C "$WORK/author" push -q origin HEAD
-fp_run sync
+fp_run pull
 [[ $RC -ne 0 ]] || fail "broken sync should fail: $OUT"
 git -C "$WORK/dotfiles" reset -q --hard "$GOOD_SHA"
 rm -f "$VIMRC"
-fp_run sync --no-pull
+fp_run pull --no-fetch
 [[ $RC -eq 0 ]] || fail "sync at the good commit failed: $OUT"
 [[ -f "$VIMRC" ]] || fail "sync after a failure was skipped: $OUT"
 git -C "$WORK/author" revert --no-edit HEAD >/dev/null
 git -C "$WORK/author" push -q origin HEAD
 git -C "$WORK/dotfiles" pull -q --ff-only
-expect_full sync
+expect_full pull
 pass "a failed sync discards the earlier record"
 
 # Case 33
@@ -887,20 +887,20 @@ info "Case 33: pending packages are retried"
 sed -i 's/^profile: .*/profile: fppending/' "$T/config-fp"
 rm -f "$T/fp-tool"
 export DOTFILES_TEST_MARKER="$T/marker"
-fp_run sync
+fp_run pull
 grep -qx faketool "$STATE/pending" || fail "faketool should be pending: $(cat "$STATE/pending")"
 touch "$T/fp-tool"
-expect_full sync
+expect_full pull
 [[ ! -s "$STATE/pending" ]] || fail "pending not emptied: $(cat "$STATE/pending")"
-expect_skip sync
+expect_skip pull
 pass "a sync with pending packages is not skipped next time"
 
 # Case 34
 info "Case 34: a custom script without a check still runs on every sync"
 sed -i 's/^profile: .*/profile: fpnocheck/' "$T/config-fp"
-fp_run sync
+fp_run pull
 rm -f "$T/marker"
-expect_full sync
+expect_full pull
 [[ -e "$T/marker" ]] || fail "check-less script did not run: $OUT"
 unset DOTFILES_TEST_MARKER
 sed -i 's/^profile: .*/profile: fptest/' "$T/config-fp"
@@ -908,46 +908,46 @@ pass "check-less custom scripts keep running"
 
 # Case 35
 info "Case 35: a changed profile, host or config runs in full"
-expect_full sync
-expect_skip sync
-expect_full sync --profile fpother
-expect_full sync
-expect_skip sync
-expect_full sync --hostname otherhost
-expect_full sync
-expect_skip sync
+expect_full pull
+expect_skip pull
+expect_full pull --profile fpother
+expect_full pull
+expect_skip pull
+expect_full pull --hostname otherhost
+expect_full pull
+expect_skip pull
 sed -i 's/^profile: .*/profile: fpother/' "$T/config-fp"
-expect_full sync
+expect_full pull
 sed -i 's/^profile: .*/profile: fptest/' "$T/config-fp"
-expect_full sync
+expect_full pull
 pass "profile, hostname and config changes are noticed"
 
 # Case 36
 info "Case 36: uninstall means the next sync reinstalls"
-expect_skip sync
+expect_skip pull
 fp_run uninstall
 [[ $RC -eq 0 ]] || fail "uninstall failed: $OUT"
-expect_full sync
-expect_skip sync
+expect_full pull
+expect_skip pull
 fp_run uninstall --dry-run
-expect_skip sync
+expect_skip pull
 pass "uninstall clears the record, its dry run does not"
 
 # Case 37
 info "Case 37: --auto skips when it can, but never records a sync as complete"
 age_last_sync
 rm -f "$VIMRC"
-DOTFILES_CONFIG="$T/config-fp" run sync --auto
+DOTFILES_CONFIG="$T/config-fp" run pull --auto
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
 [[ ! -f "$VIMRC" ]] || fail "--auto ran in full on an unchanged system: $(cat "$LOG")"
 [[ -n "$(find "$STATE/last-sync" -mmin -1)" ]] || fail "skipped --auto did not update last-sync"
 fresh_env 10
 VIMRC="$HOME/.vimrc"
-DOTFILES_CONFIG="$T/config-fp" run sync --auto
+DOTFILES_CONFIG="$T/config-fp" run pull --auto
 [[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
 [[ -f "$VIMRC" ]] || fail "first --auto did not deploy: $(cat "$LOG")"
-expect_full sync
-expect_skip sync
+expect_full pull
+expect_skip pull
 pass "--auto can skip, and a sync after --auto still does the full work"
 
 # Case 38
@@ -959,7 +959,7 @@ rm -rf "$T/hosts-plain/.git"
 sed "s#^hosts_dir: .*#hosts_dir: $T/hosts-plain#" "$T/config-fp" > "$T/config-plain"
 for _ in 1 2; do
     rm -f "$VIMRC"
-    DOTFILES_CONFIG="$T/config-plain" run sync
+    DOTFILES_CONFIG="$T/config-plain" run pull
     [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
     [[ -f "$VIMRC" ]] || fail "sync with a plain hosts dir was skipped: $OUT"
 done
@@ -979,11 +979,82 @@ cp -R "$T/hosts-plain" "$PARENT/hosts-nested"
 sed "s#^hosts_dir: .*#hosts_dir: $PARENT/hosts-nested#" "$T/config-fp" > "$T/config-nested"
 for _ in 1 2; do
     rm -f "$VIMRC"
-    DOTFILES_CONFIG="$T/config-nested" run sync
+    DOTFILES_CONFIG="$T/config-nested" run pull
     [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
     [[ -f "$VIMRC" ]] || fail "sync with a nested hosts dir was skipped: $OUT"
 done
 pass "a pushed copy inside a clean parent repo always runs in full"
+
+# Case 40
+info "Case 40: pull deploys; pull --no-fetch skips the fetch"
+author_commit VERBPULL four
+rm -f "$VIMRC"
+fp_run pull --force
+[[ $RC -eq 0 ]] || fail "pull failed: $OUT"
+[[ -f "$VIMRC" ]] || fail "pull did not deploy: $OUT"
+[[ -f "$WORK/dotfiles/VERBPULL" ]] || fail "pull did not fetch: $OUT"
+author_commit VERBNOFETCH five
+fp_run pull --no-fetch
+[[ $RC -eq 0 ]] || fail "pull --no-fetch failed: $OUT"
+[[ ! -f "$WORK/dotfiles/VERBNOFETCH" ]] || fail "pull --no-fetch still fetched"
+pass "pull deploys, --no-fetch skips the fetch"
+
+# Case 41
+info "Case 41: sync needs a terminal"
+rm -f "$VIMRC"
+fp_run sync --force </dev/null
+[[ $RC -eq 1 ]] || fail "sync without a terminal should exit 1, got $RC: $OUT"
+[[ "$OUT" == *"needs a terminal"* ]] || fail "no 'needs a terminal': $OUT"
+[[ ! -f "$VIMRC" ]] || fail "sync without a terminal still deployed: $OUT"
+pass "sync without a terminal: exit 1, nothing deployed"
+
+# Case 42
+info "Case 42: sync runs add, then pull, with its flags"
+rm -f "$VIMRC"
+DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --force </dev/null
+[[ $RC -eq 0 ]] || fail "sync failed: $OUT"
+[[ -f "$VIMRC" ]] || fail "sync did not pull (--force not passed on): $OUT"
+ADD_LINE=$(grep -n "No local edits" <<< "$OUT" | head -1 | cut -d: -f1)
+PULL_LINE=$(grep -n "Phase 1" <<< "$OUT" | head -1 | cut -d: -f1)
+[[ -n "$ADD_LINE" && -n "$PULL_LINE" && "$ADD_LINE" -lt "$PULL_LINE" ]] \
+    || fail "add did not run before pull (add line '$ADD_LINE', pull line '$PULL_LINE'): $OUT"
+# Without --force nothing changed, so pull stops early, after add has run
+rm -f "$VIMRC"
+DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --no-fetch </dev/null
+[[ $RC -eq 0 && "$OUT" == *"No local edits"* && "$OUT" == *"Already up to date"* ]] \
+    || fail "sync --no-fetch: rc=$RC: $OUT"
+pass "sync: add first, then pull with every flag"
+
+# Case 43
+info "Case 43: sync stops when add fails"
+rm -f "$VIMRC"
+DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --force --profile no-such-profile </dev/null
+[[ $RC -ne 0 ]] || fail "sync should fail when add fails: $OUT"
+[[ "$OUT" != *"Phase 1"* && ! -f "$VIMRC" ]] || fail "pull ran after add failed: $OUT"
+pass "a failed add stops sync before pull"
+
+# Case 44
+info "Case 44: sync --dry-run previews the pull and skips add"
+rm -f "$VIMRC"
+fp_run sync --dry-run </dev/null
+[[ $RC -eq 0 ]] || fail "sync --dry-run failed: $OUT"
+[[ "$OUT" == *"Skipping 'dotfiles add' in a dry run"* ]] || fail "no note that add was skipped: $OUT"
+[[ "$OUT" != *"No local edits"* && "$OUT" != *"needs a terminal"* ]] || fail "add ran or a terminal was demanded: $OUT"
+[[ "$OUT" == *"Phase 1"* || "$OUT" == *"Would"* || "$OUT" == *"dry"* ]] || fail "no pull preview: $OUT"
+[[ ! -f "$VIMRC" ]] || fail "sync --dry-run deployed: $OUT"
+pass "sync --dry-run: pull --dry-run, add skipped"
+
+# Case 45
+info "Case 45: sync takes no --auto; push is gone; --no-pull is unknown"
+fp_run sync --auto </dev/null
+[[ $RC -eq 1 && "$OUT" == *"Unknown option: --auto"* ]] || fail "sync --auto: rc=$RC: $OUT"
+fp_run push x
+[[ $RC -eq 1 && "$OUT" == *"pull --remote"* && "$OUT" == *"init --remote"* ]] || fail "push x: rc=$RC: $OUT"
+fp_run pull --no-pull
+[[ $RC -eq 1 && "$OUT" == *"Unknown option: --no-pull"* ]] || fail "pull --no-pull: rc=$RC: $OUT"
+fp_run sync --no-pull </dev/null
+[[ $RC -eq 1 && "$OUT" == *"Unknown option: --no-pull"* ]] || fail "sync --no-pull: rc=$RC: $OUT"
+pass "--auto only on pull, push replaced, --no-pull rejected"
 
 echo
 echo "All sync tests passed"

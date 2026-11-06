@@ -158,7 +158,7 @@ init_set_hosts_dir() {
                 fi
                 if [[ "$retry" == q ]]; then
                     log_error "could not clone $value. Fix access to it, or run" \
-                        "'dotfiles push --init' from a machine that has the hosts repo"
+                        "'dotfiles init --remote' from a machine that has the hosts repo"
                     exit 1
                 fi
             done
@@ -405,7 +405,7 @@ init_main() {
 
     local rc=0
     if [[ "$INIT_NO_SYNC" != true ]]; then
-        "$DOTFILES_REPO/dotfiles" sync || rc=$?
+        "$DOTFILES_REPO/dotfiles" pull || rc=$?
     fi
 
     # host.yaml selects the profile only when no explicit profile overrides it

@@ -60,10 +60,10 @@ else
 fi
 
 # Test 4b: help lists the commands and sync flags
-info "Test 4b: help mentions init, sync, push, status, --auto and --no-pull"
+info "Test 4b: help mentions init, pull, sync, --remote, status, --auto and --no-fetch"
 output=$(cd "$ROOT_DIR" && ./dotfiles help 2>&1)
 missing=""
-for word in init "push --init" --hosts-dir --no-sync sync push status uninstall verify -- --auto --no-pull; do
+for word in init "init --remote" "pull --remote" --hosts-dir --no-sync pull sync add status uninstall verify -- --auto --no-fetch; do
     [[ "$word" == "--" ]] && continue
     echo "$output" | grep -q -- "$word" || missing+=" $word"
 done
@@ -93,7 +93,7 @@ fi
 
 # Test 7: remote options are gone
 info "Test 7: removed --host option is rejected"
-if output=$(cd "$ROOT_DIR" && ./dotfiles sync --host x 2>&1); then
+if output=$(cd "$ROOT_DIR" && ./dotfiles pull --host x 2>&1); then
     fail "Should have rejected --host"
 elif echo "$output" | grep -q "Unknown option"; then
     pass "Correctly rejects --host as an unknown option"
@@ -163,24 +163,24 @@ rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
 mkdir -p "$TEST_STATE/apps"
 
-# Test 17: dotfiles sync --dry-run
-info "Test 17: dotfiles sync --dry-run"
+# Test 17: dotfiles pull --dry-run
+info "Test 17: dotfiles pull --dry-run"
 cd "$ROOT_DIR"
-if ./dotfiles sync --dry-run &>/dev/null; then
-    pass "dotfiles sync --dry-run succeeds"
+if ./dotfiles pull --dry-run &>/dev/null; then
+    pass "dotfiles pull --dry-run succeeds"
 else
-    fail "dotfiles sync --dry-run failed"
+    fail "dotfiles pull --dry-run failed"
 fi
 
-# Test 18: dotfiles sync --no-backup (full integration)
-info "Test 18: dotfiles sync --no-backup (full integration)"
+# Test 18: dotfiles pull --no-backup (full integration)
+info "Test 18: dotfiles pull --no-backup (full integration)"
 cd "$ROOT_DIR"
-if ./dotfiles sync --no-backup &>/dev/null && \
+if ./dotfiles pull --no-backup &>/dev/null && \
    [[ -f "$HOME/.bashrc" ]] && \
    [[ -f "$HOME/.tmux.conf" ]]; then
-    pass "dotfiles sync installs configs"
+    pass "dotfiles pull installs configs"
 else
-    fail "dotfiles sync failed"
+    fail "dotfiles pull failed"
 fi
 
 # Test 19: dotfiles status
@@ -234,13 +234,13 @@ export PATH="$HOME/.local/bin:$PATH"
 # Verify the check would pass (tool is "installed")
 if command -v lazyssh &>/dev/null; then
     # Deploy should still install the dropin
-    ./dotfiles sync --no-backup --dry-run &>/dev/null 2>&1
-    OUTPUT=$(./dotfiles sync --no-backup --dry-run 2>&1)
+    ./dotfiles pull --no-backup --dry-run &>/dev/null 2>&1
+    OUTPUT=$(./dotfiles pull --no-backup --dry-run 2>&1)
     if echo "$OUTPUT" | grep -qi "dropin\|50-lazyssh"; then
         pass "Dropin referenced even when tool already installed"
     else
         # Verify by doing a real deploy and checking the file
-        ./dotfiles sync --no-backup &>/dev/null 2>&1
+        ./dotfiles pull --no-backup &>/dev/null 2>&1
         if [[ -f "$HOME/.bashrc.d/50-lazyssh.sh" ]]; then
             pass "Dropin installed even when tool already installed"
         else

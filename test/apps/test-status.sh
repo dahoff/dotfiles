@@ -79,7 +79,7 @@ pass "read-only"
 
 info "Case 2: after sync"
 RC=0
-OUT=$(./dotfiles sync --no-backup --skip-git-setup --no-pull 2>&1) || RC=$?
+OUT=$(./dotfiles pull --no-backup --skip-git-setup --no-fetch 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
 run status
 has_line "claude    up to date"

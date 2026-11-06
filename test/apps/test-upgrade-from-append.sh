@@ -82,9 +82,12 @@ new_machine() {
     LOCAL="$HOME/.bashrc.d/00-local.sh"
 }
 
+# The old code only knows 'sync'; the new version's verb is 'pull'
 sync_now() {
+    local verb=sync
+    grep -q '"pull"' "$R/dotfiles" && verb=pull
     RC=0
-    OUT=$("$R/dotfiles" sync "$@" 2>&1 </dev/null) || RC=$?
+    OUT=$("$R/dotfiles" "$verb" "$@" 2>&1 </dev/null) || RC=$?
 }
 author_push() {
     git -C "$A" add -A

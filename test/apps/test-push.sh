@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-push.sh - dotfiles push: local cases (the Docker cases are in run-remote-tests.sh)
+# test-push.sh - dotfiles pull --remote and init --remote: local cases (the Docker cases are in run-remote-tests.sh)
 
 set -euo pipefail
 
@@ -43,22 +43,22 @@ run() {
 }
 
 info "Case 1: no HOST is a usage error"
-run push
+run pull --remote
 [[ $RC -eq 1 ]] || fail "expected exit 1, got $RC: $OUT"
-printf '%s\n' "$OUT" | grep -qF "Usage: dotfiles push" || fail "no usage message: $OUT"
-pass "push without HOST: usage error"
+printf '%s\n' "$OUT" | grep -qF "Usage: dotfiles pull --remote" || fail "no usage message: $OUT"
+pass "pull --remote without HOST: usage error"
 
-info "Case 1b: init flags without --init are a usage error"
+info "Case 1b: init flags without init --remote are a usage error"
 for args in "--hostname x" "--profile p" "--yes" "--auto-sync on" "--interval 4h"; do
     # shellcheck disable=SC2086
-    run push $args testuser@localhost
-    [[ $RC -eq 1 ]] || fail "push $args: expected exit 1, got $RC: $OUT"
-    printf '%s\n' "$OUT" | grep -qF "only valid with --init" || fail "push $args: no usage message: $OUT"
+    run pull --remote $args testuser@localhost
+    [[ $RC -eq 1 ]] || fail "pull --remote $args: expected exit 1, got $RC: $OUT"
+    printf '%s\n' "$OUT" | grep -qF "only valid with init --remote" || fail "pull --remote $args: no usage message: $OUT"
 done
-pass "init flags without --init: usage error"
+pass "init flags without init --remote: usage error"
 
 info "Case 1c: --hostname with more than one HOST is a usage error"
-run push --init --hostname x testuser@h1 testuser@h2
+run init --remote --hostname x testuser@h1 testuser@h2
 [[ $RC -eq 1 ]] || fail "expected exit 1, got $RC: $OUT"
 printf '%s\n' "$OUT" | grep -qF "only valid with a single HOST" || fail "no usage message: $OUT"
 pass "--hostname with two hosts: usage error"
@@ -75,7 +75,7 @@ chmod +x "$T/fakebin/ssh"
 push_fake_ssh() {
     rm -f "$T/ssh-called"
     RC=0
-    OUT=$(PATH="$T/fakebin:$PATH" ./dotfiles push --init --yes "$@" testuser@localhost 2>&1) || RC=$?
+    OUT=$(PATH="$T/fakebin:$PATH" ./dotfiles init --remote --yes "$@" testuser@localhost 2>&1) || RC=$?
 }
 while IFS='|' read -r flag value want; do
     push_fake_ssh "$flag" "$value"
@@ -95,10 +95,10 @@ pass "invalid init flags refused locally"
 
 info "Case 2: unreachable hosts fail and are summarized; the next host still runs"
 export DOTFILES_SSH_OPTS="-o Port=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-run push testuser@localhost otheruser@localhost
+run pull --remote testuser@localhost otheruser@localhost
 [[ $RC -eq 1 ]] || fail "expected exit 1, got $RC: $OUT"
-printf '%s\n' "$OUT" | grep -qF "[testuser@localhost] push: push FAILED" || fail "no FAILED summary for first host: $OUT"
-printf '%s\n' "$OUT" | grep -qF "[otheruser@localhost] push: push FAILED" || fail "second host not attempted: $OUT"
+printf '%s\n' "$OUT" | grep -qF "[testuser@localhost] remote: send FAILED" || fail "no FAILED summary for first host: $OUT"
+printf '%s\n' "$OUT" | grep -qF "[otheruser@localhost] remote: send FAILED" || fail "second host not attempted: $OUT"
 pass "unreachable hosts: exit 1, per-host FAILED summary"
 
 info "Case 3: push takes no lock and writes no local state"
@@ -106,6 +106,84 @@ info "Case 3: push takes no lock and writes no local state"
     || fail "push touched local state"
 [[ ! -e "$T/home/.local/bin/dotfiles" ]] || fail "push self-installed locally"
 pass "no local state"
+
+info "Case 3b: the remote command line (a fake ssh that logs every call)"
+mkdir -p "$T/fakebin2"
+cat > "$T/fakebin2/ssh" <<EOF
+#!/bin/sh
+echo "\$*" >> "$T/ssh-log"
+case "\$*" in
+    *"sh -s"*) cat > /dev/null; printf 'dotfiles_repo=/r/dotfiles\nhosts_dir=/r/hosts\n' ;;
+    *"mktemp -d"*) echo /tmp/fake-rtmp ;;
+    *"[ -x '/r/dotfiles/dotfiles' ]"*) echo exists ;;
+esac
+exit 0
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$T/fakebin2/scp"
+chmod +x "$T/fakebin2/ssh" "$T/fakebin2/scp"
+fake_run() {
+    rm -f "$T/ssh-log"
+    RC=0
+    OUT=$(PATH="$T/fakebin2:$PATH" ./dotfiles "$@" 2>&1) || RC=$?
+}
+last_ssh() { tail -n 1 "$T/ssh-log"; }
+fake_run pull --remote testuser@h1
+[[ $RC -eq 0 ]] || fail "pull --remote: exit $RC: $OUT"
+[[ "$(last_ssh)" == *"'/r/dotfiles/dotfiles' pull --no-fetch" ]] || fail "wrong remote command: $(last_ssh)"
+[[ "$(last_ssh)" != *--force* ]] || fail "--force sent without being asked: $(last_ssh)"
+fake_run pull --remote --force testuser@h1 testuser@h2
+[[ $RC -eq 0 ]] || fail "pull --remote --force: exit $RC: $OUT"
+[[ "$(grep -c "pull --no-fetch --force$" "$T/ssh-log")" == 2 ]] || fail "--force not sent to both hosts: $(cat "$T/ssh-log")"
+fake_run pull --remote --force --dry-run testuser@h1
+[[ $RC -eq 0 ]] || fail "pull --remote --dry-run: exit $RC: $OUT"
+[[ "$(last_ssh)" == *"pull --no-fetch --force --dry-run" ]] || fail "dry run command wrong: $(last_ssh)"
+fake_run pull --remote --dry-run testuser@h1
+[[ "$(last_ssh)" == *"pull --no-fetch --dry-run" ]] || fail "dry run command wrong: $(last_ssh)"
+# --remote may come after the host-less flags or before them
+fake_run pull testuser@h1 --remote --force
+[[ $RC -eq 0 && "$(last_ssh)" == *"pull --no-fetch --force" ]] || fail "flag order: rc=$RC $(last_ssh)"
+fake_run init --remote --yes --hostname h1 testuser@h1
+[[ $RC -eq 0 ]] || fail "init --remote: exit $RC: $OUT"
+[[ "$(last_ssh)" == *"'/r/dotfiles/dotfiles' init '--yes' '--hostname' 'h1'" ]] || fail "wrong remote init command: $(last_ssh)"
+fake_run init --remote --force testuser@h1
+[[ $RC -eq 0 && "$(last_ssh)" != *--force* ]] || fail "init --remote --force: rc=$RC, remote command: $(last_ssh)"
+pass "remote pull and init command lines, --force forwarded to pull"
+
+info "Case 3c: pull --remote warns when a repo is behind its upstream"
+UP="$T/up.git"
+git init -q --bare "$UP"
+git clone -q "$UP" "$T/behind" 2>/dev/null
+git -C "$T/behind" config user.name tester
+git -C "$T/behind" config user.email tester@example.com
+(cd "$ROOT_DIR" && tar --exclude=.git -cf - .) | (cd "$T/behind" && tar -xf -)
+git -C "$T/behind" add -A
+git -C "$T/behind" commit -q -m base
+git -C "$T/behind" push -q origin HEAD
+git clone -q "$UP" "$T/ahead"
+git -C "$T/ahead" config user.name tester
+git -C "$T/ahead" config user.email tester@example.com
+echo more > "$T/ahead/MORE"
+git -C "$T/ahead" add MORE
+git -C "$T/ahead" commit -q -m more
+git -C "$T/ahead" push -q origin HEAD
+behind_run() {
+    rm -f "$T/ssh-log"
+    RC=0
+    OUT=$(cd "$T/behind" && PATH="$T/fakebin2:$PATH" ./dotfiles "$@" 2>&1) || RC=$?
+}
+behind_run pull --remote testuser@h1
+[[ "$OUT" != *"behind its upstream"* ]] || fail "warned before the upstream had moved: $OUT"
+git -C "$T/behind" fetch -q
+behind_run pull --remote testuser@h1
+[[ $RC -eq 0 ]] || fail "a warning must not fail the send: $OUT"
+[[ "$OUT" == *"$T/behind is 1 commit(s) behind its upstream"* ]] || fail "no behind warning: $OUT"
+[[ -s "$T/ssh-log" ]] || fail "the send did not go ahead after the warning"
+behind_run init --remote --yes testuser@h1
+[[ "$OUT" != *"behind its upstream"* ]] || fail "init --remote should not warn: $OUT"
+git -C "$T/behind" merge -q --ff-only '@{u}'
+behind_run pull --remote testuser@h1
+[[ "$OUT" != *"behind its upstream"* ]] || fail "warned after catching up: $OUT"
+pass "behind-upstream warning, send still goes ahead"
 
 info "Case 4: the remote snippet reads hosts_dir like config_load"
 # shellcheck source=../../lib/logging.sh

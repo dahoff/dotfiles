@@ -125,7 +125,7 @@ cmd_checkout() {
         exit 1
     fi
     if ! is_dry_run && ! sync_lock; then
-        echo "dotfiles: sync already running" >&2
+        echo "dotfiles: pull already running" >&2
         exit 1
     fi
     if [[ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
@@ -167,7 +167,7 @@ cmd_checkout() {
 
     # Deploy with the new version's own code. Only flags reach this point: settings
     # have not been resolved, so the config file is still read by the sync below.
-    local -a sync_args=(sync --no-pull)
+    local -a sync_args=(pull --no-fetch)
     [[ -z "$PROFILE_ARG" ]] || sync_args+=(--profile "$PROFILE_ARG")
     [[ -z "$HOSTS_DIR" ]] || sync_args+=(--hosts-dir "$HOSTS_DIR")
     [[ -z "$HOSTNAME_ARG" ]] || sync_args+=(--hostname "$HOSTNAME_ARG")
@@ -176,7 +176,7 @@ cmd_checkout() {
     local rc=0
     "$repo/dotfiles" "${sync_args[@]}" || rc=$?
     if [[ $rc -ne 0 ]]; then
-        log_error "Switched to $ref, but deploying it failed; run 'dotfiles sync' to retry"
+        log_error "Switched to $ref, but deploying it failed; run 'dotfiles pull' to retry"
     fi
     exit $rc
 }

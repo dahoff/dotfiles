@@ -195,7 +195,7 @@ cmd_add() {
         exit 1
     fi
     if ! sync_lock; then
-        echo "dotfiles: sync already running" >&2
+        echo "dotfiles: pull already running" >&2
         exit 1
     fi
     local host

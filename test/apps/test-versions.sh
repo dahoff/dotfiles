@@ -96,7 +96,7 @@ head_is() {
     [[ "$(git -C "$R" rev-parse HEAD)" == "$(git -C "$R" rev-parse "$1^{commit}")" ]] || fail "HEAD is not at $1"
 }
 
-run sync --no-backup
+run pull --no-backup
 [[ $RC -eq 0 ]] || fail "first sync failed: $OUT"
 
 info "Case 1: versions lists tags, newest first, and flags what is too old"
@@ -134,11 +134,11 @@ echo '# newer' >> "$A/$EXTRACT"
 commit "newer"
 git -C "$A" push -q origin main
 git -C "$R" fetch -q origin
-run sync --no-backup
+run pull --no-backup
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
 has_line "pinned to v1.0"
 head_is v1.0
-run sync --no-backup
+run pull --no-backup
 has_line "Already up to date"
 has_line "pinned to v1.0"
 head_is v1.0
@@ -146,7 +146,7 @@ pass "sync warned and did not move"
 
 info "Case 6: background sync stays pinned without warning"
 rm -f "$XDG_STATE_HOME/dotfiles/last-sync"
-run sync --auto
+run pull --auto
 [[ $RC -eq 0 ]] || fail "auto sync failed: $OUT"
 head_is v1.0
 if grep -qF "pinned to" "$XDG_STATE_HOME/dotfiles/last-sync.log"; then fail "auto warned"; fi
@@ -196,7 +196,7 @@ has_line "on main, up to date with origin/main"
 echo '# newest' >> "$A/$EXTRACT"
 commit "newest"
 git -C "$A" push -q origin main
-run sync --no-backup
+run pull --no-backup
 grep -q '# newest' "$LIVE" || fail "sync no longer follows main"
 pass "following main"
 
