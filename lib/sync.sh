@@ -34,6 +34,33 @@ sync_lock() {
     fi
 }
 
+# Release the lock early, for a child process that takes it itself
+sync_unlock() {
+    exec 9>&-
+    local cmd
+    for cmd in ${SYNC_CLEANUP[@]+"${SYNC_CLEANUP[@]}"}; do
+        eval "$cmd" || true
+    done
+    SYNC_CLEANUP=()
+}
+
+# Run git against the network, bounded so a stalled transfer cannot hold the lock
+# forever and credentials never prompt.
+# Usage: sync_git_bounded PATH GIT_ARGS...
+sync_git_bounded() {
+    local path="$1"
+    shift
+    local -a envs=(GIT_TERMINAL_PROMPT=0)
+    if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
+        local ssh_cmd="ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
+        [[ "$SYNC_AUTO" == true ]] && ssh_cmd+=" -o BatchMode=yes"
+        envs+=("GIT_SSH_COMMAND=$ssh_cmd")
+    fi
+    local -a wrap=()
+    command -v timeout >/dev/null 2>&1 && wrap=(timeout 300)
+    env "${envs[@]}" ${wrap[@]+"${wrap[@]}"} git -C "$path" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 "$@"
+}
+
 # Fast-forward-only pull of one repo.
 # Returns 0 on success or when there is nothing to pull; on failure returns 1
 # and prints the reason (first line of git's stderr, max 120 chars) on stdout.
@@ -45,20 +72,10 @@ sync_pull_repo() {
     [[ "$(cd "$top" && pwd -P)" == "$(cd "$path" && pwd -P)" ]] || return 0
     git -C "$path" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || return 0
 
-    # Bound a stalled pull so it cannot hold the lock forever
-    local -a envs=(GIT_TERMINAL_PROMPT=0)
-    if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
-        local ssh_cmd="ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
-        [[ "$SYNC_AUTO" == true ]] && ssh_cmd+=" -o BatchMode=yes"
-        envs+=("GIT_SSH_COMMAND=$ssh_cmd")
-    fi
-    local -a wrap=()
-    command -v timeout >/dev/null 2>&1 && wrap=(timeout 300)
-
     local before after err
     before=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
-    if ! err=$(env "${envs[@]}" ${wrap[@]+"${wrap[@]}"} git -C "$path" -c merge.autoStash=false -c rebase.autoStash=false \
-        -c pull.rebase=false -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 pull --ff-only --quiet 9>&- 2>&1 >/dev/null); then
+    if ! err=$(sync_git_bounded "$path" -c merge.autoStash=false -c rebase.autoStash=false \
+        -c pull.rebase=false pull --ff-only --quiet 9>&- 2>&1 >/dev/null); then
         local line
         line=$(printf '%s\n' "$err" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -m1 -v '^$' || true)
         printf '%s\n' "${line:0:120}"

@@ -11,6 +11,7 @@ source "$ROOT_DIR/lib/yaml.sh"
 source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/backup.sh"
 source "$ROOT_DIR/lib/state.sh"
+source "$ROOT_DIR/lib/deployed.sh"
 source "$ROOT_DIR/lib/overlay.sh"
 
 # Configuration
@@ -70,6 +71,10 @@ app_post_install() { :; }
 app_up_to_date() { :; }
 # uninstall: after files were restored/removed, before state is removed
 app_post_uninstall() { :; }
+
+# True if a live file with no record is the repo's version in all but form
+# Usage: app_matches_repo name src dest
+app_matches_repo() { return 1; }
 
 # Deploy one file; apps may override and call deploy_file_default for the rest
 # Usage: deploy_file src dest mode strategy install|upgrade
@@ -258,6 +263,81 @@ deploy_file_default() {
     set_permissions "$dest" "$mode"
 }
 
+# True if the live file holds an edit an upgrade must not overwrite. Only a file
+# dotfiles already deployed counts: anything else is an original, and is backed up
+# and replaced. --force overwrites (the upgrade snapshot still has the edit).
+# Usage: installer_keep_edit name src dest strategy verb
+installer_keep_edit() {
+    local name="$1" src="$2" dest="$3" strategy="$4" verb="$5"
+    [[ "$verb" == upgrade && "$FORCE" != true && "$strategy" != merge && -f "$dest" ]] || return 1
+    grep -qxF -- "$dest" < <(state_get_files "$APP_NAME") || return 1
+
+    local live new recorded
+    live=$(deployed_hash "$dest")
+    new=$(deployed_hash "$src")
+    [[ "$live" != "$new" ]] || return 1
+    recorded=$(deployed_get "$APP_NAME" "$dest")
+    [[ "$live" != "$recorded" && "$recorded" != merge ]] || return 1
+    if [[ -z "$recorded" ]] && app_matches_repo "$name" "$src" "$dest"; then
+        return 1
+    fi
+
+    if [[ "$recorded" == "$new" ]]; then
+        log_info "Keeping local edit: $dest"
+        return 0
+    fi
+    # The repo changed too, or nothing says what was deployed: the safe mistake is
+    # leaving the file behind the repo, not losing an edit
+    log_warn "Keeping local edit: $dest (the repo version changed too; 'dotfiles add' saves yours, 'dotfiles sync --force' takes the repo's)"
+    if ! is_dry_run; then
+        [[ -n "$recorded" ]] || deployed_set "$APP_NAME" "$name" "$dest" unknown
+        if [[ -n "${DOTFILES_KEPT_FILE:-}" ]]; then
+            echo "$dest" >> "$DOTFILES_KEPT_FILE"
+        fi
+    fi
+    return 0
+}
+
+# Warn, and carry the message to the sync summary and the --auto report
+# Usage: installer_report_warning MESSAGE
+installer_report_warning() {
+    log_warn "$1"
+    if [[ -n "${DOTFILES_WARNINGS_FILE:-}" ]]; then
+        echo "$1" >> "$DOTFILES_WARNINGS_FILE"
+    fi
+}
+
+# Record what an upgrade just wrote
+# Usage: installer_record_deploy name dest strategy
+installer_record_deploy() {
+    is_dry_run && return 0
+    if [[ "$3" == merge ]]; then
+        deployed_set "$APP_NAME" "$1" "$2" merge
+    else
+        deployed_set "$APP_NAME" "$1" "$2" "$(deployed_hash "$2")"
+    fi
+}
+
+# A machine installed before records existed: when the state says this version is
+# deployed, the stage is exactly what was written, so record that.
+installer_baseline() {
+    is_dry_run && return 0
+    [[ "$(state_get_version "$APP_NAME")" == "$APP_VERSION" ]] || return 0
+    local i name dest src strategy
+    for i in "${!CONFIG_FILES[@]}"; do
+        name="${CONFIG_FILES[$i]}"
+        dest="${CONFIG_DESTS[$i]}"
+        src=$(installer_src "$name")
+        [[ -f "$src" && -z "$(deployed_get "$APP_NAME" "$dest")" ]] || continue
+        strategy=$(installer_strategy "$name")
+        if [[ "$strategy" == merge ]]; then
+            deployed_set "$APP_NAME" "$name" "$dest" merge
+        else
+            deployed_set "$APP_NAME" "$name" "$dest" "$(deployed_hash "$src")"
+        fi
+    done
+}
+
 # Deploy every config file. A failed file is counted and skipped; the
 # others continue. A missing source aborts.
 # Usage: deploy_all_files install|upgrade
@@ -280,11 +360,19 @@ deploy_all_files() {
             log_error "Source file not found: $src"
             return 1
         fi
-        if ! deploy_file "$src" "$dest" "$mode" "$(installer_strategy "$name")" "$verb"; then
+        local strategy
+        strategy=$(installer_strategy "$name")
+        if installer_keep_edit "$name" "$src" "$dest" "$strategy" "$verb"; then
+            continue
+        fi
+        if deploy_file "$src" "$dest" "$mode" "$strategy" "$verb"; then
+            installer_record_deploy "$name" "$dest" "$strategy"
+        else
             log_error "Failed to deploy $name; left $dest as it was"
             record_file_failure "$name"
         fi
     done
+    is_dry_run || deployed_prune "$APP_NAME" "${CONFIG_DESTS[@]}"
 }
 
 # Version recorded in state: incomplete when any file failed
@@ -399,6 +487,8 @@ cmd_upgrade() {
         log_info "Use 'install' first"
         return 1
     fi
+
+    installer_baseline
 
     # Skip if already at this version
     if [[ "$UPGRADE_ALWAYS" != true ]]; then
@@ -520,6 +610,7 @@ cmd_uninstall() {
     # Remove state file
     if ! is_dry_run; then
         state_remove "$APP_NAME"
+        deployed_remove "$APP_NAME"
     fi
 
     log_success "$APP_NAME uninstalled successfully!"

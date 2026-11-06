@@ -45,7 +45,7 @@ A tool listed twice in the final list runs once, at its first position, with the
 | `custom.script` | string | No | Install script path, relative to `apps/`. |
 | `custom.dropin` | string | No | Shell drop-in file path, relative to `apps/`, copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or there is no `check`). |
 | `config.dir` | string | No | Folder under `apps/` containing `configure.sh` and `files/`. |
-| `config.flags` | string | No | Extra flags passed to `configure.sh` (e.g., `--append`). |
+| `config.flags` | string | No | Extra flags passed to `configure.sh` (e.g., `--skip-git-setup`). |
 
 ### Processing Order
 

@@ -105,6 +105,16 @@ app_pre_install() {
     _preserve_existing_gitconfig
 }
 
+# An older install ran 'git config --global core.excludesfile' after each deploy,
+# which rewrote that line. Same settings, so it isn't a hand edit.
+app_matches_repo() {
+    [[ "$1" == ".gitconfig" ]] || return 1
+    local live want
+    live=$(git config --file "$3" --list 2>/dev/null | sed "s#=$HOME/#=~/#") || return 1
+    want=$(git config --file "$2" --list 2>/dev/null) || return 1
+    [[ "$live" == "$want" ]]
+}
+
 # Prompt for git identity on fresh systems
 app_post_install() {
     _maybe_run_git_setup

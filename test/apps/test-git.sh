@@ -70,8 +70,8 @@ fi
 
 # Test 4: Post-install hooks defined
 info "Test 4: Verify post-install hooks"
-if grep -q "post_install:" config.yaml && grep -q "core.excludesfile" config.yaml; then
-    pass "Post-install hooks defined for excludesfile"
+if ! grep -q "core.excludesfile" config.yaml && grep -q "excludesfile = ~/.gitignore_global" files/.gitconfig; then
+    pass "excludesfile comes from the managed file, with no post-install rewrite"
 else
     fail "Post-install hooks missing"
 fi

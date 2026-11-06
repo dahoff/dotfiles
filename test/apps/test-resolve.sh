@@ -469,7 +469,7 @@ resolved() {
     )
 }
 WANT_COMPLETE='git|git|git|||||git|
-bash|||||||bash|--append
+bash|||||||bash|
 tmux|tmux|tmux|tmux||||tmux|
 vim|vim|vim|vim||||vim|
 curl|curl|curl|curl|||||

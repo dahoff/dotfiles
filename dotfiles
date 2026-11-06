@@ -25,6 +25,9 @@ source "$SCRIPT_DIR/lib/profile.sh"
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/sync.sh"
 source "$SCRIPT_DIR/lib/state.sh"
+source "$SCRIPT_DIR/lib/deployed.sh"
+source "$SCRIPT_DIR/lib/versions.sh"
+source "$SCRIPT_DIR/lib/add.sh"
 source "$SCRIPT_DIR/lib/push.sh"
 source "$SCRIPT_DIR/lib/init.sh"
 
@@ -70,6 +73,7 @@ declare -a GLOBAL_FLAGS=()
 # Result tracking: "target|item|ok" or "target|item|FAIL"
 declare -a RESULTS=()
 declare -a PUSH_HOSTS=()
+CHECKOUT_REF=""
 declare -a INIT_ARGS=()
 # push --init: run the remote 'dotfiles init' with PUSH_INIT_ARGS
 PUSH_INIT=false
@@ -398,6 +402,10 @@ run_phase_configs() {
 
         export DOTFILES_FAILURES_FILE="$STAGE_ROOT/failures"
         : > "$DOTFILES_FAILURES_FILE"
+        export DOTFILES_KEPT_FILE="$STAGE_ROOT/kept"
+        : > "$DOTFILES_KEPT_FILE"
+        export DOTFILES_WARNINGS_FILE="$STAGE_ROOT/warnings"
+        : > "$DOTFILES_WARNINGS_FILE"
 
         # State name is app.name from config.yaml (dir name as fallback)
         local app_name="" ver_before="" ver_after="" installed_ok=false
@@ -430,6 +438,17 @@ run_phase_configs() {
         while IFS= read -r failed; do
             [[ -n "$failed" ]] && RESULTS+=("$target|$failed|FAIL")
         done < "$DOTFILES_FAILURES_FILE"
+
+        # Edits kept although the repo changed the same file: worth a line in the
+        # --auto report, which is the only place a background sync can say so
+        local kept
+        while IFS= read -r kept; do
+            [[ -n "$kept" ]] && SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add')")
+        done < "$DOTFILES_KEPT_FILE"
+        local warning
+        while IFS= read -r warning; do
+            [[ -n "$warning" ]] && SYNC_WARNINGS+=("$warning")
+        done < "$DOTFILES_WARNINGS_FILE"
     done
 }
 
@@ -538,7 +557,13 @@ Commands:
   push HOST...         Copy committed repo snapshots to HOST over ssh and sync there
   push --init HOST...  Push, then run 'dotfiles init' there instead of sync (first-time setup)
   uninstall            Uninstall all configs
-  status               Show repos, host, last sync, pending packages and app state (read-only)
+  status               Show repos, version, host, last sync, pending packages, app state
+                       and local edits (read-only)
+  versions             List tagged versions
+  checkout REF         Switch to a tag or commit and deploy it; this machine stays there
+                       until you run 'dotfiles checkout main'
+  add                  Review local edits one by one and stage the ones you accept in the
+                       repo; never commits or pushes
   verify               Verify all installations
   help                 Show this help message
 
@@ -588,6 +613,10 @@ Examples:
   dotfiles push user@host            # Ship the repos to a host without git, sync there
   dotfiles push --init user@host     # First-time setup of a host without git
   dotfiles status                    # Check all configs
+  dotfiles versions                  # List tagged versions
+  dotfiles checkout v1.2             # Pin this machine to v1.2 (a tag or commit)
+  dotfiles checkout main             # Follow main again
+  dotfiles add                       # Stage local edits you accept; you commit them
   dotfiles uninstall --no-backup     # Remove all configs
 
 EOF
@@ -606,6 +635,9 @@ validate_command() {
         "uninstall"
         "status"
         "verify"
+        "versions"
+        "checkout"
+        "add"
         "help"
         "-h"
         "--help"
@@ -620,7 +652,7 @@ validate_command() {
 
     echo "Error: Unknown command '$1'" >&2
     echo "" >&2
-    echo "Valid commands: init, sync, push, uninstall, status, verify, help" >&2
+    echo "Valid commands: init, sync, push, uninstall, status, verify, versions, checkout, add, help" >&2
     return 1
 }
 
@@ -739,6 +771,11 @@ parse_args() {
                     shift
                     continue
                 fi
+                if [[ "$COMMAND" == "checkout" && "$1" != -* && -z "$CHECKOUT_REF" ]]; then
+                    CHECKOUT_REF="$1"
+                    shift
+                    continue
+                fi
                 echo "Error: Unknown option: $1" >&2
                 usage
                 exit 1
@@ -746,6 +783,10 @@ parse_args() {
         esac
     done
 
+    if [[ "$COMMAND" == "checkout" && -z "$CHECKOUT_REF" ]]; then
+        echo "Usage: dotfiles checkout <tag|commit|branch> [options]" >&2
+        exit 1
+    fi
     if [[ "$COMMAND" == "push" && "$PUSH_INIT" != true && ${#PUSH_INIT_ARGS[@]} -gt 0 ]]; then
         echo "Error: ${PUSH_INIT_ARGS[0]} is only valid with --init" >&2
         echo "Usage: dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST..." >&2
@@ -834,6 +875,16 @@ sync_record() {
     return 0
 }
 
+# Point a manual sync at files with local edits. Silent for --auto: new terminals
+# would repeat it every interval.
+sync_warn_edits() {
+    [[ "$SYNC_AUTO" != true ]] || return 0
+    local n
+    n=$(deployed_count_edits)
+    [[ "$n" -gt 0 ]] || return 0
+    log_warn "$n file(s) have local edits, run 'dotfiles add' to review them"
+}
+
 # Pull one repo; a failure is a warning, not a sync failure
 sync_pull_one() {
     local path="$1" reason
@@ -882,6 +933,9 @@ cmd_status() {
     resolve_settings || ok=false
 
     printf '%-17s%s\n' "dotfiles repo:" "$(status_describe_repo "$SCRIPT_DIR")"
+    if versions_is_checkout "$SCRIPT_DIR"; then
+        printf '%-17s%s\n' "version:" "$(versions_status_line "$SCRIPT_DIR")"
+    fi
     if [[ -z "$HOSTS_DIR" ]]; then
         printf '%-17s%s\n' "hosts dir:" "none"
     elif [[ -d "$HOSTS_DIR" ]]; then
@@ -941,7 +995,8 @@ cmd_status() {
     fi
     if [[ "$ok" == true ]]; then
         echo "apps:"
-        local idx dir name app_name stage ver_fresh ver_state state_file state
+        local idx dir name app_name stage ver_fresh ver_state state_file state line
+        local -a status_edits=()
         for idx in "${!PKG_NAMES[@]}"; do
             dir="${PKG_CONFIG_DIR[$idx]}"
             [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
@@ -966,7 +1021,29 @@ cmd_status() {
                 fi
             fi
             printf '  %-9s %s\n' "$name" "$state"
+            if [[ -n "$ver_fresh" ]]; then
+                while IFS= read -r line; do
+                    [[ -n "$line" ]] && status_edits+=("$line")
+                done < <(deployed_app_edits "$app_name" "$stage")
+            fi
         done
+        if [[ ! -d "$STATE_DIR/deployed" ]]; then
+            printf '%-17s%s\n' "local edits:" "not tracked yet (run 'dotfiles sync')"
+        elif [[ ${#status_edits[@]} -eq 0 ]]; then
+            printf '%-17s%s\n' "local edits:" "none"
+        else
+            echo "local edits:     ('dotfiles add' reviews them)"
+            local kind src dest note
+            for line in "${status_edits[@]}"; do
+                IFS=$'\t' read -r kind src dest <<< "$line"
+                case "$kind" in
+                    conflict) note="  (the repo changed it too)" ;;
+                    merge)    note="  (merged, keys the repo manages differ)" ;;
+                    *)        note="" ;;
+                esac
+                printf '  %s%s\n' "$(add_tilde "$dest")" "$note"
+            done
+        fi
     fi
     return 0
 }
@@ -1016,6 +1093,10 @@ main() {
         cmd_status
         exit 0
     fi
+
+    # Before settings: these two need only the repo (checkout's sync reads the config)
+    [[ "$COMMAND" != "versions" ]] || cmd_versions
+    [[ "$COMMAND" != "checkout" ]] || cmd_checkout
 
     if ! resolve_settings; then
         if [[ "$COMMAND" == "sync" && "$SYNC_AUTO" == true ]] && ! is_dry_run; then
@@ -1075,6 +1156,7 @@ main() {
     fi
 
     [[ "$COMMAND" != "push" ]] || cmd_push
+    [[ "$COMMAND" != "add" ]] || cmd_add
 
     if [[ "$COMMAND" == "sync" ]]; then
         if [[ "$SYNC_NO_PULL" != true ]] && ! is_dry_run; then
@@ -1082,6 +1164,7 @@ main() {
             [[ -z "$HOSTS_DIR" ]] || sync_pull_one "$HOSTS_DIR"
         fi
         is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
+        versions_warn_pinned "$DOTFILES_REPO"
     fi
 
     # Nothing changed since the last complete sync: nothing to do. Worked out
@@ -1091,6 +1174,7 @@ main() {
         fingerprint=$(sync_fingerprint) || fingerprint=""
         if ! has_global_flag --force && sync_is_complete "$fingerprint"; then
             log_success "Already up to date (use --force to redeploy)"
+            sync_warn_edits
             exit 0
         fi
         sync_forget_complete
@@ -1107,6 +1191,7 @@ main() {
     fi
 
     print_summary
+    [[ "$COMMAND" != "sync" ]] || sync_warn_edits
 
     exit $EXIT_CODE
 }
