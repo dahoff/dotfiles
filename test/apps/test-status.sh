@@ -378,30 +378,71 @@ grep -rlF '# there before dotfiles' "$HOME/.bak/lazygit" >/dev/null || fail "no 
 [[ -f "$REC/lazygit/manifest.tsv" ]] || fail "no records"
 pass "snapshot"
 
-info "Case 21: a drop-in whose tool is no longer managed stays, with a warning when edited"
+info "Case 21: a one-off run without the tool keeps the drop-in's edit and records"
 echo '# edited before the tool left' >> "$LZ"
-printf 'packages:\n  - scripts\n  - claude\n' > "$H/profiles/dp.yaml"
-git -C "$H" commit -q -am "drop lazygit"
-pull2
-has_line "$LZ is no longer managed by lazygit and has unreviewed edits"
-grep -qF '# edited before the tool left' "$LZ" || fail "the file was changed"
-[[ ! -e "$REC/lazygit" ]] || fail "records kept"
-run2 status
+EDITED_LZ=$(cat "$LZ")
+run2 pull --no-backup --no-fetch --profile nolz
+[[ $RC -eq 0 ]] || fail "pull failed: $OUT"
+has_line "$LZ is not managed by lazygit in this profile and has local edits"
+[[ "$(cat "$LZ")" == "$EDITED_LZ" ]] || fail "the file was changed"
+[[ -f "$REC/lazygit/manifest.tsv" ]] || fail "records forgotten"
+run2 status --profile nolz
 section_lacks "unreviewed changes" "50-lazygit.sh"
-printf 'packages:\n  - lazygit\n  - scripts\n  - claude\n' > "$H/profiles/dp.yaml"
-git -C "$H" commit -q -am "lazygit back"
 pull2
-cmp -s "$R/apps/lazygit/files/50-lazygit.sh" "$LZ" || fail "not deployed again"
-printf 'packages:\n  - scripts\n  - claude\n' > "$H/profiles/dp.yaml"
-git -C "$H" commit -q -am "drop lazygit again"
-pull2
-no_line "no longer managed"
+[[ "$(cat "$LZ")" == "$EDITED_LZ" ]] || fail "a later pull reverted the edit"
+no_line "kept your edit to $LZ"
+run2 status
+section_has "unreviewed changes" "~/.bashrc.d/50-lazygit.sh"
+has_line "conflicts: none"
+pass "edit and records kept"
+
+info "Case 21b: out of the profile, an unedited or deleted drop-in's records are forgotten"
+cp "$R/apps/lazygit/files/50-lazygit.sh" "$LZ"
+run2 pull --no-backup --no-fetch --profile nolz
+no_line "not managed by lazygit"
+[[ ! -e "$REC/lazygit" ]] || fail "records kept for an unedited file"
 cmp -s "$R/apps/lazygit/files/50-lazygit.sh" "$LZ" || fail "unedited file changed"
-[[ ! -e "$REC/lazygit" ]] || fail "records kept"
-printf 'packages:\n  - lazygit\n  - scripts\n  - claude\n' > "$H/profiles/dp.yaml"
-git -C "$H" commit -q -am "lazygit back again"
 pull2
-pass "no longer managed"
+[[ -f "$REC/lazygit/manifest.tsv" ]] || fail "not recorded again"
+rm -f "$LZ"
+run2 pull --no-backup --no-fetch --profile nolz
+[[ ! -e "$REC/lazygit" ]] || fail "records kept for a deleted file"
+pull2
+cmp -s "$R/apps/lazygit/files/50-lazygit.sh" "$LZ" || fail "not restored"
+run2 status
+all_none
+pass "released"
+
+info "Case 21c: the login drop-in is compared with the checkout the link points to"
+O="$D/other"
+git clone -q "$R" "$O"
+echo '# other checkout login' >> "$O/lib/login.sh"
+git -C "$O" commit -q -am "other login"
+ln -sfn "$O/dotfiles" "$HOME/.local/bin/dotfiles"
+pull2
+cmp -s "$O/lib/login.sh" "$LG" || fail "not deployed from the linked checkout"
+run2 status
+all_none
+echo '# my edit with a linked checkout' >> "$LG"
+run2 status
+section_has "unreviewed changes" "~/.bashrc.d/90-dotfiles.sh"
+has_line "conflicts: none"
+has_line "updates available: none"
+add2 d
+cmp -s "$O/lib/login.sh" "$REC/dotfiles/repo/90-dotfiles.sh" || fail "dismiss recorded the wrong repo copy"
+pull2
+no_line "kept your edit to $LG"
+run2 status
+section_has "dismissed" "~/.bashrc.d/90-dotfiles.sh"
+has_line "conflicts: none"
+run2 pull --no-backup --no-fetch --force "$LG"
+cmp -s "$O/lib/login.sh" "$LG" || fail "force did not take the linked checkout's file"
+ln -sfn "$R/dotfiles" "$HOME/.local/bin/dotfiles"
+pull2
+cmp -s "$R/lib/login.sh" "$LG" || fail "not back to this checkout's file"
+run2 status
+all_none
+pass "one login source"
 
 info "Case 22: status lists uncommitted files, also for a repo with no git"
 echo x > "$R/stray.txt"
@@ -452,8 +493,32 @@ section_lacks "conflicts" "extract"
 all_none
 pass "no stale status"
 
+info "Case 24b: --force PATH with another conflict still open keeps the held state; the next clears it"
+FFIND="$HOME/.local/bin/fuzzy-find"
+echo '# mine' >> "$EXTRACT"
+echo '# mine' >> "$FFIND"
+echo '# repo 2' >> "$R/apps/scripts/files/extract"
+echo '# repo 2' >> "$R/apps/scripts/files/fuzzy-find"
+commit2 "both scripts change"
+pull2
+grep -q "^  version: conflict" "$STATE_DIR/apps/scripts.yaml" || fail "no conflict held"
+run2 pull --no-backup --no-fetch --force "$EXTRACT"
+grep -q "^  version: conflict" "$STATE_DIR/apps/scripts.yaml" || fail "the held state was cleared with a conflict open"
+run2 status
+has_line "scripts   conflict held back"
+section_has "conflicts" "fuzzy-find"
+section_lacks "conflicts" "extract"
+run2 pull --no-backup --no-fetch --force "$FFIND"
+grep -q "^  version: conflict" "$STATE_DIR/apps/scripts.yaml" && fail "the held state outlived the last conflict"
+run2 status
+has_line "scripts   up to date"
+all_none
+pass "held state follows the last conflict"
+
 info "Case 25: uninstall lists local changes and takes a snapshot, even with --no-backup"
 echo '# edit before uninstall' >> "$EXTRACT"
+sleep 1
+touch "$D/mark"
 BEFORE=$(find "$HOME/.bak/scripts" -mindepth 1 -maxdepth 1 -type d | wc -l)
 run2 uninstall --dry-run
 [[ $RC -eq 0 ]] || fail "dry run failed: $OUT"
@@ -464,7 +529,7 @@ run2 uninstall --no-backup
 has_line "Local changes in these files will be replaced or removed"
 has_line "  $EXTRACT"
 no_line "  $HOME/.local/bin/fuzzy-find"
-[[ "$(find "$HOME/.bak/scripts" -mindepth 1 -maxdepth 1 -type d | wc -l)" -gt "$BEFORE" ]] || fail "no snapshot taken"
+[[ -n "$(find "$HOME/.bak/scripts" -mindepth 1 -maxdepth 1 -type d -newer "$D/mark")" ]] || fail "no snapshot taken"
 grep -rlF '# edit before uninstall' "$HOME/.bak/scripts" >/dev/null || fail "the snapshot lacks the edit"
 [[ ! -e "$EXTRACT" ]] || fail "extract not removed"
 [[ ! -e "$REC/scripts" ]] || fail "records kept"
@@ -473,11 +538,13 @@ pass "uninstall snapshots"
 
 info "Case 26: uninstall of clean files says nothing about changes, and still snapshots"
 pull2 --force
+sleep 1
+touch "$D/mark"
 BEFORE=$(find "$HOME/.bak/scripts" -mindepth 1 -maxdepth 1 -type d | wc -l)
 run2 uninstall
 [[ $RC -eq 0 ]] || fail "uninstall failed: $OUT"
 no_line "Local changes in these files"
-[[ "$(find "$HOME/.bak/scripts" -mindepth 1 -maxdepth 1 -type d | wc -l)" -gt "$BEFORE" ]] || fail "no snapshot taken"
+[[ -n "$(find "$HOME/.bak/scripts" -mindepth 1 -maxdepth 1 -type d -newer "$D/mark")" ]] || fail "no snapshot taken"
 pass "clean uninstall"
 
 info "Case 27: uninstall with no records still snapshots"

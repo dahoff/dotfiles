@@ -338,20 +338,25 @@ unmanaged_dropins_release() {
     done
 }
 
-# Warn about unreviewed edits to the drop-ins recorded for APP, then forget them
+# A drop-in whose tool is out of the profile keeps its records while the file differs from
+# the repo's version, as a config app's do: a one-off --profile run mustn't turn the edit into
+# something a later pull overwrites. Warned about each time. Forgotten once the file is gone
+# or matches.
 # Usage: release_dropin_records APP
 release_dropin_records() {
-    local app="$1" src dest strategy found=false msg
+    local app="$1" src dest strategy found=false keep=false msg items
     while IFS=$'\t' read -r src dest strategy; do
         found=true
         [[ -e "$dest" ]] || continue
-        if records_has_edits "$app" "$src" "$dest"; then
-            msg="$dest is no longer managed by $app and has unreviewed edits; it was left in place"
-            log_warn "$msg"
-            SYNC_WARNINGS+=("$msg")
-        fi
+        # A file that can't be compared counts as edited
+        items=$(records_items "$app" "$src" "$dest" "" true 2>/dev/null) || items=edited
+        [[ -n "$items" ]] || continue
+        keep=true
+        msg="$dest is not managed by $app in this profile and has local edits; it was left in place and its records are kept"
+        log_warn "$msg"
+        SYNC_WARNINGS+=("$msg")
     done < <(records_list "$app")
-    [[ "$found" != true ]] || records_remove "$app"
+    [[ "$found" != true || "$keep" == true ]] || records_remove "$app"
 }
 
 # Phase 3: Deploy configs via app installers

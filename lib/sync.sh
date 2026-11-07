@@ -157,6 +157,27 @@ repo_warn_dirty() {
     [[ -z "$shown" ]] || log_warn "$1 has uncommitted changes that are not deployed: $shown"
 }
 
+# The committed lib/login.sh the login drop-in comes from: that of the checkout
+# ~/.local/bin/dotfiles links to, else of REPO. Fails if neither can be exported. Used by
+# deploy, status and add alike, so they all compare with the file that is deployed.
+# Usage: sync_login_source REPO
+sync_login_source() {
+    local repo="$1" link="$HOME/.local/bin/dotfiles" current tree
+    local -a repos=()
+    if [[ -L "$link" && -e "$link" ]]; then
+        current=$(readlink -f "$link")
+        repos+=("$(dirname "$current")")
+    fi
+    repos+=("$repo")
+    for repo in "${repos[@]}"; do
+        tree=$(repo_committed_tree "$repo" 2>/dev/null) || continue
+        [[ -f "$tree/lib/login.sh" ]] || continue
+        printf '%s\n' "$tree/lib/login.sh"
+        return 0
+    done
+    return 1
+}
+
 # Install the command symlink and the login drop-in.
 # The symlink is created only when missing or dangling; a valid link to another
 # checkout, or a regular file, is left alone with a warning. The drop-in is
@@ -165,7 +186,6 @@ repo_warn_dirty() {
 sync_self_install() {
     local repo="$1" scripts_dir="$2"
     local link="$HOME/.local/bin/dotfiles"
-    local src_repo="$repo"
 
     mkdir -p "$HOME/.local/bin"
     if [[ -L "$link" && -e "$link" ]]; then
@@ -174,7 +194,6 @@ sync_self_install() {
         wanted=$(readlink -f "$repo/dotfiles")
         if [[ "$current" != "$wanted" ]]; then
             log_warn "~/.local/bin/dotfiles points at $current; leaving it (remove the link to switch to $repo)"
-            src_repo="$(dirname "$current")"
         fi
     elif [[ -e "$link" ]]; then
         log_warn "~/.local/bin/dotfiles is not a symlink; leaving it (remove it to link $repo/dotfiles)"
@@ -182,15 +201,8 @@ sync_self_install() {
         ln -sfn "$repo/dotfiles" "$link"
         log_debug "Linked $link -> $repo/dotfiles"
     fi
-    # From the committed content: an uncommitted edit does not reach the drop-in
-    local tree src
-    tree=$(repo_committed_tree "$src_repo") || return 0
-    src="$tree/lib/login.sh"
-    if [[ ! -f "$src" ]]; then
-        tree=$(repo_committed_tree "$repo") || return 0
-        src="$tree/lib/login.sh"
-    fi
-
+    local src
+    src=$(sync_login_source "$repo") || return 0
     sync_deploy_dropin dotfiles 90-dotfiles.sh "$src" "$scripts_dir/90-dotfiles.sh" || true
 }
 

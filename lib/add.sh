@@ -612,8 +612,7 @@ add_dropin_units() {
         fi
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${PKG_NAMES[$idx]}" "$dir" "$src" "$SHELL_SCRIPTS_DIR/$src" "$stage" "$reason"
     done
-    stage="-"
-    [[ -z "$tree" ]] || stage="$tree/lib/login.sh"
+    stage=$(sync_login_source "$DOTFILES_REPO") || stage="-"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' dotfiles - 90-dotfiles.sh "$SHELL_SCRIPTS_DIR/90-dotfiles.sh" "$stage" \
         "This file comes from dotfiles' own program code (lib/login.sh), not from a layer file, so there is nowhere to save it."
 }
