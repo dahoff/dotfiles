@@ -5,12 +5,13 @@
 # skips a checkout with no upstream, so it stays on that version until 'dotfiles
 # checkout main'. Nothing else records the pin.
 #
-# This file is also the marker for "new enough": checkout refuses a version without
-# it, because that version has no 'dotfiles checkout' to come back with and no pinned
-# warning. Do not rename it without updating VERSIONS_MARKER's users.
 # Requires lib/logging.sh and lib/sync.sh.
 
-VERSIONS_MARKER="lib/versions.sh"
+# The marker for "new enough": checkout refuses a version without this file. Such a
+# version keeps no records of local edits, so deploying it could overwrite them, and
+# the oldest have no 'dotfiles checkout' to come back with. It names a file only versions
+# with records have, so update it if that file is ever renamed.
+VERSIONS_MARKER="lib/records.sh"
 
 # True if PATH is the root of a git checkout (a pushed copy is not)
 # Usage: versions_is_checkout PATH
@@ -145,7 +146,7 @@ cmd_checkout() {
     fi
 
     if ! git -C "$repo" cat-file -e "$target:$VERSIONS_MARKER" 2>/dev/null; then
-        log_error "'$ref' is too old: it has no 'dotfiles checkout' to switch back with and would not warn that it is pinned"
+        log_error "'$ref' is too old: it keeps no records of local edits, so deploying it could overwrite them"
         exit 1
     fi
 

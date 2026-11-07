@@ -48,10 +48,10 @@ commit() {
     GIT_COMMITTER_DATE="2026-01-${DAY}T12:00:00" git -C "$A" commit -q --allow-empty -m "$1"
 }
 git -C "$A" init -q
-mv "$A/lib/versions.sh" "$T/versions.sh.keep"
-commit "before checkout existed"
+mv "$A/lib/records.sh" "$T/records.sh.keep"
+commit "before records existed"
 git -C "$A" tag old
-mv "$T/versions.sh.keep" "$A/lib/versions.sh"
+mv "$T/records.sh.keep" "$A/lib/records.sh"
 echo '# v1.0' >> "$A/$EXTRACT"
 commit "v1.0"
 git -C "$A" tag v1.0
@@ -160,6 +160,7 @@ has_line "Unknown version 'nonexistent'"
 run checkout old
 [[ $RC -ne 0 ]] || fail "old version accepted"
 has_line "too old"
+has_line "no records of local edits"
 echo '# wip' >> "$R/$EXTRACT"
 run checkout v1.1
 [[ $RC -ne 0 ]] || fail "dirty checkout accepted"
