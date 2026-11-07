@@ -989,6 +989,7 @@ cmd_status() {
     if [[ "$ok" == true ]]; then
         echo "apps:"
         local idx dir name app_name stage ver_fresh ver_state state_file state line
+        local rec_src rec_dest rec_strategy items
         local -a status_edits=()
         for idx in "${!PKG_NAMES[@]}"; do
             dir="${PKG_CONFIG_DIR[$idx]}"
@@ -1017,12 +1018,17 @@ cmd_status() {
             fi
             printf '  %-9s %s\n' "$name" "$state"
             if [[ -n "$ver_fresh" ]]; then
-                while IFS= read -r line; do
-                    [[ -n "$line" ]] && status_edits+=("$line")
-                done < <(deployed_app_edits "$app_name" "$stage")
+                while IFS=$'\t' read -r rec_src rec_dest rec_strategy; do
+                    items=$(records_items "$app_name" "$rec_src" "$rec_dest" "$stage/files/$rec_src" false 2>/dev/null) || items=edited
+                    if [[ "$items" == *conflict* ]]; then
+                        status_edits+=("$(printf 'conflict\t%s\t%s' "$rec_src" "$rec_dest")")
+                    elif [[ -n "$items" ]]; then
+                        status_edits+=("$(printf 'edited\t%s\t%s' "$rec_src" "$rec_dest")")
+                    fi
+                done < <(records_list "$app_name")
             fi
         done
-        if [[ ! -d "$STATE_DIR/deployed" ]]; then
+        if ! records_any; then
             printf '%-17s%s\n' "local edits:" "not tracked yet (run 'dotfiles pull')"
         elif [[ ${#status_edits[@]} -eq 0 ]]; then
             printf '%-17s%s\n' "local edits:" "none"

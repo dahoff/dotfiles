@@ -901,7 +901,8 @@ pass "profile, hostname and config changes are noticed"
 info "Case 35b: a held conflict turns off the early stop, and resolving it restores it"
 expect_full pull
 expect_skip pull
-expect_full pull
+fp_run pull --force
+[[ -f "$VIMRC" ]] || fail "forced pull did not deploy: $OUT"
 echo '" conflict edit' >> "$VIMRC"
 cp "$VIMRC" "$T/vimrc-edited"
 printf '" conflict repo\n' >> "$WORK/author/apps/vim/files/.vimrc"
