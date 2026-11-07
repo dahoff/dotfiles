@@ -400,7 +400,7 @@ installer_deploy_one() {
     if deploy_file "$src" "$dest" "$mode" "$strategy" "$verb" "$name"; then
         installer_report_deploy "$dest" "$strategy" "$verb"
     else
-        log_error "Failed to deploy $name; it stays as it was and will be retried"
+        log_error "Failed to deploy $name; the next pull tries it again"
         record_file_failure "$name"
     fi
 }
