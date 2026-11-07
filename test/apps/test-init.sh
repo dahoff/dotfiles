@@ -21,7 +21,7 @@ echo "Init Tests"
 echo "======================================"
 echo
 
-unset DOTFILES_HOSTS_DIR DOTFILES_INIT_ASSUME_TTY
+unset DOTFILES_HOSTS_DIR DOTFILES_INIT_ASSUME_TTY DOTFILES_RESET_SNAPSHOTTED
 T="/tmp/dotfiles-test-init-$$"
 trap 'rm -rf "$T"' EXIT
 rm -rf "$T"
@@ -420,6 +420,12 @@ packages:
 EOF
 mkdir -p "$HD/hosts/dropin"
 printf 'profile: dropprof\n' > "$HD/hosts/dropin/host.yaml"
+printf 'packages:\n  - scripts\n' > "$HD/profiles/scriptsonly.yaml"
+mkdir -p "$HD/hosts/noclaude"
+printf 'profile: scriptsonly\n' > "$HD/hosts/noclaude/host.yaml"
+printf 'packages:\n  - claude\n  - scripts\n  - git\n' > "$HD/profiles/gitprof.yaml"
+mkdir -p "$HD/hosts/gitter"
+printf 'profile: gitprof\n' > "$HD/hosts/gitter/host.yaml"
 
 # A host that has been through init --yes, from nothing
 # Usage: fresh_host [HOSTNAME]
@@ -439,6 +445,17 @@ rerun() {
     OUT=$(printf '%s\n' "" "" "" "" "$@" | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/fakebin:$T/nosudo:$PATH" \
         "$DF/dotfiles" init 2>&1) || RC=$?
 }
+# Like rerun, answering the hostname question with HOSTNAME
+# Usage: rerun_as HOSTNAME [ANSWER...]
+rerun_as() {
+    local h="$1"
+    shift
+    RC=0
+    OUT=$(printf '%s\n' "" "$h" "" "" "$@" | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/fakebin:$T/nosudo:$PATH" \
+        "$DF/dotfiles" init 2>&1) || RC=$?
+}
+# Number of snapshots (not the original) an app's backup folder holds
+snap_count() { find "$HOME/.bak/$1" -mindepth 1 -maxdepth 1 -type d ! -name original 2>/dev/null | wc -l; }
 rerun_eof() {
     RC=0
     OUT=$(printf '\n\n\n\n' | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/fakebin:$T/nosudo:$PATH" \
@@ -533,10 +550,19 @@ info "Case R2: confirming lists what is lost, then resets everything to the repo
 fresh_host
 cp -R "$STATE_DIR/records" "$T/records-before"
 make_local_state
+SC_BEFORE=$(snap_count claude)
 rerun yes reset
 [[ $RC -eq 0 ]] || fail "R2: reset failed ($RC): $OUT"
 LISTED="${OUT#*This would be lost:}"
 LISTED="${LISTED%%00-local.sh and .gitconfig.local are not touched*}"
+# Status' notes about what its lists mean don't belong under "would be lost"
+for note in "yours is kept" "kept local on purpose" "reviews them" "asks again"; do
+    [[ "$LISTED" != *"$note"* ]] || fail "R2: a status note is listed as lost ('$note'): $LISTED"
+done
+[[ "$LISTED" == *"not in the repo's last deployed version"* ]] || fail "R2: local-only keys not worded as last deployed: $LISTED"
+# One snapshot, and the user is told where it is
+[[ $(( $(snap_count claude) - SC_BEFORE )) -eq 1 ]] || fail "R2: a reset used $(( $(snap_count claude) - SC_BEFORE )) snapshot slots, not one"
+[[ "$OUT" == *"Snapshot of the claude files: ~/.bak/claude/"* ]] || fail "R2: the snapshot's path is not shown: $OUT"
 [[ "$LISTED" == *"~/.claude/CLAUDE.md"* ]] || fail "R2: the unreviewed edit is not listed: $LISTED"
 [[ "$LISTED" == *'~/.claude/settings.json  key ["localOnly"]'* ]] || fail "R2: the local-only key is not listed: $LISTED"
 [[ "$LISTED" == *'~/.claude/settings.json  key ["model"]'* ]] || fail "R2: the changed value is not listed: $LISTED"
@@ -747,6 +773,137 @@ grep -rqF "my own line" "$HOME/.bak/claude" || fail "O2: no snapshot after the r
 rerun
 [[ "$OUT" == *"Reset every managed file"* ]] || fail "O2: the next init does not ask about a reset: $OUT"
 pass "failed snapshot in the move: nothing changed, then a normal re-run with the question"
+
+# Case F1
+info "Case F1: when status can't tell what a reset loses, no reset is offered"
+fresh_host
+echo "# local login edit" >> "$HOME/.bashrc.d/90-dotfiles.sh"
+# A layer file the app doesn't deploy makes the overlays invalid
+mkdir -p "$HD/hosts/testhost/apps/claude/files"
+echo stray > "$HD/hosts/testhost/apps/claude/files/bogus.txt"
+rerun yes reset
+rm -f "$HD/hosts/testhost/apps/claude/files/bogus.txt"
+[[ "$OUT" != *"no local changes would be lost"* ]] || fail "F1: said nothing would be lost: $OUT"
+[[ "$OUT" != *"Reset every managed file"* && "$OUT" != *"Type 'reset'"* ]] || fail "F1: a reset was offered: $OUT"
+[[ "$OUT" == *"Can't tell what a reset would lose"* ]] || fail "F1: no reason given: $OUT"
+grep -qx "# local login edit" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "F1: the login drop-in was reset anyway"
+pass "an unreadable status means no reset is offered"
+
+# Case F2
+info "Case F2: files with no record that a reset overwrites are listed, and snapshotted"
+fresh_host noclaude
+[[ ! -e "$CL/settings.json" ]] || fail "F2: setup: claude files already there"
+mkdir -p "$CL"
+echo '{"mine": 1}' > "$CL/settings.json"
+echo "my notes" > "$CL/CLAUDE.md"
+rerun_as testhost yes reset
+[[ $RC -eq 0 ]] || fail "F2: reset failed ($RC): $OUT"
+LISTED="${OUT#*This would be lost:}"
+LISTED="${LISTED%%00-local.sh and .gitconfig.local are not touched*}"
+[[ "$LISTED" == *"no record"* && "$LISTED" == *"~/.claude/settings.json"* && "$LISTED" == *"~/.claude/CLAUDE.md"* ]] \
+    || fail "F2: the files with no record are not listed: $LISTED"
+[[ "$LISTED" != *"no local changes would be lost"* ]] || fail "F2: said nothing would be lost: $LISTED"
+[[ "$(jq -r '.mine // "gone"' "$CL/settings.json")" == gone ]] || fail "F2: the reset did not overwrite settings.json"
+grep -rqF "my notes" "$HOME/.bak/claude" || fail "F2: no snapshot of the file with no record"
+grep -rqF '"mine"' "$HOME/.bak/claude" || fail "F2: no snapshot of the merged file with no record"
+pass "files with no record are listed and snapshotted"
+
+# Case F3
+info "Case F3: init reads host.yaml and profiles from the committed hosts repo"
+HG="$T/hosts-git"
+rm -rf "$HG"
+cp -R "$TEST_DIR/fixtures/hosts-dir" "$HG"
+git -C "$HG" init -q -b main
+git -C "$HG" add -A
+git -C "$HG" commit -q -m fixture
+rm -f "$CFG" "$CFG.bak"
+mkdir -p "$HG/hosts/newhost"
+printf 'profile: minimal\n' > "$HG/hosts/newhost/host.yaml"
+printf 'packages:\n  - scripts\n' > "$HG/profiles/unco.yaml"
+run_init --yes --no-sync --hosts-dir "$HG" --hostname newhost
+[[ $RC -eq 1 ]] || fail "F3: an uncommitted host.yaml: expected exit 1, got $RC: $OUT"
+[[ "$OUT" == *"not committed"* && "$OUT" == *"Commit it, then run init again"* ]] || fail "F3: no explanation: $OUT"
+[[ ! -e "$CFG" ]] || fail "F3: the config was written"
+run_init --yes --no-sync --hosts-dir "$HG" --hostname testhost --profile unco
+[[ $RC -eq 1 && "$OUT" == *"profile 'unco' not found"* ]] || fail "F3: an uncommitted profile was accepted: rc=$RC $OUT"
+[[ ! -e "$CFG" ]] || fail "F3: the config was written for an uncommitted profile"
+run_interactive "$HG" "nohost" "" "" ""
+[[ $RC -eq 0 ]] || fail "F3: interactive init failed ($RC): $OUT"
+LIST=$(grep -a '^profiles: ' <<< "$OUT") || fail "F3: no profile list: $OUT"
+[[ "$LIST" != *unco* ]] || fail "F3: an uncommitted profile is listed: $LIST"
+# A committed host.yaml is what counts, whatever the working tree says
+rm -f "$CFG"
+rm "$HG/hosts/testhost/host.yaml"
+run_init --yes --no-sync --hosts-dir "$HG" --hostname testhost
+[[ $RC -eq 0 && "$OUT" == *"testhost/host.yaml found (profile: base)"* ]] || fail "F3: the committed host.yaml was not used: rc=$RC $OUT"
+# Committing it is what makes it count
+git -C "$HG" checkout -q -- hosts/testhost/host.yaml
+git -C "$HG" add -A
+git -C "$HG" commit -q -m more
+rm -f "$CFG"
+run_init --yes --no-sync --hosts-dir "$HG" --hostname newhost
+[[ $RC -eq 0 && "$OUT" == *"newhost/host.yaml found (profile: minimal)"* ]] || fail "F3: a committed host.yaml was refused: rc=$RC $OUT"
+pass "uncommitted host.yaml and profiles are refused; committed ones are used"
+
+# Case F5
+info "Case F5: a login drop-in that can't be reset fails the run and the reset is not finished"
+fresh_host
+make_local_state
+chmod 444 "$HOME/.bashrc.d/90-dotfiles.sh"; chmod 555 "$HOME/.bashrc.d"
+rerun yes reset
+chmod 755 "$HOME/.bashrc.d"; chmod 644 "$HOME/.bashrc.d/90-dotfiles.sh"
+[[ $RC -ne 0 ]] || fail "F5: a failed drop-in reset exited 0: $OUT"
+[[ "$OUT" == *"login drop-in"* && "$OUT" == *"FAIL"* ]] || fail "F5: the failure is not in the summary: $OUT"
+[[ "$OUT" == *"reset is not finished"* ]] || fail "F5: not said to be unfinished: $OUT"
+[[ -d "$STATE_DIR/records/ghost" && -d "$STATE_DIR/records/.released" ]] || fail "F5: the reset was finished anyway"
+rerun yes reset
+[[ $RC -eq 0 ]] || fail "F5: the retry failed ($RC): $OUT"
+[[ ! -d "$STATE_DIR/records/ghost" && -f "$HOME/.bashrc.d/90-dotfiles.sh" ]] || fail "F5: the retry did not finish the reset"
+pass "a failed drop-in reset is a failed run, and init again finishes it"
+
+# Case F6
+info "Case F6: two managed files with one name in an app stop the snapshot, with nothing changed"
+fresh_host
+mkdir -p "$HOME/a" "$HOME/b" "$STATE_DIR/records/dup/repo" "$STATE_DIR/records/dup/review"
+echo one > "$HOME/a/x.conf"
+echo two > "$HOME/b/x.conf"
+printf 'a\t%s\treplace\nb\t%s\treplace\n' "$HOME/a/x.conf" "$HOME/b/x.conf" > "$STATE_DIR/records/dup/manifest.tsv"
+echo one > "$STATE_DIR/records/dup/repo/a"; echo one > "$STATE_DIR/records/dup/review/a"
+echo two > "$STATE_DIR/records/dup/repo/b"; echo two > "$STATE_DIR/records/dup/review/b"
+echo "my own line" >> "$CL/CLAUDE.md"
+SUM_BEFORE=$(tree_sum)
+rerun yes reset
+[[ $RC -eq 1 ]] || fail "F6: expected exit 1, got $RC: $OUT"
+[[ "$OUT" == *"share one snapshot path"* && "$OUT" == *"x.conf"* ]] || fail "F6: no explanation: $OUT"
+[[ "$(tree_sum)" == "$SUM_BEFORE" ]] || fail "F6: something changed"
+grep -qx "my own line" "$CL/CLAUDE.md" || fail "F6: an edit was lost"
+pass "a snapshot name collision stops before anything changes"
+
+# Case F7
+info "Case F7: a reset names an edited drop-in of a tool out of the profile once, not twice"
+fresh_host dropin
+echo "alias lg='my-lazygit'" > "$HOME/.bashrc.d/50-lazygit.sh"
+rerun_as testhost yes reset
+[[ $RC -eq 0 ]] || fail "F7: reset failed ($RC): $OUT"
+[[ "$OUT" == *"$HOME/.bashrc.d/50-lazygit.sh is not managed by lazygit in this profile and has local edits; the reset left it in place and stopped tracking it"* ]] \
+    || fail "F7: the reset did not name the file: $OUT"
+[[ "$OUT" != *"its records are kept"* ]] || fail "F7: contradictory warning: $OUT"
+[[ ! -d "$STATE_DIR/records/lazygit" ]] || fail "F7: the records were kept"
+pass "one consistent warning"
+
+# Case F10
+info "Case F10: a reset on a terminal never runs git-setup or touches .gitconfig.local"
+fresh_host gitter
+[[ -x "$HOME/.local/bin/git-setup" ]] || fail "F10: setup: git-setup not deployed: $OUT"
+printf '[user]\n' > "$HOME/.gitconfig.local"
+RC=0
+OUT=$( ( sleep 1; for a in "" "" "" "" yes reset; do printf '%s\n' "$a"; sleep 1; done; sleep 3 ) \
+    | PATH="$T/fakebin:$T/nosudo:$PATH" script -qec "$DF/dotfiles init" /dev/null 2>&1 ) || RC=$?
+[[ $RC -eq 0 ]] || fail "F10: reset failed ($RC): $OUT"
+[[ "$OUT" == *"Type 'reset' to go ahead"* ]] || fail "F10: the terminal run never got to the confirmation: $OUT"
+[[ "$OUT" != *"running git-setup"* ]] || fail "F10: git-setup ran during a reset: $OUT"
+[[ "$(cat "$HOME/.gitconfig.local")" == "[user]" ]] || fail "F10: .gitconfig.local changed: $(cat "$HOME/.gitconfig.local")"
+pass "git-setup is skipped during a reset"
 
 echo
 echo -e "${GREEN}All init tests passed${NC}"

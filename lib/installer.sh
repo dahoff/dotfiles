@@ -341,6 +341,9 @@ installer_is_fresh() {
 # override. With --no-backup, a file that starts over still gets one.
 installer_snapshot_dests() {
     local i
+    # init took the one snapshot of a reset before anything changed: a second would use up
+    # another of the few slots. A reset run on its own still snapshots here.
+    [[ "${DOTFILES_RESET:-}" != 1 || "${DOTFILES_RESET_SNAPSHOTTED:-}" != 1 ]] || return 0
     if [[ "$NO_BACKUP" != true || "$FORCE" == true || "${DOTFILES_RESET:-}" == 1 ]]; then
         printf '%s\n' ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"}
         return 0

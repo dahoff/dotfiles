@@ -190,12 +190,22 @@ init_validate_profile_name() {
     fi
 }
 
+# Print the directory the hosts repo deploys from: its committed content, or the directory
+# itself when there is no git. Nothing for no hosts repo. Fails when it can't be exported.
+init_hosts_tree() {
+    [[ -n "$INIT_HOSTS_DIR" ]] || return 0
+    repo_committed_tree "$INIT_HOSTS_DIR"
+}
+
 # Check a profile name resolves to a profile file (hosts repo first)
 # Usage: init_validate_profile NAME
 init_validate_profile() {
-    local name="$1" path
+    local name="$1" path htree dtree
     init_validate_profile_name "$name" || return 1
-    path=$(hosts_resolve_profile_path "$PROFILES_DIR" "$INIT_HOSTS_DIR" "$name")
+    # Only committed profiles deploy
+    htree=$(init_hosts_tree) || return 1
+    dtree=$(repo_committed_tree "$SCRIPT_DIR") || return 1
+    path=$(hosts_resolve_profile_path "$dtree/profiles" "$htree" "$name")
     if [[ ! -f "$path" ]]; then
         log_error "profile '$name' not found ($path)"
         return 1
@@ -206,8 +216,10 @@ init_validate_profile() {
 # comma-separated without duplicates
 # Usage: init_list_profiles
 init_list_profiles() {
-    local list="" dir f name
-    for dir in ${INIT_HOSTS_DIR:+"$INIT_HOSTS_DIR/profiles"} "$PROFILES_DIR"; do
+    local list="" dir f name htree dtree
+    htree=$(init_hosts_tree 2>/dev/null) || htree=""
+    dtree=$(repo_committed_tree "$SCRIPT_DIR" 2>/dev/null) || dtree="$SCRIPT_DIR"
+    for dir in ${htree:+"$htree/profiles"} "$dtree/profiles"; do
         for f in "$dir"/*.yaml; do
             [[ -f "$f" ]] || continue
             name="${f##*/}"
@@ -321,16 +333,61 @@ init_read_line() {
     printf -v "$var" '%s' "$line_in"
 }
 
-# What this profile manages, from the config just written, one per line:
-# "app NAME" for an app that deploys files and "dropin APP DEST" for a drop-in. Nothing,
-# and a failure, when the profile can't be loaded.
+# The src and dest of each file an app's config.yaml deploys, as SRC<TAB>DEST lines
+# Usage: init_config_dests CONFIG_YAML
+init_config_dests() {
+    local line src="" d in_files=false
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        if [[ "$line" =~ ^files: ]]; then
+            in_files=true
+            continue
+        fi
+        [[ "$in_files" == true ]] || continue
+        [[ "$line" =~ ^[[:alpha:]] ]] && break
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*src:[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]]; then
+            src="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^[[:space:]]*dest:[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]]; then
+            d="${BASH_REMATCH[1]}"
+            d="${d//\$\{SHELL_SCRIPTS_DIR\}/$SHELL_SCRIPTS_DIR}"
+            printf '%s\t%s\n' "$src" "$(abs_path "$d")"
+        fi
+    done < "$1"
+}
+
+# What this profile manages, from the config just written, one per line, tab separated:
+#   app NAME           an app that deploys files, or a tool with a drop-in
+#   config APP DEST    a file a profile app deploys
+#   dropin APP DEST    a drop-in
+#   unrecorded DEST    a file there with no record of what dotfiles wrote, that differs
+#                      from what would deploy: a reset overwrites it
+# Nothing, and a failure, when the profile or its overlays can't be loaded.
 init_profile_info() {
     (
         resolve_settings >/dev/null 2>&1 || exit 1
         OVERLAY_HOST="${HOSTNAME_ARG:-$(hosts_local_name)}"
         load_packages_for_profile "$PROFILE_ARG" "$OVERLAY_HOST" >/dev/null 2>&1 || exit 1
+        prepare_overlays reset >/dev/null 2>&1 || exit 1
         profile_app_names
-        add_dropin_units 2>/dev/null | awk -F'\t' '{ print "dropin\t" $1 "\t" $4 }'
+        local idx dir app stage src dest stage_file reason unit_dir
+        for idx in "${!PKG_NAMES[@]}"; do
+            dir="${PKG_CONFIG_DIR[$idx]}"
+            [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
+            app=$(add_app_name "$dir")
+            stage="$STAGE_ROOT/apps/$dir"
+            overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" >/dev/null 2>&1 || exit 1
+            while IFS=$'\t' read -r src dest; do
+                printf 'config\t%s\t%s\n' "$app" "$dest"
+                [[ -f "$dest" && -f "$stage/files/$src" ]] || continue
+                ! grep -qxF "$src" "$stage/skip" || continue
+                records_knows_dest "$dest" || cmp -s "$dest" "$stage/files/$src" || printf 'unrecorded\t%s\n' "$dest"
+            done < <(init_config_dests "$APPS_DIR/$dir/config.yaml")
+        done
+        while IFS=$'\t' read -r app unit_dir src dest stage_file reason; do
+            printf 'dropin\t%s\t%s\n' "$app" "$dest"
+            [[ -f "$dest" && "$stage_file" != "-" && -f "$stage_file" ]] || continue
+            records_knows_dest "$dest" || cmp -s "$dest" "$stage_file" || printf 'unrecorded\t%s\n' "$dest"
+        done < <(add_dropin_units 2>/dev/null)
     )
 }
 
@@ -361,7 +418,8 @@ init_managed_files() {
         done < <(state_get_files "$app" 2>/dev/null || true)
     done
     while IFS=$'\t' read -r kind app dest; do
-        [[ "$kind" != dropin ]] || printf '%s\t%s\n' "$app" "$dest"
+        [[ "$kind" == dropin || "$kind" == config ]] || continue
+        printf '%s\t%s\n' "$app" "$dest"
     done < <(init_profile_info || true)
 }
 
@@ -370,16 +428,34 @@ init_managed_files() {
 # can't be taken, with nothing else changed.
 # Usage: init_snapshot_managed
 init_snapshot_managed() {
-    local ts line app dest dir="" last="" taken=false
+    local ts line app dest dir="" last="" taken=false key
     local -a pairs=()
+    local -A seen=()
     ts=$(timestamp)
     mapfile -t pairs < <(init_managed_files | sort -u)
+    # A snapshot keeps files by name: two files of one app with the same name would share
+    # a path, and one would be lost. Stop before anything is taken or changed.
+    for line in ${pairs[@]+"${pairs[@]}"}; do
+        app="${line%%$'\t'*}"
+        dest="${line#*$'\t'}"
+        [[ -f "$dest" ]] || continue
+        key="$app/$(basename "$dest")"
+        if [[ -n "${seen[$key]:-}" && "${seen[$key]}" != "$dest" ]]; then
+            log_error "$app has two managed files named $(basename "$dest") (${seen[$key]} and $dest)," \
+                "which would share one snapshot path; nothing was changed"
+            return 1
+        fi
+        seen[$key]="$dest"
+    done
     for line in ${pairs[@]+"${pairs[@]}"}; do
         app="${line%%$'\t'*}"
         dest="${line#*$'\t'}"
         [[ -f "$dest" ]] || continue
         if [[ "$app" != "$last" ]]; then
-            [[ "$taken" != true ]] || state_add_snapshot "$last" "$ts" 2>/dev/null || true
+            if [[ "$taken" == true ]]; then
+                state_add_snapshot "$last" "$ts" 2>/dev/null || true
+                echo "Snapshot of the $last files: $(add_tilde "$dir/$ts")"
+            fi
             dir=""
             if state_is_installed "$app"; then
                 dir=$(state_get_backup_dir "$app" 2>/dev/null || true)
@@ -398,7 +474,10 @@ init_snapshot_managed() {
         fi
         taken=true
     done
-    [[ "$taken" != true ]] || state_add_snapshot "$last" "$ts" 2>/dev/null || true
+    if [[ "$taken" == true ]]; then
+        state_add_snapshot "$last" "$ts" 2>/dev/null || true
+        echo "Snapshot of the $last files: $(add_tilde "$dir/$ts")"
+    fi
     return 0
 }
 
@@ -407,15 +486,13 @@ init_snapshot_managed() {
 # no longer manages, which a reset leaves alone but stops tracking.
 # Usage: init_reset_summary
 init_reset_summary() {
-    local n=0 report dir app src dest strategy repo keys key info items lines=""
+    local n=0 dir app src dest strategy repo keys key info items lines="" kind
     # Status knows which is which, against the content that would deploy
-    report=$("$DOTFILES_REPO/dotfiles" status 2>/dev/null | awk '
-        /^[^ ]/ { show = ($0 ~ /^(unreviewed changes|conflicts|dismissed|saved, not committed):  \(/) }
-        show { print }') || report=""
-    if [[ -n "$report" ]]; then
-        printf '%s\n' "$report"
+    if [[ -n "$INIT_LOST_REPORT" ]]; then
+        printf '%s\n' "$INIT_LOST_REPORT"
         n=$((n + 1))
     fi
+    info=$(init_profile_info 2>/dev/null) || info=""
 
     # Keys only this host has, in files that were deployed as a merge: the record holds
     # what the repo had
@@ -434,7 +511,7 @@ init_reset_summary() {
                   else empty end;
                 lo($l[0]; $b[0]; [])' 2>/dev/null) || keys=""
             [[ -n "$keys" ]] || continue
-            echo "local-only keys, not in the repo's version (a reset removes them):"
+            echo "local-only keys, not in the repo's last deployed version (a reset removes them):"
             while IFS= read -r key; do
                 printf '  %s  key %s\n' "$(add_tilde "$dest")" "$key"
             done <<< "$keys"
@@ -442,8 +519,21 @@ init_reset_summary() {
         done < "$dir/manifest.tsv"
     done
 
+    # Files dotfiles never wrote, that the reset overwrites: no record, so nothing above
+    # could name them
+    lines=""
+    while IFS=$'\t' read -r kind dest; do
+        [[ "$kind" != unrecorded ]] || lines+="  $(add_tilde "$dest")"$'\n'
+    done <<< "$info"
+    if [[ -n "$lines" ]]; then
+        echo "files dotfiles has no record of writing, that differ from the repo's (a reset overwrites them):"
+        printf '%s' "$lines"
+        n=$((n + 1))
+    fi
+    lines=""
+
     # Apps this profile doesn't manage
-    if info=$(init_profile_info 2>/dev/null) && [[ -n "$info" ]]; then
+    if [[ -n "$info" ]]; then
         info+=$'\n'
         for dir in "$STATE_DIR"/records/*/; do
             [[ -f "$dir/manifest.tsv" ]] || continue
@@ -462,6 +552,23 @@ init_reset_summary() {
         fi
     fi
     [[ $n -gt 0 ]] || echo "no local changes would be lost"
+}
+
+# What status says about local changes, in INIT_LOST_REPORT: the unreviewed, conflicting,
+# dismissed and saved-not-committed lists, without status' notes. Returns 1 when status
+# can't tell (it prints no such section when the profile or overlays don't load).
+INIT_LOST_REPORT=""
+init_status_report() {
+    local out
+    INIT_LOST_REPORT=""
+    out=$("$DOTFILES_REPO/dotfiles" status 2>/dev/null </dev/null) || out=""
+    grep -q '^unreviewed changes:' <<< "$out" || return 1
+    INIT_LOST_REPORT=$(awk '
+        /^[^ ]/ {
+            show = ($0 ~ /^(unreviewed changes|conflicts|dismissed|saved, not committed):  \(/)
+            if (show) sub(/:  \(.*$/, ":")
+        }
+        show { print }' <<< "$out")
 }
 
 # Ask whether to reset. Returns 0 only when confirmed: the question defaults to no, and
@@ -545,12 +652,19 @@ init_main() {
     init_choose INIT_HOSTNAME "$f_hostname" "$g_hostname" "Hostname" "$d_hostname" init_validate_hostname
     local host_yaml=""
     if [[ -n "$INIT_HOSTS_DIR" ]]; then
-        if [[ -f "$INIT_HOSTS_DIR/hosts/$INIT_HOSTNAME/host.yaml" ]]; then
-            host_yaml="$INIT_HOSTS_DIR/hosts/$INIT_HOSTNAME/host.yaml"
+        # Only committed content deploys, so that is what selects the profile
+        local htree
+        htree=$(init_hosts_tree) || exit 1
+        if [[ -f "$htree/hosts/$INIT_HOSTNAME/host.yaml" ]]; then
+            host_yaml="$htree/hosts/$INIT_HOSTNAME/host.yaml"
             echo "hosts/$INIT_HOSTNAME/host.yaml found (profile: $(hosts_read_scalar "$host_yaml" profile))"
+        elif [[ -f "$INIT_HOSTS_DIR/hosts/$INIT_HOSTNAME/host.yaml" ]]; then
+            log_error "hosts/$INIT_HOSTNAME/host.yaml in $INIT_HOSTS_DIR is not committed, so a pull would not use it."
+            echo "Commit it, then run init again." >&2
+            exit 1
         else
             local available="" d
-            for d in "$INIT_HOSTS_DIR"/hosts/*/; do
+            for d in "$htree"/hosts/*/; do
                 [[ -d "$d" ]] || continue
                 d="${d%/}"
                 available+="${available:+, }${d##*/}"
@@ -603,7 +717,10 @@ init_main() {
             rm -rf "${STATE_DIR:?}/deployed"
             sync_forget_complete
         elif [[ "$INIT_YES" != true ]] && records_any; then
-            if init_confirm_reset; then
+            if ! init_status_report; then
+                log_warn "Can't tell what a reset would lose: 'dotfiles status' can't load the profile and overlays." \
+                    "No reset is offered; running a normal pull. Fix the configuration and run init again to reset"
+            elif init_confirm_reset; then
                 if ! init_snapshot_managed; then
                     log_error "Could not take a snapshot of the managed files, so nothing was reset"
                     exit 1
@@ -614,7 +731,7 @@ init_main() {
             fi
         fi
         if [[ "$reset" == true ]]; then
-            DOTFILES_RESET=1 "$DOTFILES_REPO/dotfiles" pull || rc=$?
+            DOTFILES_RESET=1 DOTFILES_RESET_SNAPSHOTTED=1 "$DOTFILES_REPO/dotfiles" pull || rc=$?
         else
             env -u DOTFILES_RESET "$DOTFILES_REPO/dotfiles" pull || rc=$?
         fi

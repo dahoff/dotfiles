@@ -113,6 +113,7 @@ mkdir -p "$T/fakebin2"
 cat > "$T/fakebin2/ssh" <<EOF
 #!/bin/sh
 echo "\$*" >> "$T/ssh-log"
+case " \$* " in *" -t "*|*"sh -s"*) ;; *) readlink /proc/\$\$/fd/0 >> "$T/ssh-stdin" ;; esac
 case "\$*" in
     *"sh -s"*) cat > /dev/null; printf 'dotfiles_repo=/r/dotfiles\nhosts_dir=/r/hosts\n' ;;
     *"mktemp -d"*) echo /tmp/fake-rtmp ;;
@@ -123,9 +124,10 @@ EOF
 printf '#!/bin/sh\nexit 0\n' > "$T/fakebin2/scp"
 chmod +x "$T/fakebin2/ssh" "$T/fakebin2/scp"
 fake_run() {
-    rm -f "$T/ssh-log"
+    rm -f "$T/ssh-log" "$T/ssh-stdin"
     RC=0
-    OUT=$(PATH="$T/fakebin2:$PATH" ./dotfiles "$@" 2>&1) || RC=$?
+    # typed-ahead input on stdin: only the terminal calls may take it
+    OUT=$(PATH="$T/fakebin2:$PATH" ./dotfiles "$@" 2>&1 < <(printf "typed ahead\n")) || RC=$?
 }
 last_ssh() { tail -n 1 "$T/ssh-log"; }
 fake_run pull --remote testuser@h1
@@ -152,6 +154,13 @@ fake_run init --remote --force testuser@h1
 [[ $RC -eq 0 && "$(last_ssh)" != *--force* ]] || fail "init --remote --force: rc=$RC, remote command: $(last_ssh)"
 pass "remote pull and init command lines, --force forwarded to pull"
 
+info "Case 3b2: only the terminal call of a push takes the terminal's input"
+fake_run init --remote --yes testuser@h1
+[[ $RC -eq 0 ]] || fail "init --remote: exit $RC: $OUT"
+[[ -s "$T/ssh-stdin" ]] || fail "no non-terminal ssh calls were logged"
+[[ "$(sort -u "$T/ssh-stdin")" == /dev/null ]] || fail "an ssh call read the terminal's input: $(sort -u "$T/ssh-stdin")"
+pass "non-terminal ssh calls read /dev/null"
+
 info "Case 3c: pull --remote warns when a repo is behind its upstream"
 UP="$T/up.git"
 git init -q --bare "$UP"
@@ -170,7 +179,7 @@ git -C "$T/ahead" add MORE
 git -C "$T/ahead" commit -q -m more
 git -C "$T/ahead" push -q origin HEAD
 behind_run() {
-    rm -f "$T/ssh-log"
+    rm -f "$T/ssh-log" "$T/ssh-stdin"
     RC=0
     OUT=$(cd "$T/behind" && PATH="$T/fakebin2:$PATH" ./dotfiles "$@" 2>&1) || RC=$?
 }

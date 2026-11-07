@@ -6,6 +6,8 @@
 declare -a SYNC_CLEANUP=()
 # Warnings recorded during a pull, listed in its summary
 declare -a SYNC_WARNINGS=()
+# Set when a drop-in couldn't be reset: the reset isn't finished
+RESET_FAILED=false
 # BatchMode for ssh: the background update check must never prompt
 SYNC_BATCH="${SYNC_BATCH:-false}"
 
@@ -203,7 +205,15 @@ sync_self_install() {
     fi
     local src
     src=$(sync_login_source "$repo") || return 0
-    sync_deploy_dropin dotfiles 90-dotfiles.sh "$src" "$scripts_dir/90-dotfiles.sh" || true
+    if ! sync_deploy_dropin dotfiles 90-dotfiles.sh "$src" "$scripts_dir/90-dotfiles.sh"; then
+        # A reset that couldn't reset this file isn't finished, and says so
+        if [[ "${DOTFILES_RESET:-}" == 1 ]]; then
+            RESET_FAILED=true
+            RESULTS+=("local|login drop-in|FAIL")
+            EXIT_CODE=1
+        fi
+    fi
+    return 0
 }
 
 # Deploy one drop-in through the records, like any managed file: an edit to it is kept and
@@ -222,7 +232,8 @@ sync_deploy_dropin() {
     elif has_global_flag --force; then
         force=force
     fi
-    if [[ -f "$dest" ]] && ! cmp -s "$src" "$dest" \
+    # init's snapshot of a reset already holds the old file
+    if [[ ! ( "$force" == reset && "${DOTFILES_RESET_SNAPSHOTTED:-}" == 1 ) && -f "$dest" ]] && ! cmp -s "$src" "$dest" \
         && { [[ -n "$force" ]] || records_is_fresh "$app" "$name" "$dest" replace; }; then
         ts=$(timestamp)
         if ! { backup_init "$app" "$HOME/.bak/$app" && backup_create_snapshot "$dest" "$HOME/.bak/$app" "$ts" >/dev/null; }; then

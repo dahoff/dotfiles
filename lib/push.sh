@@ -193,7 +193,7 @@ push_host() {
         check+="if [ -e $q ] && [ ! -e $q/.git ] && [ ! -f $q/PUSHED ] && { [ ! -d $q ] || [ -n \"\$(ls -A $q 2>/dev/null)\" ]; }; then echo $(push_quote "foreign ${targets[$i]}"); fi; "
     done
     check+="[ -x $(push_quote "$rdot/dotfiles") ] && echo exists; true"
-    if ! state=$(push_ssh "$host" "$check"); then
+    if ! state=$(push_ssh "$host" "$check" </dev/null); then
         log_error "[$host] ssh failed"
         return 1
     fi
@@ -226,7 +226,7 @@ push_host() {
     fi
 
     local rtmp
-    if ! rtmp=$(push_ssh "$host" "mktemp -d") || [[ -z "$rtmp" ]]; then
+    if ! rtmp=$(push_ssh "$host" "mktemp -d" </dev/null) || [[ -z "$rtmp" ]]; then
         log_error "[$host] could not create a remote temp dir"
         return 1
     fi
@@ -234,12 +234,12 @@ push_host() {
     # require the mktemp path to be plain characters instead
     if [[ "$rtmp" != /* || "$rtmp" == *[!A-Za-z0-9/._-]* ]]; then
         log_error "[$host] unsupported remote temp dir '$rtmp' (set TMPDIR to a plain path)"
-        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
+        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" </dev/null || true
         return 1
     fi
     if ! push_scp "${tars[@]}" "$host:$rtmp/"; then
         log_error "[$host] scp failed"
-        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
+        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" </dev/null || true
         return 1
     fi
 
@@ -258,9 +258,9 @@ rm -rf $p.old
 "
     done
     unpack+="rm -rf $(push_quote "$rtmp")"
-    if ! push_ssh "$host" "$unpack"; then
+    if ! push_ssh "$host" "$unpack" </dev/null; then
         log_error "[$host] could not unpack the payload"
-        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" || true
+        push_ssh "$host" "rm -rf $(push_quote "$rtmp")" </dev/null || true
         return 1
     fi
 

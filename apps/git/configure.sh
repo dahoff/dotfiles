@@ -68,6 +68,12 @@ _maybe_run_git_setup() {
         return 0
     fi
 
+    # A reset leaves .gitconfig.local alone, and git-setup writes it
+    if [[ "${DOTFILES_RESET:-}" == 1 ]]; then
+        log_info "Skipping git-setup during a reset; run 'git-setup' manually to configure identity"
+        return 0
+    fi
+
     if [[ ! -t 0 ]]; then
         log_warn "No interactive terminal detected; skipping git-setup. Run 'git-setup' manually to configure identity"
         return 0

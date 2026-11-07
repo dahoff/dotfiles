@@ -305,6 +305,7 @@ deploy_tool_dropin() {
     elif ! sync_deploy_dropin "$name" "$(basename "$dropin")" "$dropin_src" "$dropin_dest"; then
         RESULTS+=("$target|$name drop-in|FAIL")
         EXIT_CODE=1
+        [[ "${DOTFILES_RESET:-}" != 1 ]] || RESET_FAILED=true
     fi
 }
 
@@ -401,9 +402,12 @@ release_dropin_records() {
         items=$(records_items "$app" "$src" "$dest" "" true 2>/dev/null) || items=edited
         [[ -n "$items" ]] || continue
         keep=true
-        msg="$dest is not managed by $app in this profile and has local edits; it was left in place and its records are kept"
-        log_warn "$msg"
-        SYNC_WARNINGS+=("$msg")
+        # A reset forgets the records and says so itself (reset_finish)
+        if [[ "${DOTFILES_RESET:-}" != 1 ]]; then
+            msg="$dest is not managed by $app in this profile and has local edits; it was left in place and its records are kept"
+            log_warn "$msg"
+            SYNC_WARNINGS+=("$msg")
+        fi
     done < <(records_list "$app")
     [[ "$found" != true || "$keep" == true ]] || records_remove "$app"
 }
@@ -1456,7 +1460,11 @@ main() {
     run_all "$PROFILE_ARG"
     # Only a reset that got as far as deploying the configs has anything to finish
     if [[ "$COMMAND" == "pull" && "${DOTFILES_RESET:-}" == 1 && "$CONFIGS_DEPLOYED" == true ]]; then
-        reset_finish
+        if [[ "$RESET_FAILED" == true ]]; then
+            log_error "A drop-in could not be reset, so the reset is not finished; run 'dotfiles init' again"
+        else
+            reset_finish
+        fi
     fi
 
     # Pending packages are only worked out by pull
