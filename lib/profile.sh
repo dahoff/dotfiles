@@ -623,14 +623,29 @@ prepare_overlays() {
     mkdir -p "$STAGE_ROOT" || return 1
     : > "$STRATEGIES_FILE"
 
+    # Only committed content deploys: read the dotfiles repo (APPS_DIR) and the hosts
+    # repo (layers, strategies) from an export of HEAD. HOSTS_DIR, DOTFILES_REPO and
+    # HOST_YAML stay the real paths, which add writes to.
+    local dotfiles_tree hosts_tree="" host_rel=""
+    dotfiles_tree=$(repo_committed_tree "$DOTFILES_REPO") || return 1
+    APPS_DIR="$dotfiles_tree/apps"
+    if [[ -n "$HOSTS_DIR" ]]; then
+        hosts_tree=$(repo_committed_tree "$HOSTS_DIR") || return 1
+    fi
+    [[ -z "$HOST_YAML" ]] || host_rel="${HOST_YAML#"$HOSTS_DIR"/}"
+
     local p
     for p in "${HOSTS_PROFILE_CHAIN[@]}"; do
-        LAYER_ROOTS+=("$HOSTS_DIR/profiles/$p")
-        hosts_parse_files_map "$HOSTS_DIR/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
+        LAYER_ROOTS+=("$hosts_tree/profiles/$p")
+        # A profile that is not committed yet has nothing to deploy
+        [[ -f "$hosts_tree/profiles/$p.yaml" ]] || continue
+        hosts_parse_files_map "$hosts_tree/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
     done
     if [[ -n "$HOST_YAML" ]]; then
-        LAYER_ROOTS+=("$(dirname "$HOST_YAML")")
-        hosts_parse_files_map "$HOST_YAML" >> "$STRATEGIES_FILE" || return 1
+        LAYER_ROOTS+=("$(dirname "$hosts_tree/$host_rel")")
+        if [[ -f "$hosts_tree/$host_rel" ]]; then
+            hosts_parse_files_map "$hosts_tree/$host_rel" >> "$STRATEGIES_FILE" || return 1
+        fi
     fi
 
     local -a dirs=()
@@ -646,7 +661,7 @@ prepare_overlays() {
             [[ -d "$app_path" ]] || continue
             app=$(basename "$app_path")
             if ! list_contains "$app" "${dirs[@]}"; then
-                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$HOSTS_DIR"/}: not in the package list"
+                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$hosts_tree"/}: not in the package list"
             fi
         done
     done

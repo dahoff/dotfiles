@@ -122,7 +122,7 @@ add_show_merged() {
     if [[ "$i" -ge 0 ]]; then
         layer_path="${ADD_ROOTS[$i]}/apps/$dir/files/$src"
     else
-        layer_path="$APPS_DIR/$dir/files/$src"
+        layer_path="$DOTFILES_REPO/apps/$dir/files/$src"
     fi
     echo "  Merged files can't be accepted here; edit $layer_path by hand"
 }

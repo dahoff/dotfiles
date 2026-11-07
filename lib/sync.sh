@@ -51,7 +51,8 @@ sync_unlock() {
 sync_git_bounded() {
     local path="$1"
     shift
-    local -a envs=(GIT_TERMINAL_PROMPT=0)
+    # LC_ALL=C: callers match git's messages
+    local -a envs=(GIT_TERMINAL_PROMPT=0 LC_ALL=C)
     if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
         local ssh_cmd="ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
         [[ "$SYNC_BATCH" == true ]] && ssh_cmd+=" -o BatchMode=yes"
@@ -63,14 +64,13 @@ sync_git_bounded() {
 }
 
 # Fast-forward-only pull of one repo.
-# Returns 0 on success or when there is nothing to pull; on failure returns 1
-# and prints the reason (first line of git's stderr, max 120 chars) on stdout.
+# Returns 0 on success or when there is nothing to pull. On failure prints the
+# reason (first line of git's stderr, max 120 chars) on stdout and returns 2 when
+# the pull is blocked (diverged, or local changes would be overwritten), else 1.
 sync_pull_repo() {
     local path="$1"
     # Only a repo rooted at PATH itself (a pushed copy inside a tracked $HOME is not)
-    local top
-    top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 0
-    [[ "$(cd "$top" && pwd -P)" == "$(cd "$path" && pwd -P)" ]] || return 0
+    sync_is_rooted_repo "$path" || return 0
     git -C "$path" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || return 0
 
     local before after err
@@ -80,6 +80,7 @@ sync_pull_repo() {
         local line
         line=$(printf '%s\n' "$err" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -m1 -v '^$' || true)
         printf '%s\n' "${line:0:120}"
+        printf '%s\n' "$err" | grep -qiE 'would be overwritten|Not possible to fast-forward|diverg' && return 2
         return 1
     fi
     after=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
@@ -89,6 +90,62 @@ sync_pull_repo() {
         log_info "Already up to date: $path"
     fi
     return 0
+}
+
+# Succeed if PATH is the root of its own git repo (a pushed copy inside a
+# tracked $HOME is not)
+sync_is_rooted_repo() {
+    local top
+    top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
+    [[ "$(cd "$top" && pwd -P)" == "$(cd "$1" && pwd -P)" ]]
+}
+
+# Print the directory to deploy PATH from: an export of its HEAD, so only committed
+# content deploys. A repo with no git (or a pushed copy inside another repo) is
+# deployed as it stands, so PATH itself is printed. Fails, with an error, for a git
+# repo that cannot be exported (no commits). The export is made once per path in
+# $WORK_DIR and reused. Exported files keep their modes; export-ignore applies.
+# Usage: repo_committed_tree PATH
+repo_committed_tree() {
+    local path="$1"
+    if ! sync_is_rooted_repo "$path"; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    local key out
+    key=$(printf '%s' "$(cd "$path" && pwd -P)" | cksum | cut -d' ' -f1)
+    out="$WORK_DIR/export/$key"
+    if [[ ! -f "$out/.exported" ]]; then
+        if ! git -C "$path" rev-parse --verify -q 'HEAD^{commit}' >/dev/null 2>&1; then
+            log_error "$path has no commits, so there is nothing to deploy from it (commit something there first)"
+            return 1
+        fi
+        rm -rf "$out"
+        mkdir -p "$out"
+        if ! { git -C "$path" archive HEAD | tar -x -C "$out"; } 2>/dev/null; then
+            rm -rf "$out"
+            log_error "could not export the committed files of $path"
+            return 1
+        fi
+        : > "$out/.exported"
+    fi
+    printf '%s\n' "$out"
+}
+
+# Warn about uncommitted changes in a git repo rooted at PATH: they are not
+# deployed. Names up to 10 files. Silent for a clean repo or one with no git.
+# Usage: repo_warn_dirty PATH
+repo_warn_dirty() {
+    local path="$1" line n=0 shown=""
+    sync_is_rooted_repo "$path" || return 0
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        n=$((n + 1))
+        [[ $n -gt 10 ]] || shown+="${shown:+, }${line:3}"
+    done < <(git --no-optional-locks -C "$path" status --porcelain -uall 2>/dev/null)
+    [[ $n -gt 0 ]] || return 0
+    [[ $n -le 10 ]] || shown+=", and $((n - 10)) more"
+    log_warn "$path has uncommitted changes that are not deployed: $shown"
 }
 
 # Install the command symlink and the login drop-in.
@@ -152,25 +209,22 @@ sync_clear_report() {
     rm -f "$dir/report"
 }
 
-# Print the commit of a clean git repo rooted at PATH.
-# Fails for anything else: not a repo, a pushed copy, uncommitted changes.
-sync_clean_head() {
-    local path="$1" top changes
-    top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
-    [[ "$(cd "$top" && pwd -P)" == "$(cd "$path" && pwd -P)" ]] || return 1
-    changes=$(git --no-optional-locks -C "$path" status --porcelain 2>/dev/null) || return 1
-    [[ -z "$changes" ]] || return 1
-    git -C "$path" rev-parse HEAD 2>/dev/null
+# Print the commit of a git repo rooted at PATH; what deploys is HEAD, whatever
+# the working tree holds. Fails for anything else (not a repo, a pushed copy, no
+# commits): those cannot be told from a commit.
+sync_head() {
+    sync_is_rooted_repo "$1" || return 1
+    git -C "$1" rev-parse HEAD 2>/dev/null
 }
 
 # Print one line identifying what a sync would deploy, or fail when that cannot
-# be told from the repos (see sync_clean_head), so the sync must run in full.
+# be told from the repos (see sync_head), so the sync must run in full.
 # Reads globals DOTFILES_REPO, HOSTS_DIR, HOSTNAME_ARG, PROFILE_ARG and SHELL_SCRIPTS_DIR.
 sync_fingerprint() {
     local dotfiles_head hosts_head="none"
-    dotfiles_head=$(sync_clean_head "$DOTFILES_REPO") || return 1
+    dotfiles_head=$(sync_head "$DOTFILES_REPO") || return 1
     if [[ -n "$HOSTS_DIR" ]]; then
-        hosts_head=$(sync_clean_head "$HOSTS_DIR") || return 1
+        hosts_head=$(sync_head "$HOSTS_DIR") || return 1
     fi
     printf '%s %s %s %s %s %s\n' "$dotfiles_head" "$hosts_head" "$HOSTS_DIR" \
         "${HOSTNAME_ARG:-$(hosts_local_name)}" "$PROFILE_ARG" "$SHELL_SCRIPTS_DIR"

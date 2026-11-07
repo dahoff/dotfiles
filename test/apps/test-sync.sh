@@ -136,12 +136,14 @@ git -C "$WORK/dotfiles" add LOCALONLY
 git -C "$WORK/dotfiles" commit -q -m "local commit"
 LOCAL_SHA=$(git -C "$WORK/dotfiles" rev-parse HEAD)
 author_commit OTHER three
+rm -f "$HOME/.vimrc" "$HOME/.bashrc.d/90-dotfiles.sh"
 run pull
-[[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
-[[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
-[[ "$OUT" != *"operation(s) failed"* ]] || fail "pull failure counted as failed operation: $OUT"
+[[ $RC -eq 1 ]] || fail "a diverged pull should stop with 1, got $RC: $OUT"
+[[ "$OUT" == *"pull blocked"* && "$OUT" == *"git pull --rebase"* && "$OUT" == *"$WORK/dotfiles"* && "$OUT" == *"dotfiles pull"* ]] \
+    || fail "no instructions for a blocked pull: $OUT"
 [[ "$(git -C "$WORK/dotfiles" rev-parse HEAD)" == "$LOCAL_SHA" ]] || fail "local HEAD moved"
-pass "diverged pull warns, repo untouched"
+[[ ! -e "$HOME/.bashrc.d/90-dotfiles.sh" && ! -e "$HOME/.vimrc" ]] || fail "a blocked pull deployed something"
+pass "diverged pull stops, repo untouched, nothing deployed"
 
 # Case 5
 info "Case 5: dirty conflicting tree"
@@ -149,13 +151,19 @@ git -C "$WORK/dotfiles" fetch -q
 git -C "$WORK/dotfiles" reset -q --hard '@{u}'
 author_commit PULLTEST changed-upstream
 echo changed-locally > "$WORK/dotfiles/PULLTEST"
+rm -f "$HOME/.bashrc.d/90-dotfiles.sh"
 run pull
-[[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
-[[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
+[[ $RC -eq 1 ]] || fail "a pull that would overwrite local changes should stop with 1, got $RC: $OUT"
+[[ "$OUT" == *"pull blocked"* && "$OUT" == *"git pull --rebase"* ]] || fail "no instructions for a blocked pull: $OUT"
 [[ "$(cat "$WORK/dotfiles/PULLTEST")" == "changed-locally" ]] || fail "local modification lost"
+[[ ! -e "$HOME/.bashrc.d/90-dotfiles.sh" ]] || fail "a blocked pull deployed something"
 git -C "$WORK/dotfiles" diff --quiet && fail "git diff is empty"
-git -C "$WORK/dotfiles" checkout -q -- PULLTEST
-pass "dirty tree kept, warning shown"
+# Staged, the change blocks the same way
+git -C "$WORK/dotfiles" add PULLTEST
+run pull
+[[ $RC -eq 1 && "$OUT" == *"git pull --rebase"* ]] || fail "staged change did not block: rc=$RC: $OUT"
+git -C "$WORK/dotfiles" reset -q --hard
+pass "dirty tree kept, pull stopped with instructions"
 
 # Case 5b
 info "Case 5b: user autoStash/rebase config is ignored"
@@ -164,8 +172,8 @@ git -C "$WORK/dotfiles" config rebase.autoStash true
 git -C "$WORK/dotfiles" config pull.rebase true
 echo changed-locally > "$WORK/dotfiles/PULLTEST"
 run pull
-[[ $RC -eq 0 ]] || fail "sync should still succeed: $OUT"
-[[ "$OUT" == *"pull failed"* ]] || fail "no pull failed warning: $OUT"
+[[ $RC -eq 1 ]] || fail "expected the pull to stop: rc=$RC: $OUT"
+[[ "$OUT" == *"pull blocked"* ]] || fail "no blocked message: $OUT"
 [[ "$(cat "$WORK/dotfiles/PULLTEST")" == "changed-locally" ]] || fail "local modification lost"
 [[ -z "$(git -C "$WORK/dotfiles" stash list)" ]] || fail "a stash entry was created"
 git -C "$WORK/dotfiles" checkout -q -- PULLTEST
@@ -242,6 +250,9 @@ else
 (setsid sleep 4711 >/dev/null 2>&1 &)
 exit 0
 EOS
+    chmod +x "$WORK/dotfiles/apps/sleeptest/configure.sh"
+    git -C "$WORK/dotfiles" add apps/sleeptest
+    git -C "$WORK/dotfiles" commit -q -m "sleeptest"
     cat > "$T/hosts-dir/profiles/sleeper.yaml" <<'EOS'
 packages:
   - name: sleeptest
@@ -582,20 +593,161 @@ expect_skip pull
 pass "commits in the dotfiles and hosts repos each trigger a full sync"
 
 # Case 30
-info "Case 30: uncommitted changes run in full and deploy"
+info "Case 30: uncommitted changes are named and not deployed"
 VIMSRC="$WORK/dotfiles/apps/vim/files/.vimrc"
 echo '" fp-local-edit' >> "$VIMSRC"
-expect_full pull
-grep -q 'fp-local-edit' "$VIMRC" || fail "uncommitted edit not deployed"
-git -C "$WORK/dotfiles" checkout -q -- apps/vim/files/.vimrc
-expect_full pull
-if grep -q 'fp-local-edit' "$VIMRC"; then fail "reverted edit still deployed"; fi
-echo untracked > "$HOSTS_FP/UNTRACKED"
-expect_full pull
-rm -f "$HOSTS_FP/UNTRACKED"
-expect_full pull
 expect_skip pull
-pass "dirty repos deploy their edits, and reverting them deploys again"
+[[ "$OUT" == *"uncommitted changes that are not deployed"* && "$OUT" == *"apps/vim/files/.vimrc"* ]] \
+    || fail "dirty dotfiles repo not named by pull: $OUT"
+fp_run pull --force
+[[ $RC -eq 0 ]] || fail "forced pull failed: $OUT"
+[[ -f "$VIMRC" ]] || fail "forced pull did not deploy"
+if grep -q 'fp-local-edit' "$VIMRC"; then fail "uncommitted edit deployed"; fi
+fp_run status
+[[ "$OUT" == *"not deployed"* && "$OUT" == *"apps/vim/files/.vimrc"* ]] || fail "status does not name the file: $OUT"
+git -C "$WORK/dotfiles" checkout -q -- apps/vim/files/.vimrc
+fp_run pull
+[[ "$OUT" != *"not deployed"* ]] || fail "clean repo still warned: $OUT"
+# An untracked file in the hosts repo is named too, and changes nothing
+echo untracked > "$HOSTS_FP/UNTRACKED"
+expect_skip pull
+[[ "$OUT" == *"UNTRACKED"* ]] || fail "untracked hosts file not named: $OUT"
+rm -f "$HOSTS_FP/UNTRACKED"
+expect_skip pull
+pass "uncommitted files are named, never deployed, and do not trigger a sync"
+
+# Case 30b
+info "Case 30b: a layer file deploys once committed; a staged save that is reset never does"
+LAYER_DIR="$HOSTS_FP/profiles/fptest/apps/vim/files"
+mkdir -p "$LAYER_DIR"
+echo '" fp-layer' > "$LAYER_DIR/.vimrc"
+fp_run pull --force
+[[ $RC -eq 0 ]] || fail "pull failed: $OUT"
+[[ "$OUT" == *"profiles/fptest/apps/vim/files/.vimrc"* && "$OUT" == *"not deployed"* ]] || fail "layer file not named: $OUT"
+if grep -q 'fp-layer' "$VIMRC"; then fail "untracked layer file deployed"; fi
+git -C "$HOSTS_FP" add -A
+fp_run pull --force
+if grep -q 'fp-layer' "$VIMRC"; then fail "staged layer file deployed"; fi
+fp_run status
+[[ "$OUT" == *"not deployed"* ]] || fail "status silent on staged file: $OUT"
+cp "$VIMRC" "$T/vimrc-before"
+git -C "$HOSTS_FP" reset -q --hard
+git -C "$HOSTS_FP" clean -qfd
+fp_run pull --force
+cmp -s "$VIMRC" "$T/vimrc-before" || fail "live file changed after the staged save was discarded"
+mkdir -p "$LAYER_DIR"
+echo '" fp-layer' > "$LAYER_DIR/.vimrc"
+hosts_commit "layer"
+expect_full pull
+grep -q 'fp-layer' "$VIMRC" || fail "committed layer file not deployed"
+# Undo it, so later cases see the plain repo
+git -C "$HOSTS_FP" rm -q -r profiles/fptest/apps
+hosts_commit "unlayer"
+expect_full pull
+if grep -q 'fp-layer' "$VIMRC"; then fail "removed layer file still deployed"; fi
+expect_skip pull
+pass "only committed layer files deploy"
+
+# Case 30c
+info "Case 30c: a repo with no commits stops the pull and changes nothing"
+HOSTS_NC="$T/hosts-nc"
+mkdir -p "$HOSTS_NC/profiles"
+cp "$HOSTS_FP/profiles/fptest.yaml" "$HOSTS_NC/profiles/"
+git -C "$HOSTS_NC" init -q
+cat > "$T/config-nc" <<CFG
+hosts_dir: $HOSTS_NC
+hostname: nohost
+profile: fptest
+CFG
+echo sentinel > "$VIMRC"
+RC=0
+OUT=$(DOTFILES_CONFIG="$T/config-nc" PATH="$SUDOBIN:$PATH" "$WORK/dotfiles/dotfiles" pull --no-backup --skip-git-setup 2>&1) || RC=$?
+[[ $RC -eq 1 ]] || fail "expected exit 1 for a repo with no commits, got $RC: $OUT"
+[[ "$OUT" == *"no commits"* ]] || fail "reason not given: $OUT"
+[[ "$(cat "$VIMRC")" == "sentinel" ]] || fail "live file changed: $OUT"
+pass "no commits: exit 1, nothing deployed"
+
+# Case 30d
+info "Case 30d: a network failure warns and deploys HEAD; a blocked hosts repo stops too"
+REAL_URL_FP=$(git -C "$WORK/dotfiles" remote get-url origin)
+git -C "$WORK/dotfiles" remote set-url origin "$T/does-not-exist.git"
+echo '" fp-dirty' >> "$VIMSRC"
+rm -f "$VIMRC"
+fp_run pull --force
+[[ $RC -eq 0 ]] || fail "network failure should not stop the pull: $OUT"
+[[ "$OUT" == *"pull failed"* ]] || fail "no warning: $OUT"
+[[ -f "$VIMRC" ]] || fail "HEAD was not deployed"
+if grep -q 'fp-dirty' "$VIMRC"; then fail "dirty edit deployed after a network failure"; fi
+git -C "$WORK/dotfiles" checkout -q -- apps/vim/files/.vimrc
+git -C "$WORK/dotfiles" remote set-url origin "$REAL_URL_FP"
+# A hosts repo that has diverged from its upstream
+HOSTS_UP="$T/hosts-fp-up.git"
+git clone -q --bare "$HOSTS_FP" "$HOSTS_UP"
+git -C "$HOSTS_FP" remote add origin "$HOSTS_UP"
+git -C "$HOSTS_FP" fetch -q origin
+git -C "$HOSTS_FP" branch -q --set-upstream-to="origin/$(git -C "$HOSTS_FP" symbolic-ref --short HEAD)"
+HOSTS_OTHER="$T/hosts-fp-other"
+git clone -q "$HOSTS_UP" "$HOSTS_OTHER"
+echo up > "$HOSTS_OTHER/UPSIDE"
+git -C "$HOSTS_OTHER" add -A
+git -C "$HOSTS_OTHER" -c user.name=tester -c user.email=tester@example.com commit -q -m upside
+git -C "$HOSTS_OTHER" push -q origin HEAD
+echo down > "$HOSTS_FP/DOWNSIDE"
+hosts_commit "downside"
+rm -f "$VIMRC"
+fp_run pull --force
+[[ $RC -eq 1 ]] || fail "diverged hosts repo should stop the pull, got $RC: $OUT"
+[[ "$OUT" == *"git pull --rebase"* && "$OUT" == *"$HOSTS_FP"* ]] || fail "hosts repo not named in the instructions: $OUT"
+[[ ! -f "$VIMRC" ]] || fail "deployed despite a blocked hosts pull"
+# Put the hosts repo back as it was
+git -C "$HOSTS_FP" reset -q --hard HEAD~1
+git -C "$HOSTS_FP" remote remove origin
+fp_run pull --force
+[[ $RC -eq 0 ]] || fail "pull after the repair failed: $OUT"
+pass "network failure deploys HEAD; a blocked hosts pull stops"
+
+# Case 30e
+info "Case 30e: repo_committed_tree: export of HEAD, modes kept, copy inside another repo used as is"
+(
+    source "$ROOT_DIR/lib/logging.sh"
+    source "$ROOT_DIR/lib/sync.sh"
+    WORK_DIR="$T/ct-work"
+    mkdir -p "$WORK_DIR"
+    CT="$T/ct-repo"
+    mkdir -p "$CT/sub"
+    git -C "$CT" init -q
+    printf '#!/bin/sh\n' > "$CT/tool.sh"
+    chmod +x "$CT/tool.sh"
+    echo committed > "$CT/f"
+    echo kept > "$CT/sub/g"
+    printf 'ignored export-ignore\n' > "$CT/.gitattributes"
+    echo x > "$CT/ignored"
+    git -C "$CT" add -A
+    git -C "$CT" -c user.name=t -c user.email=t@example.com commit -q -m c
+    echo dirty > "$CT/f"
+    echo new > "$CT/untracked"
+    out=$(repo_committed_tree "$CT")
+    [[ "$out" != "$CT" && "$(cat "$out/f")" == committed ]] || fail "export is not HEAD: $out"
+    [[ ! -e "$out/untracked" && ! -e "$out/ignored" ]] || fail "untracked or export-ignore file exported"
+    [[ -x "$out/tool.sh" ]] || fail "executable bit lost"
+    [[ "$(repo_committed_tree "$CT")" == "$out" ]] || fail "export not reused"
+    # a subdirectory of a repo is a copy, not a repo of its own
+    [[ "$(repo_committed_tree "$CT/sub")" == "$CT/sub" ]] || fail "copy inside a repo not used as it stands"
+    # a plain directory
+    mkdir "$T/ct-plain"
+    [[ "$(repo_committed_tree "$T/ct-plain")" == "$T/ct-plain" ]] || fail "plain dir not used as it stands"
+    # no commits
+    mkdir "$T/ct-empty"
+    git -C "$T/ct-empty" init -q
+    rc=0
+    repo_committed_tree "$T/ct-empty" >/dev/null 2>&1 || rc=$?
+    [[ $rc -eq 1 ]] || fail "no commits should fail with 1, got $rc"
+    # dirty warning: silent for a copy, names files for a repo
+    [[ -z "$(repo_warn_dirty "$CT/sub" 2>&1)" ]] || fail "warned for a copy inside a repo"
+    w=$(repo_warn_dirty "$CT" 2>&1)
+    [[ "$w" == *"f"* && "$w" == *"untracked"* && "$w" == *"not deployed"* ]] || fail "dirty warning: $w"
+)
+pass "repo_committed_tree and repo_warn_dirty"
 
 # Case 31
 info "Case 31: a failed sync is retried with the same commit"

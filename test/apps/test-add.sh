@@ -228,15 +228,18 @@ cmp -s "$EXTRACT" "$HOST_EXTRACT" || fail "not copied to the host layer"
 [[ "$(git -C "$H" rev-parse HEAD)" == "$HEAD_H" ]] || fail "add committed"
 [[ -z "$(git -C "$R" status --porcelain)" ]] || fail "dotfiles repo changed"
 run status
+has_line "not deployed"
+no_line "local edits:     none"
+git -C "$H" commit -q -m "keep edit"
+run status
 has_line "local edits:     none"
-pass "staged only"
+pass "staged only; a status before the commit still sees the edit"
 
-info "Case 13: the staged change deploys, and the next add has nothing to do"
+info "Case 13: the committed change deploys, and the next add has nothing to do"
 do_pull
 cmp -s "$HOST_EXTRACT" "$EXTRACT" || fail "live file differs from the layer"
 add n
 has_line "No local edits"
-git -C "$H" commit -q -m "keep edit"
 pass "clean afterwards"
 
 info "Case 14: a file already in a layer defaults back to it; a lower layer warns"
@@ -378,7 +381,7 @@ echo '# keep me' >> "$FFIND"
 add y ""
 has_line "Staged $FF_REL"
 run status
-has_line "local edits:     none"
+has_line "not deployed"
 git -C "$H" reset -q -- "$FF_REL"
 rm -f "$H/$FF_REL"
 run status

@@ -811,13 +811,22 @@ sync_warn_edits() {
     log_warn "$n file(s) have local edits, run 'dotfiles add' to review them"
 }
 
-# Pull one repo; a failure is a warning, not a sync failure
+# Pull one repo. A failure (the network, say) is a warning, not a sync failure, and
+# HEAD still deploys. A blocked pull (diverged, or local changes in the way) stops
+# the run: deploying would hide that the repo is behind.
 sync_pull_one() {
-    local path="$1" reason
-    if ! reason=$(sync_pull_repo "$path"); then
-        SYNC_WARNINGS+=("$path: pull failed ($reason)")
-        log_warn "$path: pull failed ($reason)"
+    local path="$1" reason rc=0
+    reason=$(sync_pull_repo "$path") || rc=$?
+    [[ $rc -ne 0 ]] || return 0
+    if [[ $rc -eq 2 ]]; then
+        log_error "$path: pull blocked ($reason); nothing was deployed"
+        echo "Commit or set aside your changes there, then bring it up to date:" >&2
+        echo "  cd $path && git pull --rebase" >&2
+        echo "Push if the repo has commits of its own, then run: dotfiles pull" >&2
+        exit 1
     fi
+    SYNC_WARNINGS+=("$path: pull failed ($reason)")
+    log_warn "$path: pull failed ($reason)"
 }
 
 # Describe a repo for status: git branch/sha/dirty, a pushed copy, or neither
@@ -872,6 +881,8 @@ cmd_status() {
         log_error "Hosts dir not found or not a directory: $HOSTS_DIR"
         ok=false
     fi
+    repo_warn_dirty "$DOTFILES_REPO"
+    [[ -z "$HOSTS_DIR" || ! -d "$HOSTS_DIR" ]] || repo_warn_dirty "$HOSTS_DIR"
     if [[ -f "$config_file" ]]; then
         printf '%-17s%s\n' "config:" "$config_file"
     else
@@ -1109,6 +1120,10 @@ main() {
     # Nothing changed since the last complete pull: nothing to do. Worked out
     # after the pull, and before deploying so a change made meanwhile is seen.
     local fingerprint=""
+    if [[ "$COMMAND" == "pull" ]]; then
+        repo_warn_dirty "$DOTFILES_REPO"
+        [[ -z "$HOSTS_DIR" ]] || repo_warn_dirty "$HOSTS_DIR"
+    fi
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
         fingerprint=$(sync_fingerprint) || fingerprint=""
         if ! has_global_flag --force && sync_is_complete "$fingerprint"; then
