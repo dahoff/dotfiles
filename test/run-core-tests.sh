@@ -346,7 +346,9 @@ fi
 # Test R1: upgrade creates a timestamped snapshot
 info "Test R1: Upgrade creates snapshot"
 ./configure.sh uninstall --quiet &>/dev/null || true
-rm -rf "$HOME/.bak"
+# Files left by earlier tests would make the install itself take a snapshot (a deploy over
+# a file with no record always does), so start from none
+rm -rf "$HOME/.bak" "$HOME/.tmux.conf" "$HOME/.tmux" "$HOME/.bashrc.d/50-tmux.sh"
 ./configure.sh install &>/dev/null || true
 ./configure.sh upgrade --force &>/dev/null || true
 SNAP=$(find "$HOME/.bak/tmux" -mindepth 1 -maxdepth 1 -type d -name "[0-9]*_[0-9]*" | head -1)
@@ -409,6 +411,9 @@ rm -rf "$HOME/.bak" "$HOME/.tmux" "$HOME/.tmux.conf"
 ./configure.sh install &>/dev/null || true
 # As if the install predated this file: state does not list it yet
 sed -i '\#\.tmux-cheatsheet\.txt$#d' "$STATE_DIR/apps/tmux.yaml"
+# ... nor do the records of the file's two saved copies
+sed -i '/^\.tmux-cheatsheet\.txt\t/d' "$STATE_DIR/records/tmux/manifest.tsv"
+rm -f "$STATE_DIR/records/tmux/repo/.tmux-cheatsheet.txt" "$STATE_DIR/records/tmux/review/.tmux-cheatsheet.txt"
 echo "user file" > "$HOME/.tmux/.tmux-cheatsheet.txt"
 ./configure.sh upgrade --force &>/dev/null || true
 if [[ "$(cat "$HOME/.tmux/.tmux-cheatsheet.txt" 2>/dev/null)" == "user file" ]]; then
