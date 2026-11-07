@@ -146,7 +146,7 @@ out=$(DOTFILES_KEPT_FILE="$KEPT" ./configure.sh deploy --stage "$STAGE" --no-bac
 [[ "$(jq -r .liveOnly "$LIVE")" == 4 ]] || fail "local-only key lost"
 [[ "$(jq -r .model "$RECORD")" == "$(jq -r .model "$REPO_SETTINGS")" ]] || fail "repo copy took the held value"
 [[ "$(cat "$KEPT")" == "$LIVE" ]] || fail "kept file: $(cat "$KEPT")"
-[[ "$(state_version)" == conflict ]] || fail "version: $(state_version)"
+[[ "$(state_version)" == conflict:stage-v2 ]] || fail "version: $(state_version)"
 [[ "$out" == *'["model"]'* ]] || fail "key not named: $out"
 pass "conflict held per key"
 

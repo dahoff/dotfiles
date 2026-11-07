@@ -281,7 +281,7 @@ for run in 1 2 3; do
     content "$R/review/a.conf" a1 "run $run"
     has "kept your edit to $LIVE/a.conf"
     complete_absent "conflict run $run"
-    [[ "$(state)" == conflict ]] || fail "state: $(state)"
+    [[ "$(state)" == conflict:* ]] || fail "state: $(state)"
 done
 RC=0
 OUT=$("$REPO/dotfiles" status 2>&1) || RC=$?
@@ -298,7 +298,7 @@ content "$R/repo/a.conf" a2
 content "$R/review/a.conf" a2
 hasnt "kept your edit"
 complete_written "resolved"
-[[ "$(state)" != conflict ]] || fail "state still conflict"
+[[ "$(state)" != conflict:* ]] || fail "state still conflict"
 rm "$LIVE/a.conf"
 pull_ok
 has "Already up to date"
@@ -316,7 +316,7 @@ pull_ok
 content "$LIVE/a.conf" mine
 content "$R/repo/a.conf" a1
 hasnt "kept your edit"
-[[ "$(state)" != conflict ]] || fail "state: $(state)"
+[[ "$(state)" != conflict:* ]] || fail "state: $(state)"
 complete_written "repo reverted"
 flagged a.conf
 pass "repo revert ends the conflict, edit stays and is flagged"
@@ -397,7 +397,7 @@ cp "$RT/files/a.conf" "$R/repo/a.conf"
 pull_ok
 content "$LIVE/a.conf" mine
 hasnt "kept your edit"
-[[ "$(state)" != conflict ]] || fail "state: $(state)"
+[[ "$(state)" != conflict:* ]] || fail "state: $(state)"
 complete_written "dismissed conflict"
 # And a later repo change conflicts again, against that version
 repo_set a.conf a3
@@ -475,7 +475,7 @@ for run in 1 2 3; do
     has "kept your edit to $LIVE/settings.json"
     has '"model"' "run $run: key not named"
     complete_absent "merged conflict run $run"
-    [[ "$(state)" == conflict ]] || fail "state: $(state)"
+    [[ "$(state)" == conflict:* ]] || fail "state: $(state)"
 done
 [[ "$(items settings.json "$LIVE/settings.json" "$RT/files/settings.json")" == *'conflict	["model"]'* ]] || fail "add would not see it"
 pass "per-key conflict"
@@ -487,7 +487,7 @@ pull_ok
 [[ "$(jv "$R/repo/settings.json" .model)" == '"m2"' ]] || fail "repo copy"
 hasnt "kept your edit"
 complete_written "merged resolved"
-[[ "$(state)" != conflict ]] || fail "state"
+[[ "$(state)" != conflict:* ]] || fail "state"
 pass "merged conflict resolved by hand"
 
 info "Merged: conflict, then the repo goes back to the old value"
@@ -580,7 +580,7 @@ content "$R/review/a.conf" a2
 snapshot_with a.conf mine
 snapshot_with settings.json mine
 hasnt "kept your edit"
-[[ "$(state)" != conflict ]] || fail "state"
+[[ "$(state)" != conflict:* ]] || fail "state"
 complete_written "--force"
 pull_ok
 has "Already up to date"
@@ -651,7 +651,7 @@ has "kept your edit to $LIVE/b.conf"
 has "kept your edit to $LIVE/settings.json"
 hasnt "kept your edit to $LIVE/a.conf"
 complete_absent "remaining conflicts"
-[[ "$(state)" == conflict ]] || fail "state: $(state)"
+[[ "$(state)" == conflict:* ]] || fail "state: $(state)"
 pull_ok --force "$LIVE/settings.json"
 [[ "$(jv "$LIVE/settings.json" .model)" == '"m2"' ]] || fail "not forced"
 [[ "$(jv "$LIVE/settings.json" .localOnly)" == 1 ]] || fail "local-only key lost"
@@ -661,7 +661,7 @@ pull_ok --force "$LIVE/b.conf"
 content "$LIVE/b.conf" b2
 pull_ok
 hasnt "kept your edit"
-[[ "$(state)" != conflict ]] || fail "state after the last conflict: $(state)"
+[[ "$(state)" != conflict:* ]] || fail "state after the last conflict: $(state)"
 complete_written "all forced"
 pass "--force PATH one file at a time"
 

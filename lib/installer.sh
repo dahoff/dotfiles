@@ -11,7 +11,6 @@ source "$ROOT_DIR/lib/yaml.sh"
 source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/backup.sh"
 source "$ROOT_DIR/lib/state.sh"
-source "$ROOT_DIR/lib/deployed.sh"
 source "$ROOT_DIR/lib/records.sh"
 source "$ROOT_DIR/lib/overlay.sh"
 
@@ -422,13 +421,14 @@ deploy_all_files() {
     fi
 }
 
-# Version recorded in state: incomplete when any file failed, conflict when any file or
-# key was held back. Neither matches a real version, so the next pull looks again.
+# Version recorded in state: incomplete when any file failed, conflict:VERSION when any file
+# or key was held back. Neither matches a real version, so the next pull looks again; the
+# version after "conflict:" lets status tell a further repo update from the held one.
 installed_version() {
     if [[ $FILE_FAILURES -gt 0 ]]; then
         echo incomplete
     elif [[ $FILES_HELD -gt 0 ]]; then
-        echo conflict
+        echo "conflict:$APP_VERSION"
     else
         echo "$APP_VERSION"
     fi
@@ -479,8 +479,25 @@ cmd_deploy() {
     fi
 }
 
+# After pull --force PATH: a state that says conflicts are held, for this very repo version,
+# says so no more once none are left, or status would go on reporting the one just taken.
+# Left alone when the repo has moved on since, or when a file can't be compared.
+installer_settle_conflict_state() {
+    local i src dest items
+    [[ "$(state_get_version "$APP_NAME" 2>/dev/null)" == "conflict:$APP_VERSION" ]] || return 0
+    for i in "${!CONFIG_FILES[@]}"; do
+        src="${CONFIG_FILES[$i]}"
+        dest="${CONFIG_DESTS[$i]}"
+        installer_is_skipped "$src" && return 0
+        items=$(records_items "$APP_NAME" "$src" "$dest" "$(installer_src "$src")" false 2>/dev/null) || return 0
+        [[ $'\n'"$items" != *$'\n'conflict$'\t'* ]] || return 0
+    done
+    state_set_version "$APP_NAME" "$APP_VERSION"
+}
+
 # pull --force PATH: take the repo's version of that one file, leaving the others for the
-# next pull. The state stays as it was, because the others weren't looked at.
+# next pull. The state stays as it was, because the others weren't looked at, except that
+# a held conflict that was the last one is let go.
 cmd_force_path() {
     local dest="$DOTFILES_FORCE_PATH" i
     local -a managed=()
@@ -499,7 +516,9 @@ cmd_force_path() {
             installer_deploy_one "$i" upgrade || return 1
         fi
     done
-    [[ $FILE_FAILURES -eq 0 ]]
+    [[ $FILE_FAILURES -eq 0 ]] || return 1
+    is_dry_run || installer_settle_conflict_state
+    return 0
 }
 
 # Install operation
@@ -632,6 +651,29 @@ cmd_upgrade() {
     return 0
 }
 
+# Name the files uninstall would restore or remove that differ from the repo's version, the
+# unreviewed and the dismissed alike. Without records there is nothing to compare with, so
+# every file is a candidate.
+installer_warn_uninstall_changes() {
+    local src dest strategy items tracked=false
+    local -a changed=()
+    while IFS=$'\t' read -r src dest strategy; do
+        tracked=true
+        [[ -e "$dest" ]] || continue
+        # A file that can't be compared counts as changed
+        items=$(records_items "$APP_NAME" "$src" "$dest" "" true 2>/dev/null) || items=changed
+        [[ -z "$items" ]] || changed+=("$dest")
+    done < <(records_list "$APP_NAME")
+    if [[ "$tracked" != true ]]; then
+        log_warn "No records of what dotfiles deployed for $APP_NAME, so local changes can't be told apart; a snapshot of every managed file is taken first"
+    elif [[ ${#changed[@]} -gt 0 ]]; then
+        log_warn "Local changes in these files will be replaced or removed; a snapshot of them is taken first:"
+        for dest in "${changed[@]}"; do
+            log_warn "  $dest"
+        done
+    fi
+}
+
 # Uninstall operation
 cmd_uninstall() {
     log_info "Uninstalling $APP_NAME..."
@@ -649,6 +691,14 @@ cmd_uninstall() {
     # Get installed files from state
     local files
     mapfile -t files < <(state_get_files "$APP_NAME")
+
+    # Local changes would be lost: say which, and keep a copy of every managed file first,
+    # whatever --no-backup says. Nothing is restored if that fails.
+    installer_warn_uninstall_changes
+    if ! installer_snapshot ${files[@]+"${files[@]}"}; then
+        log_error "Could not take a snapshot of the managed files, so nothing was restored or removed"
+        return 1
+    fi
 
     log_info "Restoring ${#files[@]} original file(s)..."
 
@@ -669,7 +719,6 @@ cmd_uninstall() {
     # Remove state file
     if ! is_dry_run; then
         state_remove "$APP_NAME"
-        deployed_remove "$APP_NAME"
         records_remove "$APP_NAME"
     fi
 

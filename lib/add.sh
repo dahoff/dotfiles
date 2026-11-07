@@ -21,6 +21,8 @@ declare -a ADD_ROOTS=()
 declare -a ADD_EFFECTIVE_ROOTS=()
 declare -a ADD_NOT_OFFERED=()
 ADD_PUBLIC_ROOT=""
+# Set for a file with no layer to save to: the reason, as a sentence
+ADD_NO_LAYER_REASON=""
 # Repo root -> 1, for each repo something was staged in
 declare -A ADD_STAGED=()
 # --all: also ask about what was dismissed
@@ -91,6 +93,7 @@ add_build_layers() {
     ADD_ROOTS=()
     ADD_EFFECTIVE_ROOTS=()
     ADD_NOT_OFFERED=()
+    ADD_NO_LAYER_REASON=""
     ADD_PUBLIC_ROOT="$DOTFILES_REPO"
     if [[ -n "$HOSTS_DIR" ]]; then
         host_root="$HOSTS_DIR/hosts/$OVERLAY_HOST"
@@ -126,6 +129,42 @@ add_build_layers() {
         ADD_LABELS+=("dotfiles default (PUBLIC repo, all machines)")
         ADD_ROOTS+=("$ADD_PUBLIC_ROOT")
     fi
+}
+
+# The layers for a tool's drop-in: its source is a file of the public repo's apps/TOOL/
+# only, so the hosts repo's layers don't apply, neither for saving nor for what wins.
+# Usage: add_build_dropin_layers DIR
+add_build_dropin_layers() {
+    local i
+    local -a labels=() roots=() reasons=()
+    add_build_layers "$1"
+    for i in "${!ADD_ROOTS[@]}"; do
+        [[ "${ADD_ROOTS[$i]}" == "$ADD_PUBLIC_ROOT" ]] || continue
+        labels+=("${ADD_LABELS[$i]}")
+        roots+=("${ADD_ROOTS[$i]}")
+    done
+    for i in "${!ADD_NOT_OFFERED[@]}"; do
+        case "${ADD_NOT_OFFERED[$i]}" in
+            *"the public repo"*) reasons+=("${ADD_NOT_OFFERED[$i]}") ;;
+        esac
+    done
+    ADD_LABELS=(${labels[@]+"${labels[@]}"})
+    ADD_ROOTS=(${roots[@]+"${roots[@]}"})
+    ADD_NOT_OFFERED=(${reasons[@]+"${reasons[@]}"})
+    ADD_EFFECTIVE_ROOTS=("$ADD_PUBLIC_ROOT")
+}
+
+# No layers, for a file with nowhere to save to: the login drop-in, whose source is dotfiles'
+# own code, or a tool's drop-in outside its files/ folder. A saved copy could never take
+# effect there.
+# Usage: add_build_no_layers REASON
+add_build_no_layers() {
+    add_build_layers ""
+    ADD_LABELS=()
+    ADD_ROOTS=()
+    ADD_NOT_OFFERED=()
+    ADD_EFFECTIVE_ROOTS=()
+    ADD_NO_LAYER_REASON="$1 Dismiss keeps your version."
 }
 
 # Why layers are missing from the list, if any are
@@ -477,6 +516,8 @@ add_review_item() {
 
     if [[ "$path" != "[]" && "$(add__show_key "$dest" "$path")" == "(absent)" ]]; then
         no_save="You deleted this repo-managed key. Saving isn't possible; dismiss keeps it deleted."
+    elif [[ -n "$ADD_NO_LAYER_REASON" ]]; then
+        no_save="$ADD_NO_LAYER_REASON"
     elif [[ ${#ADD_ROOTS[@]} -eq 0 ]]; then
         no_save="Saving isn't possible here: no repo on this host can take it. To keep this edit elsewhere, copy it by hand."
     elif grep -qxF -- "$src" "${stage_file%/files/"$src"}/skip" 2>/dev/null; then
@@ -513,22 +554,33 @@ add_review_item() {
     done
 }
 
-# The items of one file that add asks about: what records_items says, less what a layer's
-# working copy already holds. A conflict needs the winning layer to hold it: anywhere lower,
-# pull would go on warning about it, so add has to go on asking.
-# Usage: add_file_items APP DIR SRC DEST STAGE_FILE ALL
-add_file_items() {
+# Every item of one file that differs from the repo, sorted: what records_items says, with
+# the kind changed to saved for what a layer's working copy already holds, which waits for a
+# commit. A conflict needs the winning layer to hold it: anywhere lower, pull would go on
+# warning about it, so it stays a conflict. Reads ADD_ROOTS: call add_build_layers first.
+# Prints KIND<TAB>PATH_JSON; KIND is edited, conflict, dismissed (with ALL) or saved.
+# Usage: add_classify_file APP DIR SRC DEST STAGE_FILE ALL
+add_classify_file() {
     local app="$1" dir="$2" src="$3" dest="$4" stage_file="$5" all="$6" items kind path
     items=$(records_items "$app" "$src" "$dest" "$stage_file" "$all" 2>/dev/null) || return 1
     [[ -n "$items" ]] || return 0
     while IFS=$'\t' read -r kind path; do
         if [[ "$kind" == conflict ]]; then
-            add__winner_holds "$dir" "$src" "$path" "$dest" && continue
-        else
-            add_saved_elsewhere "$dir" "$src" "$path" "$dest" && continue
+            if add__winner_holds "$dir" "$src" "$path" "$dest"; then kind=saved; fi
+        elif add_saved_elsewhere "$dir" "$src" "$path" "$dest"; then
+            kind=saved
         fi
         printf '%s\t%s\n' "$kind" "$path"
     done <<< "$items"
+}
+
+# The items of one file that add asks about: all but the saved ones.
+# Usage: add_file_items APP DIR SRC DEST STAGE_FILE ALL
+add_file_items() {
+    local items
+    items=$(add_classify_file "$@") || return 1
+    [[ -z "$items" ]] || printf '%s\n' "$items" | awk -F'\t' '$1 != "saved"'
+    return 0
 }
 
 # The name an app's records and state go under: the same lookup as the installer's. The
@@ -540,11 +592,47 @@ add_app_name() {
     yaml_get name unknown
 }
 
-# Number of files that have something for add to ask about, among the apps in this profile:
-# what pull points at must be something add can clear. Comparing against the records alone,
-# so it works after a pull that stopped early.
+# The drop-ins dotfiles manages here, one per line: APP, DIR, SRC, DEST, STAGE_FILE and, for
+# one that has no layer file to save to, the reason (else "-"); "-" stands for an empty
+# field. The tools' drop-ins are those of the tools in this profile; the login drop-in is
+# always there. Their source is the committed content, like every other file's.
+add_dropin_units() {
+    local tree="" idx dropin src dir stage reason
+    tree=$(repo_committed_tree "$DOTFILES_REPO" 2>/dev/null) || tree=""
+    for idx in "${!PKG_NAMES[@]}"; do
+        dropin="${PKG_CUSTOM_DROPIN[$idx]}"
+        [[ -n "$dropin" ]] || continue
+        src=$(basename "$dropin")
+        dir="${dropin%%/*}"
+        stage="-"
+        [[ -z "$tree" ]] || stage="$tree/apps/$dropin"
+        reason="-"
+        if [[ "$dropin" != "$dir/files/$src" ]]; then
+            reason="This drop-in is at apps/$dropin, outside the tool's files/ folder where layers hold files, so there is nowhere to save it."
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${PKG_NAMES[$idx]}" "$dir" "$src" "$SHELL_SCRIPTS_DIR/$src" "$stage" "$reason"
+    done
+    stage="-"
+    [[ -z "$tree" ]] || stage="$tree/lib/login.sh"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' dotfiles - 90-dotfiles.sh "$SHELL_SCRIPTS_DIR/90-dotfiles.sh" "$stage" \
+        "This file comes from dotfiles' own program code (lib/login.sh), not from a layer file, so there is nowhere to save it."
+}
+
+# Fill the layer lists for one drop-in unit (see add_dropin_units)
+# Usage: add_build_unit_layers DIR REASON
+add_build_unit_layers() {
+    if [[ "$2" == "-" ]]; then
+        add_build_dropin_layers "$1"
+    else
+        add_build_no_layers "$2"
+    fi
+}
+
+# Number of files that have something for add to ask about, among the apps in this profile
+# and their drop-ins: what pull points at must be something add can clear. Comparing against
+# the records alone, so it works after a pull that stopped early.
 add_count_edits() {
-    local idx dir app src dest strategy items count=0
+    local idx dir app src dest strategy items count=0 line stage reason
     if [[ ${#PKG_NAMES[@]} -eq 0 ]]; then
         OVERLAY_HOST="${HOSTNAME_ARG:-$(hosts_local_name)}"
         load_packages_for_profile "$PROFILE_ARG" "$OVERLAY_HOST" >/dev/null 2>&1 || { echo 0; return 0; }
@@ -560,6 +648,13 @@ add_count_edits() {
             [[ -z "$items" ]] || count=$((count + 1))
         done < <(records_list "$app")
     done
+    while IFS=$'\t' read -r app dir src dest stage reason; do
+        add_build_unit_layers "$dir" "$reason"
+        while IFS=$'\t' read -r src dest strategy; do
+            items=$(add_file_items "$app" "$dir" "$src" "$dest" "" false) || items=edited
+            [[ -z "$items" ]] || count=$((count + 1))
+        done < <(records_list "$app")
+    done < <(add_dropin_units)
     echo "$count"
 }
 
@@ -576,6 +671,47 @@ add_closing_message() {
             printf '  %s\n' "$file"
         done < <(git -C "$top" diff --cached --name-only -z 2>/dev/null)
         echo "  git -C $top diff --cached   (or: lazygit -p $top)"
+    done
+}
+
+# True once add had something to show or say
+ADD_FOUND=false
+
+# Review the records of one app, with the layers already built. A drop-in names its one
+# source and the committed file to compare with; an app's files are in its stage.
+# Quitting ends the run, from here.
+# Usage: add__review_app APP DIR STAGE [SRC STAGE_FILE]
+add__review_app() {
+    local app="$1" dir="$2" stage="$3" only_src="${4:-}" only_stage="${5:-}"
+    local line src dest strategy items stage_file kind path rc
+    local -a entries=() item_lines=()
+    mapfile -t entries < <(records_list "$app")
+    for line in ${entries[@]+"${entries[@]}"}; do
+        IFS=$'\t' read -r src dest strategy <<< "$line"
+        if [[ -n "$only_src" ]]; then
+            [[ "$src" == "$only_src" ]] || continue
+            stage_file="$only_stage"
+        else
+            stage_file="$stage/files/$src"
+        fi
+        if ! items=$(add_file_items "$app" "$dir" "$src" "$dest" "$stage_file" "$ADD_ALL"); then
+            ADD_FOUND=true
+            log_warn "Could not compare $(add_tilde "$dest") with its records, so it isn't offered (is it valid JSON?)"
+            continue
+        fi
+        [[ -n "$items" ]] || continue
+        ADD_FOUND=true
+        mapfile -t item_lines <<< "$items"
+        for line in "${item_lines[@]}"; do
+            IFS=$'\t' read -r kind path <<< "$line"
+            rc=0
+            add_review_item "$app" "$dir" "$src" "$dest" "$stage_file" "$kind" "$path" || rc=$?
+            if [[ $rc -eq 2 ]]; then
+                echo
+                echo "Stopped: anything unanswered is asked again next time"
+                exit 0
+            fi
+        done
     done
 }
 
@@ -600,46 +736,36 @@ cmd_add() {
     prepare_overlays "add" || { log_error "Invalid overlay configuration"; exit 1; }
     SYNC_CLEANUP+=("add_closing_message")
 
-    local idx dir app stage src dest strategy items found=false rc=0 line kind path
+    local idx dir app stage src dest
+    ADD_FOUND=false
     for idx in "${!PKG_NAMES[@]}"; do
         dir="${PKG_CONFIG_DIR[$idx]}"
         [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
         app=$(add_app_name "$dir")
         stage="$STAGE_ROOT/apps/$dir"
         if ! overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
-            found=true
+            ADD_FOUND=true
             log_warn "Could not put together the repo's files for $app, so its edits aren't offered"
             continue
         fi
         add_build_layers "$dir"
 
-        local -a entries=()
-        mapfile -t entries < <(records_list "$app")
-        for line in ${entries[@]+"${entries[@]}"}; do
-            IFS=$'\t' read -r src dest strategy <<< "$line"
-            if ! items=$(add_file_items "$app" "$dir" "$src" "$dest" "$stage/files/$src" "$ADD_ALL"); then
-                found=true
-                log_warn "Could not compare $(add_tilde "$dest") with its records, so it isn't offered (is it valid JSON?)"
-                continue
-            fi
-            [[ -n "$items" ]] || continue
-            found=true
-            local -a item_lines=()
-            mapfile -t item_lines <<< "$items"
-            for line in "${item_lines[@]}"; do
-                IFS=$'\t' read -r kind path <<< "$line"
-                rc=0
-                add_review_item "$app" "$dir" "$src" "$dest" "$stage/files/$src" "$kind" "$path" || rc=$?
-                if [[ $rc -eq 2 ]]; then
-                    echo
-                    echo "Stopped: anything unanswered is asked again next time"
-                    exit 0
-                fi
-            done
-        done
+        add__review_app "$app" "$dir" "$stage"
     done
 
-    if [[ "$found" != true ]]; then
+    # The drop-ins, which have no stage: their source is the committed file itself
+    # (read into a list first: the loop's own input would be what the prompts read)
+    local reason unit
+    local -a units=()
+    mapfile -t units < <(add_dropin_units)
+    for unit in ${units[@]+"${units[@]}"}; do
+        IFS=$'\t' read -r app dir src dest stage reason <<< "$unit"
+        [[ "$stage" != "-" ]] || stage=""
+        add_build_unit_layers "$dir" "$reason"
+        add__review_app "$app" "$dir" "" "$src" "$stage"
+    done
+
+    if [[ "$ADD_FOUND" != true ]]; then
         log_success "No local edits"
     fi
     exit 0

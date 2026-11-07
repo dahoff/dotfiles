@@ -132,10 +132,10 @@ repo_committed_tree() {
     printf '%s\n' "$out"
 }
 
-# Warn about uncommitted changes in a git repo rooted at PATH: they are not
-# deployed. Names up to 10 files. Silent for a clean repo or one with no git.
-# Usage: repo_warn_dirty PATH
-repo_warn_dirty() {
+# The uncommitted files of a git repo rooted at PATH, as one line naming up to 10. Nothing
+# for a clean repo or one with no git.
+# Usage: repo_dirty_list PATH
+repo_dirty_list() {
     local path="$1" line n=0 shown=""
     sync_is_rooted_repo "$path" || return 0
     while IFS= read -r line; do
@@ -145,7 +145,16 @@ repo_warn_dirty() {
     done < <(git --no-optional-locks -C "$path" status --porcelain -uall 2>/dev/null)
     [[ $n -gt 0 ]] || return 0
     [[ $n -le 10 ]] || shown+=", and $((n - 10)) more"
-    log_warn "$path has uncommitted changes that are not deployed: $shown"
+    printf '%s\n' "$shown"
+}
+
+# Warn about uncommitted changes in a git repo rooted at PATH: they are not
+# deployed. Silent for a clean repo or one with no git.
+# Usage: repo_warn_dirty PATH
+repo_warn_dirty() {
+    local shown
+    shown=$(repo_dirty_list "$1")
+    [[ -z "$shown" ]] || log_warn "$1 has uncommitted changes that are not deployed: $shown"
 }
 
 # Install the command symlink and the login drop-in.
@@ -182,12 +191,45 @@ sync_self_install() {
         src="$tree/lib/login.sh"
     fi
 
-    mkdir -p "$scripts_dir"
-    if ! cmp -s "$src" "$scripts_dir/90-dotfiles.sh"; then
-        cp "$src" "$scripts_dir/90-dotfiles.sh"
-        chmod 0644 "$scripts_dir/90-dotfiles.sh"
-        log_debug "Installed login drop-in: $scripts_dir/90-dotfiles.sh"
+    sync_deploy_dropin dotfiles 90-dotfiles.sh "$src" "$scripts_dir/90-dotfiles.sh" || true
+}
+
+# Deploy one drop-in through the records, like any managed file: an edit to it is kept and
+# reviewed, and a conflict is held. A file that is there but wasn't put there by dotfiles
+# is snapshotted before it's replaced, to ~/.bak/APP.
+# Reads globals DOTFILES_RESET, DOTFILES_FORCE_PATH, HELD_CONFLICTS and SYNC_WARNINGS.
+# Usage: sync_deploy_dropin APP NAME SRC_PATH DEST
+sync_deploy_dropin() {
+    local app="$1" name="$2" src="$3" dest="$4" force="" ts
+    if [[ "${DOTFILES_RESET:-}" == 1 ]]; then
+        force=reset
+    elif [[ -n "${DOTFILES_FORCE_PATH:-}" ]]; then
+        # --force PATH touches that one file
+        [[ "$(abs_path "$dest")" == "$DOTFILES_FORCE_PATH" ]] || return 0
+        force=force
+    elif has_global_flag --force; then
+        force=force
     fi
+    if [[ -f "$dest" ]] && ! cmp -s "$src" "$dest" \
+        && { [[ -n "$force" ]] || records_is_fresh "$app" "$name" "$dest" replace; }; then
+        ts=$(timestamp)
+        if ! { backup_init "$app" "$HOME/.bak/$app" && backup_create_snapshot "$dest" "$HOME/.bak/$app" "$ts" >/dev/null; }; then
+            log_error "Could not take a snapshot of $dest, so it was left as it is"
+            return 1
+        fi
+    fi
+    RECORDS_FORCE="$force"
+    if ! records_deploy "$app" "$name" "$src" "$dest" 0644 replace; then
+        RECORDS_FORCE=""
+        log_error "Failed to deploy the drop-in $dest; the next pull tries it again"
+        return 1
+    fi
+    RECORDS_FORCE=""
+    case "$RECORDS_DEPLOY_RESULT" in
+        fresh | apply) log_debug "Installed drop-in: $dest" ;;
+        keep) log_info "Keeping local edit: $dest" ;;
+        conflict) note_kept_edit "$dest" ;;
+    esac
 }
 
 # Record that a sync ran

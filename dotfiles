@@ -25,7 +25,7 @@ source "$SCRIPT_DIR/lib/profile.sh"
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/sync.sh"
 source "$SCRIPT_DIR/lib/state.sh"
-source "$SCRIPT_DIR/lib/deployed.sh"
+source "$SCRIPT_DIR/lib/backup.sh"
 source "$SCRIPT_DIR/lib/records.sh"
 source "$SCRIPT_DIR/lib/versions.sh"
 source "$SCRIPT_DIR/lib/add.sh"
@@ -264,30 +264,94 @@ run_phase_custom_installs() {
             fi
         fi
 
-        # Deploy the dropin only when the tool is there: no check, or the check
-        # passes after the install step. An existing copy is never removed.
-        if [[ -n "$dropin" && -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
-            log_info "[$target] $name: drop-in held until the tool is installed"
-        elif [[ -n "$dropin" ]]; then
-            local dropin_src="$APPS_DIR/$dropin"
-            local dropin_dest="$SHELL_SCRIPTS_DIR/$(basename "$dropin")"
-            if [[ -f "$dropin_src" ]]; then
-                if [[ "$dry_run" == true ]]; then
-                    log_info "[$target] [DRY-RUN] Would install dropin: $dropin_dest"
-                else
-                    mkdir -p "$SHELL_SCRIPTS_DIR"
-                    cp "$dropin_src" "$dropin_dest"
-                    chmod 0644 "$dropin_dest"
-                    log_debug "Installed dropin: $dropin_dest"
-                fi
-            fi
-        fi
+        deploy_tool_dropin "$idx"
     done
 
     if [[ "$has_custom" == true ]]; then
         RESULTS+=("$target|custom-installs|ok")
     fi
+    unmanaged_dropins_release
     return 0
+}
+
+# Deploy a tool's drop-in, only when the tool is there: no check, or the check passes after
+# the install step. It goes through the records, so an edit to it is kept and reviewed. An
+# existing copy is never removed. With --force PATH, only the drop-in at PATH.
+# Usage: deploy_tool_dropin INDEX
+deploy_tool_dropin() {
+    local idx="$1" target="local"
+    local name="${PKG_NAMES[$idx]}"
+    local check="${PKG_CUSTOM_CHECK[$idx]}"
+    local dropin="${PKG_CUSTOM_DROPIN[$idx]}"
+    [[ -n "$dropin" ]] || return 0
+    local dropin_dest
+    dropin_dest="$SHELL_SCRIPTS_DIR/$(basename "$dropin")"
+    if [[ -n "${DOTFILES_FORCE_PATH:-}" && "$DOTFILES_FORCE_PATH" != "$(abs_path "$dropin_dest")" ]]; then
+        return 0
+    fi
+    if [[ -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
+        log_info "[$target] $name: drop-in held until the tool is installed"
+        return 0
+    fi
+    local tree dropin_src
+    # From the committed content, like every other file
+    tree=$(repo_committed_tree "$DOTFILES_REPO") || { EXIT_CODE=1; return 0; }
+    dropin_src="$tree/apps/$dropin"
+    [[ -f "$dropin_src" ]] || return 0
+    if is_dry_run; then
+        log_info "[$target] [DRY-RUN] Would install dropin: $dropin_dest"
+    elif ! sync_deploy_dropin "$name" "$(basename "$dropin")" "$dropin_src" "$dropin_dest"; then
+        RESULTS+=("$target|$name drop-in|FAIL")
+        EXIT_CODE=1
+    fi
+}
+
+# Record a conflict this pull held back: it doesn't count as complete, and the summary says so
+# Usage: note_kept_edit PATH
+note_kept_edit() {
+    local kept="$1"
+    HELD_CONFLICTS+=("$kept")
+    SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add', or 'dotfiles pull --force $kept' to take the repo's)")
+}
+
+# Tools whose drop-in dotfiles no longer manages: dropped from the profile, or no longer
+# listing one. The file stays where it is and its records go; an edit nobody reviewed is
+# warned about, as for any file the repo stops managing.
+unmanaged_dropins_release() {
+    is_dry_run && return 0
+    local tool idx dir src dest strategy managed
+    for dir in "$APPS_DIR"/*/; do
+        tool=$(basename "$dir")
+        [[ -f "$dir/config.yaml" && ! -f "$dir/configure.sh" ]] || continue
+        grep -Eq "^[[:space:]]+dropin:" "$dir/config.yaml" || continue
+        managed=false
+        for idx in "${!PKG_NAMES[@]}"; do
+            [[ "${PKG_NAMES[$idx]}" != "$tool" ]] || managed=true
+        done
+        [[ "$managed" != true ]] || continue
+        release_dropin_records "$tool"
+    done
+    # A listed tool that no longer has a drop-in
+    for idx in "${!PKG_NAMES[@]}"; do
+        [[ -z "${PKG_CUSTOM_DROPIN[$idx]}" && -z "${PKG_CONFIG_DIR[$idx]}" ]] || continue
+        release_dropin_records "${PKG_NAMES[$idx]}"
+    done
+}
+
+# Warn about unreviewed edits to the drop-ins recorded for APP, then forget them
+# Usage: release_dropin_records APP
+release_dropin_records() {
+    local app="$1" src dest strategy found=false msg
+    while IFS=$'\t' read -r src dest strategy; do
+        found=true
+        [[ -e "$dest" ]] || continue
+        if records_has_edits "$app" "$src" "$dest"; then
+            msg="$dest is no longer managed by $app and has unreviewed edits; it was left in place"
+            log_warn "$msg"
+            SYNC_WARNINGS+=("$msg")
+        fi
+    done < <(records_list "$app")
+    [[ "$found" != true ]] || records_remove "$app"
 }
 
 # Phase 3: Deploy configs via app installers
@@ -400,6 +464,13 @@ force_path_is_managed() {
             [[ "$dest" != "$DOTFILES_FORCE_PATH" ]] || return 0
         done < "$APPS_DIR/$dir/config.yaml"
     done
+    # The drop-ins deploy through the records too
+    for idx in "${!PKG_NAMES[@]}"; do
+        [[ -n "${PKG_CUSTOM_DROPIN[$idx]}" ]] || continue
+        dest=$(abs_path "$SHELL_SCRIPTS_DIR/$(basename "${PKG_CUSTOM_DROPIN[$idx]}")")
+        [[ "$dest" != "$DOTFILES_FORCE_PATH" ]] || return 0
+    done
+    [[ "$(abs_path "$SHELL_SCRIPTS_DIR/90-dotfiles.sh")" != "$DOTFILES_FORCE_PATH" ]] || return 0
     return 1
 }
 
@@ -466,6 +537,11 @@ run_all() {
         # Phase 2: Custom installs
         log_info "[$target] Phase 2: Custom installs"
         run_phase_custom_installs || true
+    elif [[ "$COMMAND" == "pull" ]]; then
+        # --force PATH may name a drop-in
+        for idx in "${!PKG_NAMES[@]}"; do
+            deploy_tool_dropin "$idx"
+        done
     fi
 
     # Phase 3: Config deployments
@@ -962,6 +1038,43 @@ status_age() {
     fi
 }
 
+# Sort one file's items into the status lists (ST_UNREVIEWED, ST_CONFLICTS, ST_DISMISSED
+# and ST_SAVED), each entry DEST<TAB>PATH_JSON. A file that can't be read counts as edited.
+# The layers must be built (add_build_layers).
+# Usage: status_collect APP DIR SRC DEST STAGE_FILE
+status_collect() {
+    local items kind path
+    items=$(add_classify_file "$1" "$2" "$3" "$4" "$5" true 2>/dev/null) || items=$'edited\t[]'
+    [[ -n "$items" ]] || return 0
+    while IFS=$'\t' read -r kind path; do
+        case "$kind" in
+            edited)    ST_UNREVIEWED+=("$4"$'\t'"$path") ;;
+            conflict)  ST_CONFLICTS+=("$4"$'\t'"$path") ;;
+            dismissed) ST_DISMISSED+=("$4"$'\t'"$path") ;;
+            saved)     ST_SAVED+=("$4"$'\t'"$path") ;;
+        esac
+    done <<< "$items"
+}
+
+# Print one labelled list of status entries (DEST<TAB>PATH_JSON), or "label: none"
+# Usage: status_section LABEL NOTE ENTRY...
+status_section() {
+    local label="$1" note="$2" entry dest path suffix
+    shift 2
+    if [[ $# -eq 0 ]]; then
+        echo "$label: none"
+        return 0
+    fi
+    echo "$label:  ($note)"
+    for entry in "$@"; do
+        IFS=$'\t' read -r dest path <<< "$entry"
+        suffix=""
+        [[ "$path" == "[]" ]] || suffix="  key $path"
+        [[ "$label" != conflicts ]] || suffix+="  (the repo changed it too)"
+        printf '  %s%s\n' "$(add_tilde "$dest")" "$suffix"
+    done
+}
+
 # dotfiles status: read-only summary. Takes no lock, never pulls, installs or
 # writes state (SYNC_RECORD stays false). Resolution errors are printed and
 # the command still exits 0.
@@ -987,8 +1100,6 @@ cmd_status() {
         log_error "Hosts dir not found or not a directory: $HOSTS_DIR"
         ok=false
     fi
-    repo_warn_dirty "$DOTFILES_REPO"
-    [[ -z "$HOSTS_DIR" || ! -d "$HOSTS_DIR" ]] || repo_warn_dirty "$HOSTS_DIR"
     if [[ -f "$config_file" ]]; then
         printf '%-17s%s\n' "config:" "$config_file"
     else
@@ -1036,11 +1147,11 @@ cmd_status() {
             ok=false
         fi
     fi
+    local -a status_updates=() ST_UNREVIEWED=() ST_CONFLICTS=() ST_DISMISSED=() ST_SAVED=()
     if [[ "$ok" == true ]]; then
         echo "apps:"
-        local idx dir name app_name stage ver_fresh ver_state state_file state line
-        local rec_src rec_dest rec_strategy items
-        local -a status_edits=()
+        local idx dir name app_name stage ver_fresh ver_state state_file state stage_file
+        local src dest strategy reason repo_copy held
         for idx in "${!PKG_NAMES[@]}"; do
             dir="${PKG_CONFIG_DIR[$idx]}"
             [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
@@ -1051,48 +1162,75 @@ cmd_status() {
             if overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
                 ver_fresh=$(cat "$stage/version" 2>/dev/null || true)
             fi
+            add_build_layers "$dir"
+            held=$(( ${#ST_CONFLICTS[@]} + ${#ST_SAVED[@]} ))
+            while IFS=$'\t' read -r src dest strategy; do
+                stage_file=""
+                [[ -z "$ver_fresh" ]] || stage_file="$stage/files/$src"
+                status_collect "$app_name" "$dir" "$src" "$dest" "$stage_file"
+            done < <(records_list "$app_name")
+            held=$(( ${#ST_CONFLICTS[@]} + ${#ST_SAVED[@]} - held ))
             state_file=$(state_get_file "$app_name")
             if [[ ! -f "$state_file" ]]; then
                 state="not installed"
             else
                 ver_state=$(state_get_version "$app_name" 2>/dev/null || true)
-                if [[ "$ver_state" == "conflict" ]]; then
+                if [[ -n "$ver_fresh" && "$ver_state" == "conflict:$ver_fresh" && "$held" -gt 0 ]]; then
                     state="conflict held back"
-                elif [[ -n "$ver_fresh" && "$ver_state" == "$ver_fresh" && "$ver_state" != "incomplete" ]]; then
+                elif [[ -n "$ver_fresh" && ( "$ver_state" == "$ver_fresh" || "$ver_state" == "conflict:$ver_fresh" ) ]]; then
+                    # Nothing is held any more: resolved in add, or taken with pull --force PATH
                     state="up to date"
                 else
+                    # Includes a conflict from an older repo version: the repo has moved on
                     state="update available"
                 fi
             fi
             printf '  %-9s %s\n' "$name" "$state"
-            if [[ -n "$ver_fresh" ]]; then
-                while IFS=$'\t' read -r rec_src rec_dest rec_strategy; do
-                    items=$(records_items "$app_name" "$rec_src" "$rec_dest" "$stage/files/$rec_src" false 2>/dev/null) || items=edited
-                    if [[ $'\n'"$items" == *$'\n'conflict$'\t'* ]]; then
-                        status_edits+=("$(printf 'conflict\t%s\t%s' "$rec_src" "$rec_dest")")
-                    elif [[ -n "$items" ]]; then
-                        status_edits+=("$(printf 'edited\t%s\t%s' "$rec_src" "$rec_dest")")
-                    fi
-                done < <(records_list "$app_name")
-            fi
+            [[ "$state" != "update available" ]] || status_updates+=("$name")
         done
-        if ! records_any; then
-            printf '%-17s%s\n' "local edits:" "not tracked yet (run 'dotfiles pull')"
-        elif [[ ${#status_edits[@]} -eq 0 ]]; then
-            printf '%-17s%s\n' "local edits:" "none"
+        # Drop-ins: a tool's, for the tools in this profile, and the login one
+        while IFS=$'\t' read -r app_name dir src dest stage_file reason; do
+            [[ "$stage_file" != "-" ]] || stage_file=""
+            add_build_unit_layers "$dir" "$reason"
+            while IFS=$'\t' read -r src dest strategy; do
+                status_collect "$app_name" "$dir" "$src" "$dest" "$stage_file"
+            done < <(records_list "$app_name")
+        done < <(add_dropin_units)
+        # A drop-in whose committed file is not the one last accepted
+        while IFS=$'\t' read -r app_name dir src dest stage_file reason; do
+            [[ "$stage_file" != "-" && -f "$stage_file" ]] || continue
+            repo_copy=$(records_repo_path "$app_name" "$src" 2>/dev/null) || continue
+            [[ -f "$repo_copy" ]] && ! cmp -s "$stage_file" "$repo_copy" || continue
+            status_updates+=("$app_name drop-in")
+        done < <(add_dropin_units)
+
+        if [[ ${#status_updates[@]} -eq 0 ]]; then
+            echo "updates available: none"
         else
-            echo "local edits:     ('dotfiles add' reviews them)"
-            local kind src dest note
-            for line in "${status_edits[@]}"; do
-                IFS=$'\t' read -r kind src dest <<< "$line"
-                case "$kind" in
-                    conflict) note="  (the repo changed it too)" ;;
-                    merge)    note="  (merged, keys the repo manages differ)" ;;
-                    *)        note="" ;;
-                esac
-                printf '  %s%s\n' "$(add_tilde "$dest")" "$note"
-            done
+            echo "updates available: $(sync_join "${status_updates[@]}")  ('dotfiles pull' brings them in)"
         fi
+        if ! records_any; then
+            echo "unreviewed changes: not tracked yet (run 'dotfiles pull')"
+        else
+            status_section "unreviewed changes" "'dotfiles add' reviews them" ${ST_UNREVIEWED[@]+"${ST_UNREVIEWED[@]}"}
+        fi
+        status_section "conflicts" "you and the repo both changed them; yours is kept" ${ST_CONFLICTS[@]+"${ST_CONFLICTS[@]}"}
+        status_section "dismissed" "kept local on purpose; 'dotfiles add --all' asks again" ${ST_DISMISSED[@]+"${ST_DISMISSED[@]}"}
+        status_section "saved, not committed" "commit what 'dotfiles add' staged, then 'dotfiles pull'" ${ST_SAVED[@]+"${ST_SAVED[@]}"}
+    fi
+    # Not deployed: only committed content is
+    local -a status_dirty=()
+    local repo dirty
+    for repo in "$DOTFILES_REPO" ${HOSTS_DIR:+"$HOSTS_DIR"}; do
+        [[ -d "$repo" ]] || continue
+        dirty=$(repo_dirty_list "$repo")
+        [[ -z "$dirty" ]] || status_dirty+=("$repo: $dirty")
+    done
+    if [[ ${#status_dirty[@]} -eq 0 ]]; then
+        echo "uncommitted files: none"
+    else
+        echo "uncommitted files, not deployed:"
+        printf '  %s\n' "${status_dirty[@]}"
     fi
     return 0
 }
@@ -1233,7 +1371,8 @@ main() {
             sync_pull_one "$DOTFILES_REPO"
             [[ -z "$HOSTS_DIR" ]] || sync_pull_one "$HOSTS_DIR"
         fi
-        if ! is_dry_run && [[ -z "${DOTFILES_FORCE_PATH:-}" ]]; then
+        if ! is_dry_run && { [[ -z "${DOTFILES_FORCE_PATH:-}" ]] \
+            || [[ "$DOTFILES_FORCE_PATH" == "$(abs_path "$SHELL_SCRIPTS_DIR/90-dotfiles.sh")" ]]; }; then
             sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
         fi
         versions_warn_pinned "$DOTFILES_REPO"

@@ -62,13 +62,13 @@ dotfiles push --init user@host
 |---|---|
 | `dotfiles init` | Asks the setup questions, saves the answers, and runs a sync. |
 | `dotfiles sync` | Pulls the repos, installs missing tools, and deploys changed config. Stops early if nothing changed. |
-| `dotfiles status` | Shows the repos, version, host, profile, last sync, missing packages, each app's state, and local edits. Changes nothing. |
+| `dotfiles status` | Shows the repos, version, host, profile, last sync, missing packages and each app's state, then lists updates available, unreviewed changes, conflicts, dismissed differences, saved changes waiting for a commit, and uncommitted repo files, each under its own label. Changes nothing. |
 | `dotfiles add` | Walks through your local edits and stages the ones you accept into a repo. Never commits or pushes. |
 | `dotfiles push HOST...` | Copies the committed repos to each host over ssh and syncs there. Add `--init` for a first-time setup. |
 | `dotfiles versions` | Lists tagged versions. |
 | `dotfiles checkout REF` | Switches to a tag or commit, deploys it, and stays there. `dotfiles checkout main` follows `main` again. |
 | `dotfiles verify` | Checks that every deployed file exists. |
-| `dotfiles uninstall` | Removes deployed config and restores your original files. Installed tools and the `dotfiles` command stay. |
+| `dotfiles uninstall` | Removes deployed config and restores your original files. Lists your local changes first and always takes a snapshot, even with `--no-backup`; if that fails, nothing is restored. Installed tools, the `dotfiles` command and drop-ins stay. |
 | `dotfiles help` | Lists every command and flag. |
 
 Most useful flags:

@@ -210,7 +210,7 @@ cmp -s "$STATE_DIR/records/scripts/repo/extract" "$REPO_EXTRACT" || fail "wrong 
 cmp -s "$STATE_DIR/records/scripts/review/extract" "$EXTRACT" || fail "wrong review copy"
 [[ "$(grep -F "/settings.json" "$STATE_DIR/records/claude/manifest.tsv" | cut -f3)" == merge ]] || fail "merge file not marked"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 pass "recorded"
 
 info "Case 2: an unedited file still updates"
@@ -251,7 +251,7 @@ run pull --force
 cmp -s "$REPO_EXTRACT" "$EXTRACT" || fail "force did not overwrite"
 grep -rlF '# my edit' "$HOME/.bak/scripts" >/dev/null || fail "no snapshot of the edit"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 pass "force overwrites with a backup"
 
 info "Case 6: a matching edit is not an edit"
@@ -259,7 +259,7 @@ echo '# repo update 4' >> "$REPO_EXTRACT"
 cp "$REPO_EXTRACT" "$EXTRACT"
 commit_repo "update extract again"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 do_pull
 cmp -s "$REPO_EXTRACT" "$EXTRACT" || fail "matching file changed"
 cmp -s "$STATE_DIR/records/scripts/repo/extract" "$REPO_EXTRACT" || fail "record not updated"
@@ -363,7 +363,7 @@ cmp -s "$R/apps/bash/files/.bashrc" "$HOME/.bashrc" || fail ".bashrc is not the 
 grep -qF "# my own bashrc" "$HOME/.bak/bash/original/.bashrc" || fail "original lost"
 cut -f2 "$STATE_DIR/records/bash/manifest.tsv" | grep -qxF "$HOME/.bashrc" || fail ".bashrc not recorded"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 echo 'alias mine=1' >> "$HOME/.bashrc"
 run status
 has_line "~/.bashrc"
@@ -791,7 +791,7 @@ cmp -s "$REC/review/a.conf" "$A" || fail "review copy is not live"
 add_all
 has_line "No local edits"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 pass "clean after commit and pull"
 
 info "Review: a merged save writes only that key, creating the layer's JSON if needed"
@@ -884,7 +884,7 @@ edit_s '.objs = [{"b": 2, "a": 1}]'
 add
 has_line "No local edits"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 edit_s '.list = [1, 2, 3]'
 add s 1
 has_line "hides later repo changes"
@@ -1199,7 +1199,7 @@ add
 has_line "No local edits"
 [[ "$(jq -r .mine "$HOME/ad/settings.json")" == existing ]] || fail "existing key lost"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 pass "existing content isn't an edit"
 
 info "Review: Claude Code rewriting settings.json: each value asked once, pull never blocked"
@@ -1510,7 +1510,7 @@ do_pull --hostname namehost
 [[ -f "$STATE_DIR/records/other-name/manifest.tsv" ]] || fail "not recorded under its name: $OUT"
 run status --hostname namehost
 has_line "up to date"
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 F="$HOME/ad/f.conf"
 echo mine >> "$F"
 ADD_ARGS=(--hostname namehost)
@@ -1538,7 +1538,7 @@ run pull --no-backup --no-fetch
 has_line "Already up to date"
 no_line "local edits"
 run status
-has_line "local edits:     none"
+has_line "unreviewed changes: none"
 add
 has_line "No local edits"
 echo mine >> "$A"
