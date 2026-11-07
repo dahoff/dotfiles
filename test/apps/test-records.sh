@@ -257,21 +257,48 @@ m3 "repo object to scalar, live unchanged: one conflict, subtree untouched" \
 m3 "repo scalar to object, live unchanged: one conflict, value untouched" \
     '{"a":5}' '{"a":{"x":1,"y":2}}' '{"a":5}' '{"a":5}' \
     '{"a":5}' '{"a":5}' '{"a":5}' '[["a"]]' '[]'
-m3 "repo object to scalar, live already that scalar: still a conflict" \
+m3 "repo object to scalar, live already that scalar: records only" \
     '{"a":{"x":1}}' '{"a":5}' '{"a":5}' '{"a":{"x":1}}' \
-    '{"a":5}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
-m3 "repo scalar to object, live already that object: still a conflict" \
+    '{"a":5}' '{"a":5}' '{"a":5}' '[]' '[]'
+m3 "repo scalar to object, live already that object: records only" \
     '{"a":5}' '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":5}' \
-    '{"a":{"x":1}}' '{"a":5}' '{"a":5}' '[["a"]]' '[]'
+    '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[]' '[]'
+m3 "repo scalar to object, live the same with reordered keys: records only" \
+    '{"a":5}' '{"a":{"x":1,"y":2}}' '{"a":{"y":2,"x":1}}' '{"a":5}' \
+    '{"a":{"y":2,"x":1}}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '[]' '[]'
+m3 "repo object to array, live already that array: records only" \
+    '{"a":{"x":1}}' '{"a":[1]}' '{"a":[1]}' '{"a":{"x":1}}' \
+    '{"a":[1]}' '{"a":[1]}' '{"a":[1]}' '[]' '[]'
+m3 "records only replaces a review copy that holds something else there" \
+    '{"a":{"x":1}}' '{"a":5}' '{"a":5}' '{"a":{"y":7},"z":0}' \
+    '{"a":5}' '{"a":5}' '{"a":5,"z":0}' '[]' '[]'
+m3 "records only, deep in the tree, siblings still apply" \
+    '{"t":{"a":{"b":1},"s":1}}' '{"t":{"a":5,"s":2}}' '{"t":{"a":5,"s":1}}' '{"t":{"a":{"b":1},"s":1}}' \
+    '{"t":{"a":5,"s":2}}' '{"t":{"a":5,"s":2}}' '{"t":{"a":5,"s":2}}' '[]' '[["t","s"]]'
+m3 "repo object to scalar, live a different scalar: conflict" \
+    '{"a":{"x":1}}' '{"a":5}' '{"a":6}' '{"a":{"x":1}}' \
+    '{"a":6}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
+m3 "repo scalar to object, live a different object: conflict" \
+    '{"a":5}' '{"a":{"x":1}}' '{"a":{"x":1,"y":2}}' '{"a":5}' \
+    '{"a":{"x":1,"y":2}}' '{"a":5}' '{"a":5}' '[["a"]]' '[]'
+m3 "repo object to scalar, live edited inside the object: one conflict at the top" \
+    '{"a":{"x":1}}' '{"a":5}' '{"a":{"x":2}}' '{"a":{"x":1}}' \
+    '{"a":{"x":2}}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
+m3 "repo drops an object, live made it a scalar: conflict, kept" \
+    '{"a":{"x":1}}' '{}' '{"a":5}' '{"a":{"x":1}}' \
+    '{"a":5}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
 m3 "repo object to array is object to plain value" \
     '{"a":{"x":1}}' '{"a":[1]}' '{"a":{"x":1}}' '{"a":{"x":1}}' \
     '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
 m3 "repo object to null is object to plain value" \
     '{"a":{"x":1}}' '{"a":null}' '{"a":{"x":1}}' '{"a":{"x":1}}' \
     '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
-m3 "live object to scalar, repo unchanged: one conflict, live kept" \
+m3 "live object to scalar, repo unchanged: yours is kept, no conflict" \
     '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '{"a":5}' '{"a":{"x":1,"y":2}}' \
-    '{"a":5}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '[["a"]]' '[]'
+    '{"a":5}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '[]' '[]'
+m3 "live object to scalar, repo unchanged, deep: siblings still apply" \
+    '{"t":{"a":{"b":{"c":1}},"s":1}}' '{"t":{"a":{"b":{"c":1}},"s":2}}' '{"t":{"a":5,"s":1}}' '{"t":{"a":{"b":{"c":1}},"s":1}}' \
+    '{"t":{"a":5,"s":2}}' '{"t":{"a":{"b":{"c":1}},"s":2}}' '{"t":{"a":{"b":{"c":1}},"s":2}}' '[]' '[["t","s"]]'
 m3 "live scalar to object, repo unchanged: yours is kept, no conflict" \
     '{"a":5}' '{"a":5}' '{"a":{"x":1}}' '{"a":5}' \
     '{"a":{"x":1}}' '{"a":5}' '{"a":5}' '[]' '[]'
@@ -281,8 +308,11 @@ m3 "live scalar to object, repo changes the scalar: conflict" \
 m3 "live object to array blocks the keys below it" \
     '{"a":{"x":1}}' '{"a":{"x":2}}' '{"a":[1]}' '{"a":{"x":1}}' \
     '{"a":[1]}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
-m3 "live object to null blocks the keys below it" \
+m3 "live object to null, repo unchanged: yours is kept, no conflict" \
     '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":null}' '{"a":{"x":1}}' \
+    '{"a":null}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[]' '[]'
+m3 "live object to null, repo changes inside: conflict" \
+    '{"a":{"x":1}}' '{"a":{"x":2}}' '{"a":null}' '{"a":{"x":1}}' \
     '{"a":null}' '{"a":{"x":1}}' '{"a":{"x":1}}' '[["a"]]' '[]'
 m3 "live scalar in the way of a key the repo adds below it" \
     '{}' '{"a":{"x":1}}' '{"a":5}' '{}' \
@@ -672,7 +702,55 @@ items_is "and only once with all"                    mg s.json "$LIVE" "$STAGE" 
 rec mg s.json merge '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '{"a":5}'
 items_is "repo object to scalar, live equal to repo copy: the conflict still shows" mg s.json "$LIVE" "$STAGE" false "conflict${TAB}[\"a\"]"
 rec mg s.json merge '{"a":{"x":1,"y":2}}' '{"a":{"x":1,"y":2}}' '{"a":7}' '{"a":{"x":1,"y":2}}'
-items_is "live object to scalar: one conflict, no edits under or beside it" mg s.json "$LIVE" "$STAGE" true "conflict${TAB}[\"a\"]"
+items_is "live object to scalar, repo unchanged: one edit at the top, no conflict" mg s.json "$LIVE" "$STAGE" true "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"a":{"x":1,"y":2}}' '{"a":7}' '{"a":7}' '{"a":{"x":1,"y":2}}'
+items_is "live object to scalar, dismissed: hidden"  mg s.json "$LIVE" "$STAGE" false ""
+items_is "live object to scalar, dismissed: shown with all" mg s.json "$LIVE" "$STAGE" true "dismissed${TAB}[\"a\"]"
+rec mg s.json merge '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":5}' '{"a":5}'
+items_is "live already the repo's new scalar: an unreviewed edit, no conflict" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":5}' '{"a":{"x":2}}'
+items_is "live object to scalar, repo changes inside: one conflict, no edit" mg s.json "$LIVE" "$STAGE" true "conflict${TAB}[\"a\"]"
+
+info "records_items: dismissing a structural conflict stops the warning"
+# Dismiss updates the item in the review copy, and in the repo copy from the stage (Task 7)
+dismiss_a() {
+    jq -c --slurpfile stage "$STAGE" \
+        '.a = $stage[0].a' "$R/mg/repo/s.json" > "$T/in/r"
+    jq -c --slurpfile live "$LIVE" \
+        '.a = $live[0].a' "$R/mg/review/s.json" > "$T/in/v"
+    records_set_repo mg s.json "$T/in/r"
+    records_set_review mg s.json "$T/in/v"
+}
+pull_conflicts() {
+    records_merge3 "$R/mg/repo/s.json" "$STAGE" "$LIVE" "$R/mg/review/s.json" | jq -c .conflicts
+}
+dismiss_stops() {
+    local name="$1"
+    items_is "$name: a conflict before the dismiss" mg s.json "$LIVE" "$STAGE" false "conflict${TAB}[\"a\"]"
+    [[ "$(pull_conflicts)" == '[["a"]]' ]] || fail "$name: pull before dismiss: $(pull_conflicts)"
+    dismiss_a
+    [[ "$(pull_conflicts)" == '[]' ]] || fail "$name: pull after dismiss: $(pull_conflicts)"
+    items_is "$name: nothing after the dismiss" mg s.json "$LIVE" "$STAGE" false ""
+    items_is "$name: dismissed with all" mg s.json "$LIVE" "$STAGE" true "dismissed${TAB}${2:-[\"a\"]}"
+    local out
+    out=$(records_merge3 "$R/mg/repo/s.json" "$STAGE" "$LIVE" "$R/mg/review/s.json")
+    json_eq "$(jq -c .live <<<"$out")" "$(cat "$LIVE")" || fail "$name: live moved after the dismiss: $out"
+    json_eq "$(jq -c .repo <<<"$out")" "$(cat "$STAGE")" || fail "$name: repo moved after the dismiss: $out"
+    json_eq "$(jq -c .review <<<"$out")" "$(cat "$R/mg/review/s.json")" || fail "$name: review moved after the dismiss: $out"
+    [[ "$(jq -c .applied <<<"$out")" == '[]' ]] || fail "$name: applied after the dismiss: $out"
+    pass "$name: the next pull changes nothing"
+}
+# repo:     copy              review/live         stage
+rec mg s.json merge '{"a":5}' '{"a":5}' '{"a":5}' '{"a":{"x":1}}'
+dismiss_stops "repo scalar to object, live unchanged"
+rec mg s.json merge '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":5}'
+dismiss_stops "repo object to scalar, live unchanged"
+rec mg s.json merge '{"a":{"x":1}}' '{"a":6}' '{"a":6}' '{"a":5}'
+dismiss_stops "repo object to scalar, live a different scalar"
+rec mg s.json merge '{"a":5}' '{"a":{"x":2}}' '{"a":{"x":2}}' '{"a":{"x":1}}'
+dismiss_stops "repo scalar to object, live a different object" '["a","x"]'
+rec mg s.json merge '{"a":{"x":1}}' '{"a":7}' '{"a":7}' '{"a":{"x":2}}'
+dismiss_stops "live object to scalar, repo changes inside"
 rec mg s.json merge '{"k":1}' '{"k":1,"old":3}' '{"k":1,"mine":2,"old":3}' '{"k":2}'
 items_is "a key only the repo moved isn't an item; an unreviewed one is" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"mine\"]"
 items_is "with all, the reviewed one shows too"      mg s.json "$LIVE" "$STAGE" true "edited${TAB}[\"mine\"]"$'\n'"dismissed${TAB}[\"old\"]"

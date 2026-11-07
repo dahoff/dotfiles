@@ -29,10 +29,10 @@ def plain_at($p): at($p) | length == 1 and (.[0] | type) != "object";
 
 def is_prefix($a; $b): $b[:($a | length)] == $a;
 
-# The shortest proper prefix of $p that blocks it: a plain value in live, or a place
-# where the repo changed between a plain value and an object. Whether a prefix blocks
-# doesn't depend on $p, so everything under it reports that same topmost path, and no
-# conflict is ever nested inside another.
+# The shortest proper prefix of $p where the files disagree on object versus plain
+# value: a plain value in live, or a place where the repo changed between the two.
+# Whether a prefix counts doesn't depend on $p, so everything under it reports that same
+# topmost path, and no such path is nested inside another.
 def blocked_at($p; $base; $new; $live):
   first(
     range(1; $p | length) as $i
@@ -70,13 +70,23 @@ def check_object($name):
 | ($live   | check_object("live file")) as $live
 | ($review | check_object("review copy")) as $review
 | ([$base, $new | leaves] | unique) as $paths
-| ([ $paths[] as $p
-     | ($base | at($p)) as $b | ($new | at($p)) as $n | ($live | at($p)) as $l
-     | blocked_at($p; $base; $new; $live) // (if $n != $b and $l != $b and $l != $n then $p else empty end)
-   ] | unique) as $conflicts
+| ([ $paths[] as $p | blocked_at($p; $base; $new; $live) ] | unique) as $tops
+| ($paths | map(. as $p | select(any($tops[]; is_prefix(.; $p)) | not))) as $rest
+# At a mismatch the whole values decide: repo unchanged keeps yours, and live already
+# matching the repo updates records only, so neither is a conflict.
+| ($tops | map(. as $t | select(($new | at($t)) != ($base | at($t))))) as $moved
+| ($moved | map(. as $t | select(($live | at($t)) == ($new | at($t))))) as $agreed
+| (($moved - $agreed)
+   + [ $rest[] as $p
+       | ($base | at($p)) as $b | ($new | at($p)) as $n | ($live | at($p)) as $l
+       | select($n != $b and $l != $b and $l != $n)
+       | $p
+     ]
+   | unique) as $conflicts
 | ($conflicts | map(. as $c | $base | at($c) | [$c, .])) as $held
-| reduce ($paths[] as $p
-          | select(any($conflicts[]; is_prefix(.; $p)) | not)
+| (reduce $agreed[] as $t ($review; put_at($t; $new | at($t)))) as $review
+| reduce ($rest[] as $p
+          | select(any($conflicts[]; . == $p) | not)
           | $p) as $p
     ({live: $live, review: $review, applied: []};
      ($base | at($p)) as $b | ($new | at($p)) as $n | (.live | at($p)) as $l
