@@ -12,6 +12,7 @@ source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/backup.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/deployed.sh"
+source "$ROOT_DIR/lib/records.sh"
 source "$ROOT_DIR/lib/overlay.sh"
 
 # Configuration
@@ -31,8 +32,12 @@ declare -a CONFIG_MODES=()
 STAGE_DIR=""
 STAGING_ENABLED=true   # false for apps without config.yaml (packages)
 
-# Per-run count of files that failed to deploy
+# Per-run count of files that failed to deploy, and of files with a conflict held back
 FILE_FAILURES=0
+FILES_HELD=0
+
+# The snapshot installer_snapshot took, for a state file written later
+SNAPSHOT_TS=""
 
 # Flags
 DRY_RUN=false
@@ -72,12 +77,8 @@ app_up_to_date() { :; }
 # uninstall: after files were restored/removed, before state is removed
 app_post_uninstall() { :; }
 
-# True if a live file with no record is the repo's version in all but form
-# Usage: app_matches_repo name src dest
-app_matches_repo() { return 1; }
-
 # Deploy one file; apps may override and call deploy_file_default for the rest
-# Usage: deploy_file src dest mode strategy install|upgrade
+# Usage: deploy_file src dest mode strategy install|upgrade name
 deploy_file() { deploy_file_default "$@"; }
 
 # ---------------------------------------------------------------------------
@@ -200,11 +201,12 @@ installer_src() {
 
 # Strategy for a config src (replace unless the stage says otherwise)
 installer_strategy() {
-    local src strategy
+    local line src
     if [[ -n "$STAGE_DIR" ]]; then
-        while read -r src strategy; do
+        while IFS= read -r line; do
+            src="${line% *}"
             if [[ "$src" == "$1" ]]; then
-                echo "$strategy"
+                echo "${line##* }"
                 return 0
             fi
         done < "$STAGE_DIR/strategies"
@@ -225,77 +227,66 @@ record_file_failure() {
     fi
 }
 
-# Copy (replace) or merge (JSON) one file into place
-# Usage: deploy_file_default src dest mode strategy install|upgrade
-deploy_file_default() {
-    local src="$1" dest="$2" mode="$3" strategy="${4:-replace}" verb="${5:-install}"
-
-    if [[ "$strategy" == merge ]]; then
-        if is_dry_run; then
-            log_info "[DRY-RUN] Would merge: $src -> $dest (mode: $mode)"
-            return 0
-        fi
-        log_info "Merging: $(basename "$dest")"
-        ensure_dir "$(dirname "$dest")" || return 1
-        if [[ -s "$dest" ]]; then
-            overlay_json_merge "$dest" "$dest" "$src" || return 1
-        else
-            copy_file "$src" "$dest" || return 1
-        fi
-        set_permissions "$dest" "$mode"
-        return
+# How the records treat edits to this dest: reset, force or, printing nothing, the pull table
+# Usage: installer_force_mode dest
+installer_force_mode() {
+    if [[ "${DOTFILES_RESET:-}" == 1 ]]; then
+        echo reset
+    elif [[ -n "${DOTFILES_FORCE_PATH:-}" ]]; then
+        if [[ "$DOTFILES_FORCE_PATH" == "$1" ]]; then echo force; fi
+    elif [[ "$FORCE" == true ]]; then
+        echo force
     fi
-
-    if [[ "$verb" == upgrade ]]; then
-        if is_dry_run; then
-            log_info "[DRY-RUN] Would update: $src -> $dest"
-            return 0
-        fi
-        log_info "Updating: $(basename "$dest")"
-    else
-        if is_dry_run; then
-            log_info "[DRY-RUN] Would install: $src -> $dest (mode: $mode)"
-            return 0
-        fi
-        log_info "Installing: $(basename "$dest")"
-    fi
-    copy_file "$src" "$dest" || return 1
-    set_permissions "$dest" "$mode"
 }
 
-# True if the live file holds an edit an upgrade must not overwrite. Only a file
-# dotfiles already deployed counts: anything else is an original, and is backed up
-# and replaced. --force overwrites (the upgrade snapshot still has the edit).
-# Usage: installer_keep_edit name src dest strategy verb
-installer_keep_edit() {
-    local name="$1" src="$2" dest="$3" strategy="$4" verb="$5"
-    [[ "$verb" == upgrade && "$FORCE" != true && "$strategy" != merge && -f "$dest" ]] || return 1
-    grep -qxF -- "$dest" < <(state_get_files "$APP_NAME") || return 1
+# Deploy one file through the records
+# Usage: deploy_file_default src dest mode strategy install|upgrade name
+deploy_file_default() {
+    local src="$1" dest="$2" mode="$3" strategy="${4:-replace}" verb="${5:-install}" name="${6:-$(basename "$1")}"
 
-    local live new recorded
-    live=$(deployed_hash "$dest")
-    new=$(deployed_hash "$src")
-    [[ "$live" != "$new" ]] || return 1
-    recorded=$(deployed_get "$APP_NAME" "$dest")
-    [[ "$live" != "$recorded" && "$recorded" != merge ]] || return 1
-    if [[ -z "$recorded" ]] && app_matches_repo "$name" "$src" "$dest"; then
-        return 1
-    fi
-
-    if [[ "$recorded" == "$new" ]]; then
-        log_info "Keeping local edit: $dest"
+    if is_dry_run; then
+        if [[ "$strategy" == merge ]]; then
+            log_info "[DRY-RUN] Would merge: $src -> $dest (mode: $mode)"
+        elif [[ "$verb" == upgrade ]]; then
+            log_info "[DRY-RUN] Would update: $src -> $dest"
+        else
+            log_info "[DRY-RUN] Would install: $src -> $dest (mode: $mode)"
+        fi
         return 0
     fi
-    # The repo changed too, or nothing says what was deployed: the safe mistake is
-    # leaving the file behind the repo, not losing an edit
-    log_warn "Keeping local edit: $dest (the repo version changed too; 'dotfiles add' saves yours, 'dotfiles pull --force' takes the repo's)"
-    if ! is_dry_run; then
-        [[ -n "$recorded" ]] || deployed_set "$APP_NAME" "$name" "$dest" unknown
-        if [[ -n "${DOTFILES_KEPT_FILE:-}" ]]; then
-            echo "$dest" >> "$DOTFILES_KEPT_FILE"
-        fi
-    fi
-    return 0
+    RECORDS_FORCE=$(installer_force_mode "$dest")
+    records_deploy "$APP_NAME" "$name" "$src" "$dest" "$mode" "$strategy"
+}
+
+# Report what records_deploy did with one file
+# Usage: installer_report_deploy dest strategy verb
+installer_report_deploy() {
+    local dest="$1" strategy="$2" verb="$3"
+    case "$RECORDS_DEPLOY_RESULT" in
+        fresh | apply)
+            if [[ "$strategy" == merge ]]; then
+                log_info "Merging: $(basename "$dest")"
+            elif [[ "$verb" == upgrade ]]; then
+                log_info "Updating: $(basename "$dest")"
+            else
+                log_info "Installing: $(basename "$dest")"
+            fi
+            ;;
+        keep)
+            log_info "Keeping local edit: $dest"
+            ;;
+        conflict)
+            FILES_HELD=$((FILES_HELD + 1))
+            if [[ "$strategy" == merge ]]; then
+                log_warn "Keeping your values in $dest, the repo changed them too: $RECORDS_DEPLOY_CONFLICTS"
+            else
+                log_warn "Keeping your edit to $dest, the repo changed it too"
+            fi
+            if [[ -n "${DOTFILES_KEPT_FILE:-}" ]]; then
+                echo "$dest" >> "$DOTFILES_KEPT_FILE"
+            fi
+            ;;
+    esac
 }
 
 # Warn, and carry the message to the sync summary and the --auto report
@@ -307,35 +298,111 @@ installer_report_warning() {
     fi
 }
 
-# Record what an upgrade just wrote
-# Usage: installer_record_deploy name dest strategy
-installer_record_deploy() {
-    is_dry_run && return 0
-    if [[ "$3" == merge ]]; then
-        deployed_set "$APP_NAME" "$1" "$2" merge
-    else
-        deployed_set "$APP_NAME" "$1" "$2" "$(deployed_hash "$2")"
-    fi
+# Save what a file is about to replace as its original, once. A file with a record came
+# from dotfiles, not from the machine.
+# Usage: installer_save_original dest
+installer_save_original() {
+    [[ -f "$1" ]] || return 0
+    records_has_dest "$APP_NAME" "$1" && return 0
+    backup_create_original "$1" "$BACKUP_DIR"
 }
 
-# A machine installed before records existed: when the state says this version is
-# deployed, the stage is exactly what was written, so record that.
-installer_baseline() {
-    is_dry_run && return 0
-    [[ "$(state_get_version "$APP_NAME")" == "$APP_VERSION" ]] || return 0
-    local i name dest src strategy
-    for i in "${!CONFIG_FILES[@]}"; do
-        name="${CONFIG_FILES[$i]}"
-        dest="${CONFIG_DESTS[$i]}"
-        src=$(installer_src "$name")
-        [[ -f "$src" && -z "$(deployed_get "$APP_NAME" "$dest")" ]] || continue
-        strategy=$(installer_strategy "$name")
-        if [[ "$strategy" == merge ]]; then
-            deployed_set "$APP_NAME" "$name" "$dest" merge
-        else
-            deployed_set "$APP_NAME" "$name" "$dest" "$(deployed_hash "$src")"
+# Take one snapshot of the given files that exist, and note it in the state if there is one
+# Usage: installer_snapshot dest...
+installer_snapshot() {
+    SNAPSHOT_TS=""
+    [[ $# -gt 0 ]] || return 0
+    if is_dry_run; then
+        log_info "[DRY-RUN] Would create a backup snapshot"
+        return 0
+    fi
+    local dest ts="" snap_ts
+    log_info "Creating backup snapshot..."
+    backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
+    snap_ts=$(timestamp)
+    for dest in "$@"; do
+        if [[ -f "$dest" ]]; then
+            ts=$(backup_create_snapshot "$dest" "$BACKUP_DIR" "$snap_ts") || return 1
         fi
     done
+    SNAPSHOT_TS="$ts"
+    if [[ -n "$ts" ]] && state_is_installed "$APP_NAME"; then
+        state_add_snapshot "$APP_NAME" "$ts" || log_warn "Failed to update state"
+    fi
+    backup_prune "$BACKUP_DIR" "$MAX_BACKUPS"
+}
+
+# True if config file number i starts over instead of comparing against its record
+# Usage: installer_is_fresh i
+installer_is_fresh() {
+    records_is_fresh "$APP_NAME" "${CONFIG_FILES[$1]}" "${CONFIG_DESTS[$1]}" "$(installer_strategy "${CONFIG_FILES[$1]}")"
+}
+
+# The dests an upgrade snapshots: all of them, unless --no-backup, which --force and a reset
+# override. With --no-backup, a file that starts over still gets one.
+installer_snapshot_dests() {
+    local i
+    if [[ "$NO_BACKUP" != true || "$FORCE" == true || "${DOTFILES_RESET:-}" == 1 ]]; then
+        printf '%s\n' ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"}
+        return 0
+    fi
+    for i in "${!CONFIG_FILES[@]}"; do
+        if installer_is_fresh "$i"; then
+            printf '%s\n' "${CONFIG_DESTS[$i]}"
+        fi
+    done
+}
+
+# True if every config file has a record to compare against
+installer_has_records() {
+    local i
+    for i in "${!CONFIG_FILES[@]}"; do
+        if installer_is_fresh "$i"; then
+            return 1
+        fi
+    done
+}
+
+# Warn about recorded files this app no longer deploys there, if they hold unreviewed
+# edits. They stay in place, and records_prune forgets them.
+installer_warn_removed() {
+    local src dest strategy
+    while IFS=$'\t' read -r src dest strategy; do
+        list_contains "$dest" ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"} && continue
+        [[ -e "$dest" ]] || continue
+        if records_has_edits "$APP_NAME" "$src" "$dest"; then
+            installer_report_warning "$dest is no longer managed and has unreviewed edits; it was left in place"
+        fi
+    done < <(records_list "$APP_NAME")
+}
+
+# Deploy config file number i. A failed file is counted and skipped; a missing source fails.
+# Usage: installer_deploy_one i install|upgrade
+installer_deploy_one() {
+    local i="$1" verb="$2"
+    local name="${CONFIG_FILES[$i]}"
+    local dest="${CONFIG_DESTS[$i]}"
+    local mode="${CONFIG_MODES[$i]:-0644}"
+    local src strategy
+    src=$(installer_src "$name")
+
+    if installer_is_skipped "$name"; then
+        log_error "Skipping $name: its repo layers could not be merged"
+        record_file_failure "$name"
+        return 0
+    fi
+    if [[ ! -f "$src" ]]; then
+        log_error "Source file not found: $src"
+        return 1
+    fi
+    strategy=$(installer_strategy "$name")
+    RECORDS_DEPLOY_RESULT=""
+    if deploy_file "$src" "$dest" "$mode" "$strategy" "$verb" "$name"; then
+        installer_report_deploy "$dest" "$strategy" "$verb"
+    else
+        log_error "Failed to deploy $name; it stays as it was and will be retried"
+        record_file_failure "$name"
+    fi
 }
 
 # Deploy every config file. A failed file is counted and skipped; the
@@ -344,41 +411,21 @@ installer_baseline() {
 deploy_all_files() {
     local verb="$1" i
     FILE_FAILURES=0
+    FILES_HELD=0
+    is_dry_run || installer_warn_removed
     for i in "${!CONFIG_FILES[@]}"; do
-        local name="${CONFIG_FILES[$i]}"
-        local dest="${CONFIG_DESTS[$i]}"
-        local mode="${CONFIG_MODES[$i]:-0644}"
-        local src
-        src=$(installer_src "$name")
-
-        if installer_is_skipped "$name"; then
-            log_error "Skipping $name: its repo layers could not be merged"
-            record_file_failure "$name"
-            continue
-        fi
-        if [[ ! -f "$src" ]]; then
-            log_error "Source file not found: $src"
-            return 1
-        fi
-        local strategy
-        strategy=$(installer_strategy "$name")
-        if installer_keep_edit "$name" "$src" "$dest" "$strategy" "$verb"; then
-            continue
-        fi
-        if deploy_file "$src" "$dest" "$mode" "$strategy" "$verb"; then
-            installer_record_deploy "$name" "$dest" "$strategy"
-        else
-            log_error "Failed to deploy $name; left $dest as it was"
-            record_file_failure "$name"
-        fi
+        installer_deploy_one "$i" "$verb" || return 1
     done
-    is_dry_run || deployed_prune "$APP_NAME" "${CONFIG_DESTS[@]}"
+    is_dry_run || records_prune "$APP_NAME" ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"}
 }
 
-# Version recorded in state: incomplete when any file failed
+# Version recorded in state: incomplete when any file failed, conflict when any file or
+# key was held back. Neither matches a real version, so the next pull looks again.
 installed_version() {
     if [[ $FILE_FAILURES -gt 0 ]]; then
         echo incomplete
+    elif [[ $FILES_HELD -gt 0 ]]; then
+        echo conflict
     else
         echo "$APP_VERSION"
     fi
@@ -411,12 +458,45 @@ prepare_stage() {
 
 # Deploy operation (idempotent: install if new, upgrade if exists)
 cmd_deploy() {
+    if [[ -n "${DOTFILES_FORCE_PATH:-}" ]]; then
+        if ! list_contains "$DOTFILES_FORCE_PATH" ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"}; then
+            log_debug "$APP_NAME doesn't manage $DOTFILES_FORCE_PATH"
+            return 0
+        fi
+        if state_is_installed "$APP_NAME"; then
+            cmd_force_path
+            return
+        fi
+    fi
     if state_is_installed "$APP_NAME"; then
         log_info "$APP_NAME already installed, upgrading..."
         cmd_upgrade
     else
         cmd_install
     fi
+}
+
+# pull --force PATH: take the repo's version of that one file, leaving the others for the
+# next pull. The state stays as it was, because the others weren't looked at.
+cmd_force_path() {
+    local dest="$DOTFILES_FORCE_PATH" i
+    local -a managed=()
+    log_info "Taking the repo's version of $dest..."
+    if ! is_dry_run; then
+        backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
+        mapfile -t managed < <(state_get_files "$APP_NAME")
+        if ! list_contains "$dest" ${managed[@]+"${managed[@]}"}; then
+            installer_save_original "$dest" || return 1
+        fi
+    fi
+    installer_snapshot "$dest" || return 1
+    FILE_FAILURES=0
+    for i in "${!CONFIG_FILES[@]}"; do
+        if [[ "${CONFIG_DESTS[$i]}" == "$dest" ]]; then
+            installer_deploy_one "$i" upgrade || return 1
+        fi
+    done
+    [[ $FILE_FAILURES -eq 0 ]]
 }
 
 # Install operation
@@ -435,20 +515,15 @@ cmd_install() {
 
     app_pre_install || return 1
 
-    # Initialize backup
-    if [[ "$NO_BACKUP" != true ]]; then
-        backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
-    fi
-
-    # Backup original files
-    if [[ "$NO_BACKUP" != true ]]; then
-        log_info "Creating original backups..."
-        for dest in "${CONFIG_DESTS[@]}"; do
-            if [[ -f "$dest" ]]; then
-                backup_create_original "$dest" "$BACKUP_DIR" || return 1
-            fi
-        done
-    fi
+    # The originals and a snapshot, even with --no-backup: nothing else holds what's about
+    # to be replaced.
+    backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
+    log_info "Creating original backups..."
+    for dest in "${CONFIG_DESTS[@]}"; do
+        installer_save_original "$dest" || return 1
+    done
+    installer_snapshot "${CONFIG_DESTS[@]}" || return 1
+    local install_snapshot="$SNAPSHOT_TS"
 
     app_pre_deploy install || return 1
 
@@ -460,6 +535,9 @@ cmd_install() {
     if ! is_dry_run; then
         state_init || return 1
         state_create "$APP_NAME" "$(installed_version)" "$BACKUP_DIR" "${CONFIG_DESTS[@]}" || return 1
+        if [[ -n "$install_snapshot" ]]; then
+            state_add_snapshot "$APP_NAME" "$install_snapshot" || log_warn "Failed to update state"
+        fi
     fi
 
     app_post_files install || return 1
@@ -488,13 +566,11 @@ cmd_upgrade() {
         return 1
     fi
 
-    installer_baseline
-
-    # Skip if already at this version
+    # Skip if already at this version, with records to show for it
     if [[ "$UPGRADE_ALWAYS" != true ]]; then
         local installed_version
         installed_version=$(state_get_version "$APP_NAME")
-        if [[ "$installed_version" == "$APP_VERSION" ]] && [[ "$FORCE" != true ]]; then
+        if [[ "$installed_version" == "$APP_VERSION" && "$FORCE" != true && "${DOTFILES_RESET:-}" != 1 ]] && installer_has_records; then
             local all_present=true
             for dest in "${CONFIG_DESTS[@]}"; do
                 if [[ ! -f "$dest" ]]; then
@@ -511,40 +587,20 @@ cmd_upgrade() {
         fi
     fi
 
-    # Files new to this app since install: what they replace is an original.
-    # Files already in state are skipped: their live copy came from dotfiles.
-    if [[ "$NO_BACKUP" != true ]]; then
-        backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
-        local -a managed=()
-        mapfile -t managed < <(state_get_files "$APP_NAME")
-        for dest in "${CONFIG_DESTS[@]}"; do
-            if [[ -f "$dest" ]] && ! list_contains "$dest" ${managed[@]+"${managed[@]}"}; then
-                backup_create_original "$dest" "$BACKUP_DIR" || return 1
-            fi
-        done
-    fi
-
-    # Create snapshot backup
-    if [[ "$NO_BACKUP" != true ]] && is_dry_run; then
-        log_info "[DRY-RUN] Would create a backup snapshot"
-    elif [[ "$NO_BACKUP" != true ]]; then
-        log_info "Creating backup snapshot..."
-        local ts="" snap_ts
-        snap_ts=$(timestamp)
-        for dest in "${CONFIG_DESTS[@]}"; do
-            if [[ -f "$dest" ]]; then
-                ts=$(backup_create_snapshot "$dest" "$BACKUP_DIR" "$snap_ts")
-            fi
-        done
-
-        # Add snapshot to state
-        if [[ -n "${ts:-}" ]]; then
-            state_add_snapshot "$APP_NAME" "$ts" || log_warn "Failed to update state"
+    # Files new to this app since install: what they replace is an original, kept even with
+    # --no-backup. Files already in state are skipped: their live copy came from dotfiles.
+    backup_init "$APP_NAME" "$BACKUP_DIR" || return 1
+    local -a managed=()
+    mapfile -t managed < <(state_get_files "$APP_NAME")
+    for dest in "${CONFIG_DESTS[@]}"; do
+        if ! list_contains "$dest" ${managed[@]+"${managed[@]}"}; then
+            installer_save_original "$dest" || return 1
         fi
+    done
 
-        # Prune old backups
-        backup_prune "$BACKUP_DIR" "$MAX_BACKUPS"
-    fi
+    local -a snapshot_dests=()
+    mapfile -t snapshot_dests < <(installer_snapshot_dests)
+    installer_snapshot ${snapshot_dests[@]+"${snapshot_dests[@]}"} || return 1
 
     app_pre_deploy upgrade || return 1
 
@@ -611,6 +667,7 @@ cmd_uninstall() {
     if ! is_dry_run; then
         state_remove "$APP_NAME"
         deployed_remove "$APP_NAME"
+        records_remove "$APP_NAME"
     fi
 
     log_success "$APP_NAME uninstalled successfully!"
@@ -763,7 +820,8 @@ Options:
   --log FILE           Log to file
   --verbose            Verbose output
   --quiet              Minimal output
-  --force              Force operation without prompts
+  --force              Take the repo's version of every file, keeping local-only keys
+                       in merged files; always takes a snapshot first
   --stage DIR          Deploy files composed by dotfiles (internal)
   --shell-scripts-dir PATH   Set drop-in directory (default: ~/.bashrc.d)
 

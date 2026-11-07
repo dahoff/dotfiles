@@ -249,12 +249,14 @@ sync_is_complete() {
     [[ "$recorded" == "$fingerprint" ]]
 }
 
-# Record a finished sync, if the next one may be skipped: nothing failed or is
-# pending, and no custom script without a check (those run on every sync).
-# Reads globals EXIT_CODE, PENDING, PKG_NAMES and PKG_CUSTOM_*.
+# Record a finished sync, if the next one may be skipped: nothing failed, is pending or
+# was held back as a conflict, every file was looked at (--force PATH looks at one), and no
+# custom script without a check (those run on every sync).
+# Reads globals EXIT_CODE, PENDING, HELD_CONFLICTS, PKG_NAMES and PKG_CUSTOM_*.
 sync_record_complete() {
     local fingerprint="$1" idx
     [[ -n "$fingerprint" && "$EXIT_CODE" -eq 0 && ${#PENDING[@]} -eq 0 ]] || return 0
+    [[ ${#HELD_CONFLICTS[@]} -eq 0 && -z "${DOTFILES_FORCE_PATH:-}" ]] || return 0
     for idx in "${!PKG_NAMES[@]}"; do
         [[ -n "${PKG_CUSTOM_SCRIPT[$idx]}" && -z "${PKG_CUSTOM_CHECK[$idx]}" ]] && return 0
     done

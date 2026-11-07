@@ -69,12 +69,6 @@ bashrc_has_blocks() {
     [[ -f "$1" ]] && grep -qxF -- "$BASHRC_BEGIN" "$1"
 }
 
-# An appended .bashrc is the repo's file in all but form: replacing it isn't
-# overwriting an edit, because bashrc_preserve keeps what isn't ours
-app_matches_repo() {
-    [[ "$1" == ".bashrc" ]] && bashrc_has_blocks "$3"
-}
-
 # Keep what isn't ours before an existing .bashrc is replaced.
 #  - Your own content moves to the drop-in 00-local.sh. It keeps working, but now loads
 #    after the managed file instead of before it, so its settings win.

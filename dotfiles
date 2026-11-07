@@ -26,6 +26,7 @@ source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/sync.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 source "$SCRIPT_DIR/lib/deployed.sh"
+source "$SCRIPT_DIR/lib/records.sh"
 source "$SCRIPT_DIR/lib/versions.sh"
 source "$SCRIPT_DIR/lib/add.sh"
 source "$SCRIPT_DIR/lib/push.sh"
@@ -85,6 +86,8 @@ SYNC_NO_FETCH=false
 SYNC_RECORD=false
 # Packages still missing (names from the profile)
 declare -a PENDING=()
+# Files with a conflict this pull held back: it doesn't count as complete
+declare -a HELD_CONFLICTS=()
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -358,16 +361,46 @@ run_phase_configs() {
             [[ -n "$failed" ]] && RESULTS+=("$target|$failed|FAIL")
         done < "$DOTFILES_FAILURES_FILE"
 
-        # Edits kept although the repo changed the same file: shown in the summary
+        # Edits kept although the repo changed the same file or key: shown in the summary
         local kept
         while IFS= read -r kept; do
-            [[ -n "$kept" ]] && SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add')")
+            if [[ -n "$kept" ]]; then
+                HELD_CONFLICTS+=("$kept")
+                SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add', or 'dotfiles pull --force $kept' to take the repo's)")
+            fi
         done < "$DOTFILES_KEPT_FILE"
         local warning
         while IFS= read -r warning; do
             [[ -n "$warning" ]] && SYNC_WARNINGS+=("$warning")
         done < "$DOTFILES_WARNINGS_FILE"
     done
+}
+
+# An absolute path for --force PATH, spelled the way an app's dest is. The file may be
+# gone: --force restores it.
+# Usage: force_path_resolve PATH
+force_path_resolve() {
+    local path="$1" dir
+    [[ "$path" == /* ]] || path="$PWD/$path"
+    dir=$(cd "$(dirname "$path")" 2>/dev/null && pwd) || dir=$(dirname "$path")
+    printf '%s/%s\n' "${dir%/}" "$(basename "$path")"
+}
+
+# True if an app in the package list deploys DOTFILES_FORCE_PATH
+force_path_is_managed() {
+    local idx dir line dest
+    for idx in "${!PKG_NAMES[@]}"; do
+        dir="${PKG_CONFIG_DIR[$idx]}"
+        [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*dest:[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]] || continue
+            dest="${BASH_REMATCH[1]}"
+            dest="${dest//\$\{SHELL_SCRIPTS_DIR\}/$SHELL_SCRIPTS_DIR}"
+            dest=$(abs_path "$dest")
+            [[ "$dest" != "$DOTFILES_FORCE_PATH" ]] || return 0
+        done < "$APPS_DIR/$dir/config.yaml"
+    done
+    return 1
 }
 
 # Run all phases locally
@@ -399,6 +432,13 @@ run_all() {
     if ! prepare_overlays "$target"; then
         log_error "[$target] Invalid overlay configuration; no changes made"
         RESULTS+=("$target|overlays|FAIL")
+        EXIT_CODE=1
+        return 1
+    fi
+
+    if [[ -n "${DOTFILES_FORCE_PATH:-}" ]] && ! force_path_is_managed; then
+        log_error "$DOTFILES_FORCE_PATH is not managed by dotfiles here, so there is no repo version to take"
+        RESULTS+=("$target|--force|FAIL")
         EXIT_CODE=1
         return 1
     fi
@@ -524,7 +564,9 @@ Options (passed through to each app's installer):
   --no-backup          Skip creating backups
   --verbose            Verbose output
   --quiet              Minimal output
-  --force              Force operation without prompts; pull redeploys even if nothing changed
+  --force [PATH]       With pull: take the repo's version of every file, or of just PATH,
+                       keeping local-only keys in merged files; always takes a snapshot.
+                       With other commands: force the operation without prompts
   --skip-git-setup     Skip interactive git identity setup (for unattended runs)
   --shell-scripts-dir PATH  Set drop-in directory (default: ~/.bashrc.d)
   --log FILE           Log to file
@@ -597,6 +639,7 @@ parse_args() {
 
     COMMAND=$(validate_command "$1") || exit 1
     shift
+    unset DOTFILES_FORCE_PATH
 
     # --remote turns pull and init into a send to other hosts: from here on the
     # command is "remote" (cmd_push), and PUSH_INIT says which command runs there
@@ -680,7 +723,18 @@ parse_args() {
                 SYNC_NO_FETCH=true
                 shift
                 ;;
-            --dry-run|--no-backup|--verbose|--quiet|--force)
+            --force)
+                # Only pull takes a path: with --remote the next word is a host
+                if [[ "$COMMAND" == "pull" && $# -ge 2 && "$2" != -* ]]; then
+                    DOTFILES_FORCE_PATH=$(force_path_resolve "$2")
+                    export DOTFILES_FORCE_PATH
+                    shift 2
+                else
+                    GLOBAL_FLAGS+=("$1")
+                    shift
+                fi
+                ;;
+            --dry-run|--no-backup|--verbose|--quiet)
                 GLOBAL_FLAGS+=("$1")
                 shift
                 ;;
@@ -805,10 +859,10 @@ sync_record() {
     return 0
 }
 
-# Point a pull at files with local edits
+# Point a pull at files with local edits nobody has reviewed
 sync_warn_edits() {
     local n
-    n=$(deployed_count_edits)
+    n=$(records_count_edits)
     [[ "$n" -gt 0 ]] || return 0
     log_warn "$n file(s) have local edits, run 'dotfiles add' to review them"
 }
@@ -953,7 +1007,9 @@ cmd_status() {
                 state="not installed"
             else
                 ver_state=$(state_get_version "$app_name" 2>/dev/null || true)
-                if [[ -n "$ver_fresh" && "$ver_state" == "$ver_fresh" && "$ver_state" != "incomplete" ]]; then
+                if [[ "$ver_state" == "conflict" ]]; then
+                    state="conflict held back"
+                elif [[ -n "$ver_fresh" && "$ver_state" == "$ver_fresh" && "$ver_state" != "incomplete" ]]; then
                     state="up to date"
                 else
                     state="update available"
@@ -1089,6 +1145,13 @@ main() {
         exit 0
     fi
 
+    # Old records don't say enough to protect an edit
+    if [[ "$COMMAND" == "pull" ]] && compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null; then
+        log_error "This host still has records from an older version, in $STATE_DIR/deployed"
+        echo "Run 'dotfiles init' to start fresh records. Review pending edits with 'dotfiles add' first." >&2
+        exit 1
+    fi
+
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
         if ! sync_lock; then
             echo "dotfiles: pull already running" >&2
@@ -1128,7 +1191,8 @@ main() {
     fi
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
         fingerprint=$(sync_fingerprint) || fingerprint=""
-        if ! has_global_flag --force && sync_is_complete "$fingerprint"; then
+        if ! has_global_flag --force && [[ -z "${DOTFILES_FORCE_PATH:-}" && "${DOTFILES_RESET:-}" != 1 ]] \
+            && sync_is_complete "$fingerprint"; then
             log_success "Already up to date (use --force to redeploy)"
             sync_warn_edits
             exit 0

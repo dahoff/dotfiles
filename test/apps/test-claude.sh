@@ -122,10 +122,39 @@ out=$(PATH="$NOJQ" ./configure.sh upgrade --force --no-backup 2>&1) && fail "sho
 [[ "$(cat "$LIVE")" == '{"liveOnly":3}' ]] || fail "live file changed without jq"
 pass "missing jq reported"
 
+# Test 10
+info "Test 10: a settings edit survives an upgrade, and a conflict is held per key"
+echo '{"liveOnly":4}' > "$LIVE"
+./configure.sh upgrade --force --no-backup &>/dev/null || fail "force failed"
+jq '.model = "my-model"' "$LIVE" > "$HOME/edited" && cat "$HOME/edited" > "$LIVE"
+RECORD="$STATE_DIR/records/claude/repo/settings.json"
+# The repo's settings as a later version would have them, through a stage
+STAGE="$HOME/stage"
+rm -rf "$STAGE"
+mkdir -p "$STAGE/files"
+cp -R files/. "$STAGE/files/"
+jq '.model = "repo-model-2" | .newKey = 1' files/settings.json > "$STAGE/files/settings.json"
+sed -e 's/$/ replace/' <(overlay_list=$(sed -n 's/^  - src: //p' config.yaml); printf '%s\n' "$overlay_list") > "$STAGE/strategies"
+sed -i 's/^settings.json replace$/settings.json merge/' "$STAGE/strategies"
+: > "$STAGE/skip"
+echo stage-v2 > "$STAGE/version"
+KEPT="$HOME/kept"
+: > "$KEPT"
+out=$(DOTFILES_KEPT_FILE="$KEPT" ./configure.sh deploy --stage "$STAGE" --no-backup 2>&1) || fail "deploy failed: $out"
+[[ "$(jq -r .model "$LIVE")" == my-model ]] || fail "edit overwritten"
+[[ "$(jq -r .newKey "$LIVE")" == 1 ]] || fail "new key not applied"
+[[ "$(jq -r .liveOnly "$LIVE")" == 4 ]] || fail "local-only key lost"
+[[ "$(jq -r .model "$RECORD")" == "$(jq -r .model "$REPO_SETTINGS")" ]] || fail "repo copy took the held value"
+[[ "$(cat "$KEPT")" == "$LIVE" ]] || fail "kept file: $(cat "$KEPT")"
+[[ "$(state_version)" == conflict ]] || fail "version: $(state_version)"
+[[ "$out" == *'["model"]'* ]] || fail "key not named: $out"
+pass "conflict held per key"
+
 ./configure.sh uninstall &>/dev/null || true
+[[ ! -d "$STATE_DIR/records/claude" ]] || fail "uninstall left the records"
 rm -rf "$TEST_STATE" "$TEST_HOME"
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 9 claude module tests passed!${NC}"
+echo -e "${GREEN}All 10 claude module tests passed!${NC}"
 echo "======================================"

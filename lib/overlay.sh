@@ -4,7 +4,8 @@
 # A staging directory for one app holds:
 #   files/<src>   the composed file to deploy (replace: winning layer;
 #                 merge: repo layers pre-merged)
-#   strategies    "<src> <strategy>" per config.yaml file entry
+#   strategies    "<src> <strategy>" per config.yaml file entry; a src can hold spaces,
+#                 a strategy can't, so the last space separates them
 #   skip          srcs whose repo layers could not be merged
 #   version       content hash used as the app version
 
@@ -22,7 +23,7 @@ overlay_config_entries() {
         [[ "$in_files" == true ]] || continue
         [[ "$line" =~ ^[[:alpha:]] ]] && break
 
-        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*src:[[:space:]]*([^[:space:]]+) ]]; then
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*src:[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]]; then
             if [[ -n "$src" ]]; then
                 printf '%s\t%s\n' "$src" "${strategy:-replace}"
             fi
@@ -96,7 +97,7 @@ overlay_resolve_strategies() {
 overlay_validate_app() {
     local app_dir="$1" strategies_file="$2"
     shift 2
-    local app src strategy key root f rel ok=0
+    local app src strategy key root f rel line ok=0
     app=$(basename "$app_dir")
     local -A known=()
 
@@ -123,7 +124,9 @@ overlay_validate_app() {
         fi
     done < "$strategies_file"
 
-    while read -r src strategy; do
+    while IFS= read -r line; do
+        src="${line% *}"
+        strategy="${line##* }"
         overlay_check_strategy "$app/$src" "$strategy" || ok=1
     done < <(overlay_resolve_strategies "$app_dir" "$strategies_file")
 
@@ -173,12 +176,13 @@ overlay_hash() {
 # Write stage_dir/version from config.yaml, strategies, skip and staged files
 # Usage: overlay_write_version app_dir stage_dir
 overlay_write_version() {
-    local app_dir="$1" stage_dir="$2" src strategy
+    local app_dir="$1" stage_dir="$2" line src
     {
         cat "$app_dir/config.yaml"
         if [[ -f "$app_dir/configure.sh" ]]; then cat "$app_dir/configure.sh"; fi
         cat "$stage_dir/strategies" "$stage_dir/skip"
-        while read -r src strategy; do
+        while IFS= read -r line; do
+            src="${line% *}"
             printf '== %s\n' "$src"
             cat "$stage_dir/files/$src" 2>/dev/null || true
         done < "$stage_dir/strategies"
@@ -192,14 +196,16 @@ overlay_write_version() {
 overlay_stage_app() {
     local app_dir="$1" stage_dir="$2" strategies_file="$3"
     shift 3
-    local app src strategy root
+    local app line src strategy root
     app=$(basename "$app_dir")
 
     mkdir -p "$stage_dir/files" || return 1
     : > "$stage_dir/strategies"
     : > "$stage_dir/skip"
 
-    while read -r src strategy; do
+    while IFS= read -r line; do
+        src="${line% *}"
+        strategy="${line##* }"
         overlay_check_strategy "$app/$src" "$strategy" || return 1
 
         local -a layers=()

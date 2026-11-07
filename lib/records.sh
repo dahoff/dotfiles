@@ -14,6 +14,12 @@
 
 RECORDS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# How records_deploy treats edits: empty (the pull table), force or reset. Set by the caller.
+RECORDS_FORCE=""
+# What the last records_deploy did; see there
+RECORDS_DEPLOY_RESULT=""
+RECORDS_DEPLOY_CONFLICTS="[]"
+
 records__error() {
     printf 'records: %s\n' "$1" >&2
     return 1
@@ -68,7 +74,17 @@ records__copy() {
 records__strategy() {
     local file line
     file=$(records__manifest "$1")
-    line=$([[ -f "$file" ]] && RECORDS_SRC="$2" awk -F'\t' '$1 == ENVIRON["RECORDS_SRC"] { print $3; exit }' "$file") || line=""
+    line=$([[ -f "$file" ]] && RECORDS_SRC="$2" awk -F'\t' '($1 "") == (ENVIRON["RECORDS_SRC"] "") { print $3; exit }' "$file") || line=""
+    [[ -n "$line" ]] || return 1
+    echo "$line"
+}
+
+# The manifest's destination for SRC; fails if SRC has no record
+# Usage: records__dest APP SRC
+records__dest() {
+    local file line
+    file=$(records__manifest "$1")
+    line=$([[ -f "$file" ]] && RECORDS_SRC="$2" awk -F'\t' '($1 "") == (ENVIRON["RECORDS_SRC"] "") { print $2; exit }' "$file") || line=""
     [[ -n "$line" ]] || return 1
     echo "$line"
 }
@@ -100,7 +116,7 @@ records_put() {
         umask 077
         {
             if [[ -f "$file" ]]; then
-                RECORDS_SRC="$src" awk -F'\t' '$1 != ENVIRON["RECORDS_SRC"]' "$file"
+                RECORDS_SRC="$src" awk -F'\t' '($1 "") != (ENVIRON["RECORDS_SRC"] "")' "$file"
             fi
             printf '%s\t%s\t%s\n' "$src" "$dest" "$strategy"
         } > "$tmp" && mv -f "$tmp" "$file"
@@ -220,6 +236,281 @@ records_merge3() {
         --slurpfile base "$1" --slurpfile new "$2" \
         --slurpfile live "$3" --slurpfile review "$4" \
         -f "$RECORDS_LIB_DIR/merge3.jq"
+}
+
+# True if a record of APP points at DEST
+# Usage: records_has_dest APP DEST
+records_has_dest() {
+    local src dest strategy
+    while IFS=$'\t' read -r src dest strategy; do
+        [[ "$dest" != "$2" ]] || return 0
+    done < <(records_list "$1")
+    return 1
+}
+
+# True if deploying SRC starts over rather than comparing against its record: no record,
+# one for another strategy or destination, or its copies are gone. What's live then may
+# never have been ours, so the caller takes a snapshot first.
+# Usage: records_is_fresh APP SRC DEST STRATEGY
+records_is_fresh() {
+    local app="$1" src="$2" dest="$3" strategy="$4" repo review
+    repo=$(records_repo_path "$app" "$src") || return 0
+    review=$(records_review_path "$app" "$src") || return 0
+    [[ "$(records__strategy "$app" "$src")" == "$strategy" ]] || return 0
+    [[ "$(records__dest "$app" "$src")" == "$dest" ]] || return 0
+    [[ -r "$repo" && -r "$review" ]] || return 0
+    return 1
+}
+
+# True if a recorded file has edits nobody has reviewed. A file that can't be read for
+# that counts as edited.
+# Usage: records_has_edits APP SRC DEST
+records_has_edits() {
+    local items
+    items=$(records_items "$1" "$2" "$3" "" false 2>/dev/null) || return 0
+    [[ -n "$items" ]]
+}
+
+# Number of recorded files with edits nobody has reviewed, across all apps
+records_count_edits() {
+    local file app src dest strategy count=0
+    for file in "$STATE_DIR"/records/*/manifest.tsv; do
+        [[ -f "$file" ]] || continue
+        app=$(basename "$(dirname "$file")")
+        while IFS=$'\t' read -r src dest strategy; do
+            if records_has_edits "$app" "$src" "$dest"; then
+                count=$((count + 1))
+            fi
+        done < "$file"
+    done
+    echo "$count"
+}
+
+# Usage: records__chmod MODE DEST
+records__chmod() {
+    chmod "$1" "$2" 2>/dev/null || { records__error "could not set the mode of $2"; return 1; }
+}
+
+# Write complete content over a live file, keeping a symlink and the file itself. The
+# content goes to a temp file first, beside the live file where possible, so a full disk
+# shows before the live file is touched. If the write still fails partway, what was there
+# is put back. A file that doesn't exist yet appears in one step, with its mode.
+# Usage: records__write_live FROM DEST MODE
+records__write_live() {
+    local from="$1" dest="$2" mode="$3" dir pattern staged keep=""
+    dir=$(dirname "$dest")
+    mkdir -p "$dir" 2>/dev/null || { records__error "could not create $dir"; return 1; }
+    if [[ -e "$dest" && ! -w "$dest" ]]; then
+        records__error "$dest is not writable"
+        return 1
+    fi
+    pattern="$dir/.$(basename "$dest").dotfiles.XXXXXX"
+    staged=$(mktemp "$pattern" 2>/dev/null) || staged=$(mktemp) || { records__error "could not create a temp file for $dest"; return 1; }
+    if ! { cat "$from" > "$staged" && cmp -s "$from" "$staged"; } 2>/dev/null; then
+        rm -f "$staged"
+        records__error "could not write a temp copy for $dest"
+        return 1
+    fi
+
+    if [[ ! -e "$dest" && ! -L "$dest" ]]; then
+        if ! { chmod "$mode" "$staged" && mv -f "$staged" "$dest"; } 2>/dev/null; then
+            rm -f "$staged"
+            records__error "could not create $dest"
+            return 1
+        fi
+        return 0
+    fi
+
+    # A dangling symlink has nothing to put back
+    if [[ -e "$dest" ]]; then
+        keep=$(mktemp "$pattern" 2>/dev/null) || keep=$(mktemp) || { rm -f "$staged"; records__error "could not create a temp file for $dest"; return 1; }
+        if ! { cat "$dest" > "$keep" && cmp -s "$dest" "$keep"; } 2>/dev/null; then
+            rm -f "$staged" "$keep"
+            records__error "could not read $dest"
+            return 1
+        fi
+    fi
+    if ! { cat "$staged" > "$dest" && cmp -s "$staged" "$dest"; } 2>/dev/null; then
+        rm -f "$staged"
+        if [[ -n "$keep" ]]; then
+            if ! { cat "$keep" > "$dest" && cmp -s "$keep" "$dest"; } 2>/dev/null; then
+                records__error "writing $dest failed and it could not be put back; its old content is at $keep"
+                return 1
+            fi
+            rm -f "$keep"
+        fi
+        records__error "could not write $dest; it was left as it was"
+        return 1
+    fi
+    rm -f "$staged" ${keep:+"$keep"}
+    records__chmod "$mode" "$dest"
+}
+
+# Write FROM to DEST unless it already holds that, and set the mode either way
+# Usage: records__apply FROM DEST MODE
+records__apply() {
+    if cmp -s "$1" "$2"; then
+        records__chmod "$3" "$2"
+    else
+        records__write_live "$1" "$2" "$3"
+    fi
+}
+
+# True if FILE holds exactly one JSON object
+records__is_object() {
+    jq -se 'length == 1 and (.[0] | type) == "object"' "$1" >/dev/null 2>&1
+}
+
+# True if two JSON files hold the same value, whatever their formatting and key order
+records__json_same() {
+    jq -ne --slurpfile a "$1" --slurpfile b "$2" '$a == $b' >/dev/null 2>&1
+}
+
+# Usage: records__deploy_replaced APP SRC NEW DEST MODE
+records__deploy_replaced() {
+    local app="$1" src="$2" new="$3" dest="$4" mode="$5" repo decision
+    if [[ "$RECORDS_FORCE" == reset ]] || records_is_fresh "$app" "$src" "$dest" replace; then
+        records__apply "$new" "$dest" "$mode" || return 1
+        RECORDS_DEPLOY_RESULT=fresh
+        records_put "$app" "$src" "$dest" replace "$new" "$new"
+        return
+    fi
+    repo=$(records_repo_path "$app" "$src") || return 1
+    if [[ "$RECORDS_FORCE" == force ]]; then
+        decision=apply
+    else
+        decision=$(records_decide_file "$dest" "$repo" "$new") || return 1
+    fi
+    RECORDS_DEPLOY_RESULT="$decision"
+    case "$decision" in
+        apply)
+            records__apply "$new" "$dest" "$mode" || return 1
+            records_put "$app" "$src" "$dest" replace "$new" "$new"
+            ;;
+        same)
+            records__chmod "$mode" "$dest" || return 1
+            records_put "$app" "$src" "$dest" replace "$new" "$new"
+            ;;
+        none)
+            records__chmod "$mode" "$dest"
+            ;;
+    esac
+}
+
+# A fresh deploy of a merged file: live * repo, keeping the keys that are there. They aren't
+# offered for review, so the review copy is what live becomes.
+# Usage: records__fresh_merged APP SRC NEW DEST MODE WORK
+records__fresh_merged() {
+    local app="$1" src="$2" new="$3" dest="$4" mode="$5" work="$6"
+    if [[ -s "$dest" ]]; then
+        if ! jq -s '.[0] * .[1]' "$dest" "$new" > "$work/live" 2>/dev/null || ! records__is_object "$work/live"; then
+            records__error "could not merge $dest"
+            return 1
+        fi
+        if records__json_same "$dest" "$work/live"; then
+            records__chmod "$mode" "$dest" || return 1
+        else
+            records__write_live "$work/live" "$dest" "$mode" || return 1
+        fi
+    else
+        cat "$new" > "$work/live" || return 1
+        records__apply "$new" "$dest" "$mode" || return 1
+    fi
+    RECORDS_DEPLOY_RESULT=fresh
+    records_put "$app" "$src" "$dest" merge "$new" "$work/live"
+}
+
+# Usage: records__deploy_merged APP SRC NEW DEST MODE WORK
+records__deploy_merged() {
+    local app="$1" src="$2" new="$3" dest="$4" mode="$5" work="$6" repo review
+    command -v jq >/dev/null 2>&1 || { records__error "jq is required to merge JSON files (strategy: merge); install jq"; return 1; }
+    records__is_object "$new" || { records__error "not a valid JSON object: $new"; return 1; }
+    if [[ "$RECORDS_FORCE" == reset ]]; then
+        records__apply "$new" "$dest" "$mode" || return 1
+        RECORDS_DEPLOY_RESULT=fresh
+        records_put "$app" "$src" "$dest" merge "$new" "$new"
+        return
+    fi
+    if [[ -s "$dest" ]] && ! records__is_object "$dest"; then
+        records__error "not a valid JSON object: $dest"
+        return 1
+    fi
+    # A deleted or empty live file comes back as a fresh deploy: the three-way merge needs one
+    if [[ ! -s "$dest" ]] || records_is_fresh "$app" "$src" "$dest" merge; then
+        records__fresh_merged "$app" "$src" "$new" "$dest" "$mode" "$work"
+        return
+    fi
+
+    repo=$(records_repo_path "$app" "$src") || return 1
+    review=$(records_review_path "$app" "$src") || return 1
+    if ! records_merge3 "$repo" "$new" "$dest" "$review" > "$work/out" 2>/dev/null; then
+        records__error "could not compare $dest with its records"
+        return 1
+    fi
+    if [[ "$RECORDS_FORCE" == force ]]; then
+        # The repo's values over what the merge left: local-only keys stay, and stay flagged
+        if ! jq --slurpfile new "$new" '{
+                live: (.live * $new[0]),
+                repo: $new[0],
+                review: (.review * $new[0]),
+                conflicts: []
+            }' "$work/out" > "$work/forced" 2>/dev/null; then
+            records__error "could not merge $dest"
+            return 1
+        fi
+        mv -f "$work/forced" "$work/out" || return 1
+    fi
+    if ! { jq .live "$work/out" > "$work/live" && jq .repo "$work/out" > "$work/repo" \
+        && jq .review "$work/out" > "$work/review"; } 2>/dev/null \
+        || ! records__is_object "$work/live"; then
+        records__error "could not merge $dest"
+        return 1
+    fi
+    RECORDS_DEPLOY_CONFLICTS=$(jq -c .conflicts "$work/out") || return 1
+    if records__json_same "$dest" "$work/live"; then
+        RECORDS_DEPLOY_RESULT=none
+        records__chmod "$mode" "$dest" || return 1
+    else
+        RECORDS_DEPLOY_RESULT=apply
+        records__write_live "$work/live" "$dest" "$mode" || return 1
+    fi
+    [[ "$RECORDS_DEPLOY_CONFLICTS" == "[]" ]] || RECORDS_DEPLOY_RESULT=conflict
+    records_put "$app" "$src" "$dest" merge "$work/repo" "$work/review"
+}
+
+# Deploy one file by the pull table, writing records only after the live write succeeds.
+# With RECORDS_FORCE=force it takes the repo's version, keeping local-only keys of a merged
+# file; with RECORDS_FORCE=reset the file becomes the repo's exactly. On failure the live
+# file and its records are as they were, except when the records fail after the write,
+# which the next run settles because live then already matches the repo. Sets
+# RECORDS_DEPLOY_RESULT to fresh, apply, none, keep, same or conflict, and
+# RECORDS_DEPLOY_CONFLICTS to the held paths of a merged file, as a JSON array.
+# Usage: records_deploy APP SRC SRC_PATH DEST MODE STRATEGY
+records_deploy() {
+    local app="$1" src="$2" new="$3" dest="$4" mode="$5" strategy="$6" work rc=0
+    RECORDS_DEPLOY_RESULT=""
+    RECORDS_DEPLOY_CONFLICTS="[]"
+    records__check_app "$app" && records__check_src "$src" || return 1
+    [[ -r "$new" ]] || { records__error "cannot read $new"; return 1; }
+    if [[ -e "$dest" && ! -f "$dest" ]]; then
+        records__error "$dest is not a regular file"
+        return 1
+    fi
+    case "$strategy" in
+        replace)
+            records__deploy_replaced "$app" "$src" "$new" "$dest" "$mode"
+            ;;
+        merge)
+            work=$(mktemp -d) || { records__error "could not create a temp directory"; return 1; }
+            records__deploy_merged "$app" "$src" "$new" "$dest" "$mode" "$work" || rc=$?
+            rm -rf "$work"
+            return "$rc"
+            ;;
+        *)
+            records__error "unknown strategy: '$strategy'"
+            return 1
+            ;;
+    esac
 }
 
 # What add should ask about for one file, conflicts first. An item is an edit since the

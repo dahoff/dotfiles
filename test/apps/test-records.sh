@@ -787,5 +787,129 @@ rm "$R/rf/review/f"
 if records_items rf f "$LIVE" "$STAGE" true 2>/dev/null; then fail "missing review copy accepted"; fi
 pass "a missing copy fails instead of reporting an edit"
 
+info "manifest: sources that look like the same number stay apart"
+rm -rf "$R/num"
+files one point-one live
+records_put num 1 "$T/d1" replace "$(f 1)" "$(f 3)"
+records_put num 1.0 "$T/d2" replace "$(f 2)" "$(f 3)"
+records_put num 1e0 "$T/d3" merge "$(f 2)" "$(f 3)"
+[[ "$(records_list num | wc -l)" -eq 3 ]] || fail "a line was dropped: $(records_list num)"
+records_put num 1 "$T/d1b" replace "$(f 1)" "$(f 3)"
+[[ "$(records_list num | wc -l)" -eq 3 ]] || fail "updating 1 touched another line: $(records_list num)"
+[[ "$(records__strategy num 1.0)" == replace && "$(records__strategy num 1e0)" == merge ]] || fail "strategy of the wrong line"
+[[ "$(records__dest num 1.0)" == "$T/d2" && "$(records__dest num 1)" == "$T/d1b" ]] || fail "dest of the wrong line"
+pass "1, 1.0 and 1e0 are three sources"
+
+info "records_deploy: results and records, one file at a time"
+RD="$T/rd"
+rm -rf "$RD" "$R/d"
+mkdir -p "$RD"
+files new1 new2 new3
+D="$RD/sub/dir/f"
+records_deploy d f "$(f 1)" "$D" 0640 replace || fail "fresh failed"
+[[ "$RECORDS_DEPLOY_RESULT" == fresh && "$(cat "$D")" == new1 && "$(mode_of "$D")" == 640 ]] || fail "fresh: $RECORDS_DEPLOY_RESULT"
+records_deploy d f "$(f 1)" "$D" 0640 replace || fail "none failed"
+[[ "$RECORDS_DEPLOY_RESULT" == none ]] || fail "none: $RECORDS_DEPLOY_RESULT"
+records_deploy d f "$(f 2)" "$D" 0600 replace || fail "apply failed"
+[[ "$RECORDS_DEPLOY_RESULT" == apply && "$(cat "$D")" == new2 && "$(mode_of "$D")" == 600 ]] || fail "apply: $RECORDS_DEPLOY_RESULT"
+printf mine > "$D"
+records_deploy d f "$(f 2)" "$D" 0600 replace || fail "keep failed"
+[[ "$RECORDS_DEPLOY_RESULT" == keep && "$(cat "$D")" == mine && "$(cat "$R/d/review/f")" == new2 ]] || fail "keep: $RECORDS_DEPLOY_RESULT"
+records_deploy d f "$(f 3)" "$D" 0600 replace || fail "conflict failed"
+[[ "$RECORDS_DEPLOY_RESULT" == conflict && "$(cat "$D")" == mine && "$(cat "$R/d/repo/f")" == new2 ]] || fail "conflict: $RECORDS_DEPLOY_RESULT"
+RECORDS_FORCE=force records_deploy d f "$(f 3)" "$D" 0600 replace || fail "force failed"
+[[ "$RECORDS_DEPLOY_RESULT" == apply && "$(cat "$D")" == new3 && "$(cat "$R/d/repo/f")" == new3 && "$(cat "$R/d/review/f")" == new3 ]] || fail "force: $RECORDS_DEPLOY_RESULT"
+if records_deploy d f "$RD/no-such" "$D" 0600 replace 2>/dev/null; then fail "missing source accepted"; fi
+if records_deploy d f "$(f 3)" "$D" 0600 bogus 2>/dev/null; then fail "unknown strategy accepted"; fi
+if records_deploy d ../x "$(f 3)" "$D" 0600 replace 2>/dev/null; then fail "bad source accepted"; fi
+[[ "$(cat "$D")" == new3 ]] || fail "live changed"
+pass "replaced file results"
+
+info "records_deploy: merged file results"
+rm -rf "$R/m"
+DJ="$RD/s.json"
+files '{"a":1,"b":1}' '{"a":2,"b":2}' '{"a":3,"b":2}' 'not json' '[1]' '{} {}'
+records_deploy m s.json "$(f 1)" "$DJ" 0644 merge || fail "fresh failed"
+[[ "$RECORDS_DEPLOY_RESULT" == fresh && "$RECORDS_DEPLOY_CONFLICTS" == "[]" ]] || fail "fresh: $RECORDS_DEPLOY_RESULT"
+printf '{"a":9,"b":1,"l":1}' > "$DJ"
+records_deploy m s.json "$(f 2)" "$DJ" 0644 merge || fail "conflict failed"
+[[ "$RECORDS_DEPLOY_RESULT" == conflict && "$RECORDS_DEPLOY_CONFLICTS" == '[["a"]]' ]] || fail "conflict: $RECORDS_DEPLOY_RESULT $RECORDS_DEPLOY_CONFLICTS"
+json_eq "$(cat "$DJ")" '{"a":9,"b":2,"l":1}' || fail "live: $(cat "$DJ")"
+json_eq "$(cat "$R/m/repo/s.json")" '{"a":1,"b":2}' || fail "repo copy: $(cat "$R/m/repo/s.json")"
+RECORDS_FORCE=force records_deploy m s.json "$(f 3)" "$DJ" 0644 merge || fail "force failed"
+[[ "$RECORDS_DEPLOY_RESULT" == apply && "$RECORDS_DEPLOY_CONFLICTS" == "[]" ]] || fail "force: $RECORDS_DEPLOY_RESULT"
+json_eq "$(cat "$DJ")" '{"a":3,"b":2,"l":1}' || fail "forced live: $(cat "$DJ")"
+json_eq "$(cat "$R/m/review/s.json")" '{"a":3,"b":2}' || fail "forced review: $(cat "$R/m/review/s.json")"
+RECORDS_FORCE=reset records_deploy m s.json "$(f 3)" "$DJ" 0644 merge || fail "reset failed"
+json_eq "$(cat "$DJ")" '{"a":3,"b":2}' || fail "reset live: $(cat "$DJ")"
+for bad in 4 5 6; do
+    if records_deploy m s.json "$(f $bad)" "$DJ" 0644 merge 2>/dev/null; then fail "bad repo JSON $bad accepted"; fi
+done
+json_eq "$(cat "$R/m/repo/s.json")" '{"a":3,"b":2}' || fail "records moved on a bad source"
+cp "$(f 4)" "$DJ"
+if records_deploy m s.json "$(f 3)" "$DJ" 0644 merge 2>/dev/null; then fail "invalid live accepted"; fi
+[[ "$(cat "$DJ")" == "not json" ]] || fail "invalid live touched"
+printf '{}\n{}\n' > "$DJ"
+if records_deploy m s.json "$(f 3)" "$DJ" 0644 merge 2>/dev/null; then fail "two documents in live accepted"; fi
+[[ "$(cat "$DJ")" == $'{}\n{}' ]] || fail "two documents touched"
+printf '{}' > "$R/m/review/s.json"
+printf 'broken' > "$R/m/repo/s.json"
+printf '{"a":1}' > "$DJ"
+if records_deploy m s.json "$(f 3)" "$DJ" 0644 merge 2>/dev/null; then fail "corrupt repo copy accepted"; fi
+[[ "$(cat "$DJ")" == '{"a":1}' && "$(cat "$R/m/repo/s.json")" == broken ]] || fail "corrupt repo copy: something moved"
+pass "merged file results"
+
+info "records_deploy: a write that fails partway puts the live file back"
+rm -rf "$R/p"
+DP="$RD/p"
+files old new
+records_deploy p f "$(f 1)" "$DP" 0644 replace || fail "fresh failed"
+# Copying the staged temp file over the live one writes part of it and fails, the way a
+# full disk would, with the live file already truncated. Putting it back works.
+cat() {
+    if [[ "${1:-}" == "$RD/."* && ! -e "$RD/tripped" ]]; then
+        : > "$RD/tripped"
+        printf 'ne'
+        return 1
+    fi
+    command cat "$@"
+}
+RC=0
+records_deploy p f "$(f 2)" "$DP" 0644 replace 2>/dev/null || RC=$?
+unset -f cat
+[[ $RC -ne 0 ]] || fail "a failed write reported success"
+[[ -e "$RD/tripped" ]] || fail "the failure was never injected"
+[[ "$(cat "$DP")" == old ]] || fail "live not put back: $(cat "$DP")"
+[[ "$(cat "$R/p/repo/f")" == old && "$(cat "$R/p/review/f")" == old ]] || fail "records advanced"
+[[ -z "$(find "$RD" -maxdepth 1 -name '.p.dotfiles.*')" ]] || fail "temp files left: $(find "$RD" -name '.p.*')"
+records_deploy p f "$(f 2)" "$DP" 0644 replace || fail "retry failed"
+[[ "$(cat "$DP")" == new && "$(cat "$R/p/repo/f")" == new ]] || fail "retry did not apply"
+pass "partial write recovered"
+
+info "records_deploy: when the live file can't be put back, its old content stays in a temp file"
+files old new
+rm -rf "$R/p2"
+DP="$RD/p2"
+records_deploy p2 f "$(f 1)" "$DP" 0644 replace || fail "fresh failed"
+# Neither the write nor putting it back works
+cat() {
+    if [[ "${1:-}" == "$RD/."* ]]; then
+        printf 'x'
+        return 1
+    fi
+    command cat "$@"
+}
+RC=0
+MSG=$(records_deploy p2 f "$(f 2)" "$DP" 0644 replace 2>&1) || RC=$?
+unset -f cat
+[[ $RC -ne 0 ]] || fail "a failed write reported success"
+[[ "$MSG" == *"could not be put back"* ]] || fail "not explained: $MSG"
+KEPT="${MSG##*content is at }"
+KEPT="${KEPT%%$'\n'*}"
+[[ "$(cat "$KEPT")" == old ]] || fail "old content lost: '$KEPT'"
+[[ "$(cat "$R/p2/repo/f")" == old ]] || fail "records advanced"
+rm -f "$KEPT"
+pass "old content kept and named"
+
 echo
 pass "All records tests passed"

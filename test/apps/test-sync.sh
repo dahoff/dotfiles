@@ -897,6 +897,36 @@ sed -i 's/^profile: .*/profile: fptest/' "$T/config-fp"
 expect_full pull
 pass "profile, hostname and config changes are noticed"
 
+# Case 35b
+info "Case 35b: a held conflict turns off the early stop, and resolving it restores it"
+expect_full pull
+expect_skip pull
+expect_full pull
+echo '" conflict edit' >> "$VIMRC"
+cp "$VIMRC" "$T/vimrc-edited"
+printf '" conflict repo\n' >> "$WORK/author/apps/vim/files/.vimrc"
+git -C "$WORK/author" add apps/vim/files/.vimrc
+git -C "$WORK/author" commit -q -m "conflict repo"
+git -C "$WORK/author" push -q origin HEAD
+for _ in 1 2; do
+    fp_run pull
+    [[ $RC -eq 0 ]] || fail "a conflict should not fail the pull: $OUT"
+    cmp -s "$VIMRC" "$T/vimrc-edited" || fail "edit overwritten"
+    [[ "$OUT" == *"kept your edit to $VIMRC"* ]] || fail "no warning: $OUT"
+    [[ ! -e "$STATE/last-complete" ]] || fail "a held conflict counted as complete"
+done
+fp_run status
+[[ "$OUT" == *"conflict"* ]] || fail "status does not show it: $OUT"
+fp_run pull --force "$VIMRC"
+[[ $RC -eq 0 ]] || fail "--force PATH failed: $OUT"
+grep -q '" conflict repo' "$VIMRC" || fail "repo's version not taken"
+[[ ! -e "$STATE/last-complete" ]] || fail "--force PATH counted as a complete pull"
+fp_run pull
+[[ "$OUT" != *"kept your edit"* ]] || fail "still warned: $OUT"
+[[ -e "$STATE/last-complete" ]] || fail "resolved pull not complete"
+expect_skip pull
+pass "a conflict is re-checked until resolved"
+
 # Case 36
 info "Case 36: uninstall means the next sync reinstalls"
 expect_skip pull

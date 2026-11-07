@@ -272,7 +272,7 @@ RUN_RC=0
 
 reset_bash() {
     ./configure.sh uninstall --no-backup &>/dev/null || true
-    rm -rf "$HOME/.bashrc" "$HOME/.bashrc.d" "$HOME/.bak" "$TEST_STATE/apps" "$TEST_STATE/deployed" "$WARNINGS"
+    rm -rf "$HOME/.bashrc" "$HOME/.bashrc.d" "$HOME/.bak" "$TEST_STATE/apps" "$TEST_STATE/records" "$WARNINGS"
     mkdir -p "$TEST_STATE/apps"
 }
 # Installed, then made to look like an old install: no record, an older version.
@@ -280,7 +280,7 @@ reset_bash() {
 old_install() {
     ./configure.sh install --no-backup &>/dev/null || fail "install failed"
     rm -f "$HOME/.bashrc" "$LOCAL"
-    rm -rf "$TEST_STATE/deployed"
+    rm -rf "$TEST_STATE/records"
     sed -i.bak 's/^  version: .*/  version: old/' "$TEST_STATE/apps/bash.yaml"
     cat > "$HOME/.bashrc"
 }
@@ -331,7 +331,7 @@ upgrade --no-backup
 is_repo_rc "23"
 [[ ! -e "$LOCAL" ]] || fail "23: nothing should move"
 [[ "$(saved_copies)" == 0 && ! -s "$WARNINGS" ]] || fail "23: warned about nothing: $RUN_OUT"
-grep -qF "$HOME/.bashrc" "$TEST_STATE/deployed/bash.tsv" || fail "23: not recorded"
+grep -qF "$HOME/.bashrc" "$TEST_STATE/records/bash/manifest.tsv" || fail "23: not recorded"
 pass "Duplicates removed"
 
 # Test 24: own content before and after the blocks is kept, in order
@@ -368,7 +368,7 @@ grep -qxF 'export ALREADY=1' "$LOCAL" || fail "26: existing drop-in overwritten"
 BEFORE=$(cat "$LOCAL")
 { echo 'export MINE=1'; block; } > "$HOME/.bashrc"
 sed -i.bak 's/^  version: .*/  version: old/' "$TEST_STATE/apps/bash.yaml"
-rm -rf "$TEST_STATE/deployed"
+rm -rf "$TEST_STATE/records"
 upgrade --no-backup
 [[ "$(cat "$LOCAL")" == "$BEFORE" ]] || fail "26: content duplicated"
 pass "No duplicates"
