@@ -2,6 +2,8 @@
 
 Read this first when resuming. Sub-projects 1–3 are merged and on `origin/main`.
 
+**Superseded in part (2026-11-07).** The `updates-and-local-edits` work (`docs/superpowers/specs/2026-11-06-updates-and-local-edits-design.md`) changed the commands described below. `sync` no longer deploys in the background: new terminals only run `dotfiles check-updates`, which fetches and reports. `dotfiles pull` deploys, `dotfiles sync` is `add` then `pull`, `push` is `pull --remote`, `push --init` is `init --remote`, `auto_sync` is `update_check`, and nothing creates `00-local.sh` any more. The text below is the history as of 2026-11-03; `README.md` and `docs/schema.md` describe the current commands.
+
 ## Where things are
 
 | What | Where |

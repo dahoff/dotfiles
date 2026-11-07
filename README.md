@@ -1,13 +1,62 @@
 # dotfiles
 
-One command to set up a machine's tools and config, and keep it up to date. It installs packages, deploys config files, and syncs in the background from new terminals. Per-machine differences live in an optional private repo, so this public repo stays free of personal settings.
+One command to set up a machine's tools and config, and keep it up to date. It installs packages, deploys config files, tells you from new terminals when updates are available, and helps you save local edits back to a repo. Per-machine differences live in an optional private repo, so this public repo stays free of personal settings.
 
-- [Set up a new machine](#set-up-a-new-machine)
-- [Commands](#commands)
-- [Day-to-day](#day-to-day)
-- [Add an app](#add-an-app)
-- [Layered config](#layered-config)
-- [Troubleshooting](#troubleshooting)
+## Command reference
+
+Find what you want to do, then follow the link for details. For flags, see [Flags](#flags).
+
+### Update this machine
+
+| Command | What it does |
+|---|---|
+| [`dotfiles pull`](#pull) | Updates the repos, installs missing tools, deploys changed config. Keeps your edits and reports conflicts. |
+| [`dotfiles pull --no-fetch`](#pull) | Deploys what's already checked out, without fetching. |
+| [`dotfiles sync`](#sync) | `add`, then `pull`: review your edits first, then update. Needs a terminal. |
+| [`dotfiles status`](#status) | Shows updates available, your edits, conflicts and uncommitted repo files. Changes nothing. |
+| [`dotfiles versions`](#versions-and-checkout) | Lists tagged versions. |
+| [`dotfiles checkout REF`](#versions-and-checkout) | Pins this machine to a tag or commit. `checkout main` follows `main` again. |
+
+### Save local edits
+
+| Command | What it does |
+|---|---|
+| [`dotfiles add`](#add) | Walks through your edits: save one to a repo layer (staged, not committed), dismiss it or skip it. |
+| [`dotfiles add --all`](#add) | Also asks again about edits you dismissed. |
+| [`dotfiles sync`](#sync) | Runs `add`, then `pull`. |
+
+### Resolve conflicts
+
+| Command | What it does |
+|---|---|
+| [`dotfiles add`](#resolving-conflicts) | Save your version to a layer, or dismiss it to accept the repo's version as the new starting point. |
+| [`dotfiles pull --force PATH`](#resolving-conflicts) | Takes the repo's version of that one file. |
+| [`dotfiles pull --force`](#pull) | Takes the repo's version of every file. |
+
+### Set up or update a remote host
+
+For a host that can't reach the repos. This machine sends its committed repos over ssh.
+
+| Command | What it does |
+|---|---|
+| [`dotfiles init --remote HOST...`](#remote-hosts) | First setup of each host. |
+| [`dotfiles pull --remote HOST...`](#remote-hosts) | Updates each host. |
+
+### Set up, reset or remove
+
+| Command | What it does |
+|---|---|
+| [`dotfiles init`](#init) | First setup of this machine. Run again to change settings, or to reset every managed file to the repo layers. |
+| [`dotfiles uninstall`](#uninstall) | Removes deployed config and restores your original files. |
+
+### Check
+
+| Command | What it does |
+|---|---|
+| [`dotfiles verify`](#verify-and-help) | Checks that every deployed file exists. |
+| [`dotfiles help`](#verify-and-help) | Lists every command and flag. |
+
+More: [Set up a new machine](#set-up-a-new-machine) · [Command details](#command-details) · [Flags](#flags) · [Day-to-day](#day-to-day) · [Add an app](#add-an-app) · [Layered config](#layered-config) · [Troubleshooting](#troubleshooting)
 
 ## Set up a new machine
 
@@ -23,31 +72,30 @@ This installs git if it's missing, clones this repo to `~/.local/share/dotfiles/
 curl -fsSL https://raw.githubusercontent.com/dahoff/dotfiles/main/bootstrap.sh | bash -s -- --hosts-dir git@github.com:you/dotfiles-hosts.git
 ```
 
-`init` asks for the following, then runs the first sync:
+`init` asks for the following, then runs the first `pull`:
 
 | Question | Default | Notes |
 |---|---|---|
 | Hosts repo | `none` | A git URL, a local path, or `none`. If an ssh clone fails, it shows you a public key to add, then retries. |
 | Hostname | `hostname -s` | Selects `hosts/<hostname>/` in the hosts repo. |
 | Profile | `complete` | Not asked if `hosts/<hostname>/host.yaml` already selects one. |
-| Background sync | `on` | |
-| Sync interval | `4h` | Format is `<n>m`, `<n>h` or `<n>d`. |
+| Update check | `on` | Whether new terminals check for updates and tell you. They never deploy anything. |
+| Check interval | `4h` | Format is `<n>m`, `<n>h` or `<n>d`. |
 
-The first sync may ask for your sudo password to install packages, and for your git name and email if none are set. When it finishes, **open a new terminal** to load the new shell setup.
+The first pull may ask for your sudo password to install packages, and for your git name and email if none are set. When it finishes, **open a new terminal** to load the new shell setup.
 
 Your existing settings are kept:
 
 - `~/.gitconfig` moves to `~/.gitconfig.local`, which the managed config includes.
-- A custom `~/.bashrc` is replaced, and a warning says where the original is: its content is no longer loaded. An existing `~/.bashrc.d/00-local.sh` still loads and is left alone.
-- Every file that gets replaced is first copied to `~/.bak/<app>/original/`.
+- A custom `~/.bashrc` is replaced, and a warning says where the old copy is: its content is no longer loaded. Copy back what you want, and `dotfiles add` offers to save it to a layer.
+- Every file that gets replaced is first copied to `~/.bak/<app>/original/`, and a snapshot of all managed files is always taken.
+- Files dotfiles doesn't manage are never touched, including any `~/.bashrc.d/*.sh` of your own.
 
 Answers are saved in `~/.config/dotfiles/config.yaml`. Run `dotfiles init` again at any time to change them.
 
-**A machine that can't reach the repos:** from a machine that can, run this. It copies the committed repos over ssh and runs `init` on the target.
+**A machine that can't reach the repos:** see [Remote hosts](#remote-hosts).
 
-```bash
-dotfiles push --init user@host
-```
+**Moving a machine from an older version of dotfiles:** the new `add` refuses the old records, so review pending edits with the old `dotfiles add` **before** you update. Then update, and run `dotfiles init` again: it snapshots every managed file and starts fresh records.
 
 **Choosing what gets installed:** there are two built-in profiles.
 
@@ -56,57 +104,162 @@ dotfiles push --init user@host
 | `complete` | git, bash, tmux, vim, curl, fzf, jq, tree, lazygit, lazyssh, scripts, claude |
 | `minimal` | `complete` without claude, lazygit and lazyssh |
 
-## Commands
+## Command details
 
-| Command | What it does |
+### pull
+
+Fetches both repos (fast-forward only), installs missing tools, and deploys config. It stops early with `Already up to date` when nothing has changed, unless a conflict is open.
+
+For each file it compares your live copy with the repo:
+
+| You changed it | The repo changed it | Pull does |
+|---|---|---|
+| No | Yes | Applies the repo's version |
+| Yes | No | Keeps yours |
+| Yes | Yes, to your value | Updates its records only |
+| Yes | Yes, to something else | **Conflict:** keeps yours, warns on every pull until [resolved](#resolving-conflicts) |
+
+Only **committed** repo content is deployed. If a repo has uncommitted files, `pull` names them and doesn't deploy them. Merged JSON files such as Claude's `settings.json` are compared per key.
+
+- `--no-fetch` skips the fetch and deploys what's checked out.
+- `--force` takes the repo's version of every file. Local-only keys in merged files are kept, and a snapshot is always taken first.
+- `--force PATH` does the same for one file; see [Resolving conflicts](#resolving-conflicts).
+- If a repo has diverged, or upstream changed a file you saved, `pull` stops and prints the git commands to fix it.
+- A machine pinned by `checkout` warns and doesn't fetch.
+- `pull` works unattended, so cron and scripts can use it.
+
+### sync
+
+`dotfiles sync` is `add`, then `pull`, for when you want to review your edits before updating. It fast-forwards both repos first, so `add` sees conflicts from incoming changes. If that update fails, it warns and `add` still runs on what's here. It needs a terminal, and `--dry-run` previews only the `pull`.
+
+### status
+
+Read-only. It shows the repos, version, host, profile, last check, missing packages and each tool's state, then these lists, each under its own label:
+
+| Label | Meaning |
 |---|---|
-| `dotfiles init` | Asks the setup questions, saves the answers, and runs a sync. |
-| `dotfiles sync` | Pulls the repos, installs missing tools, and deploys changed config. Stops early if nothing changed. |
-| `dotfiles status` | Shows the repos, version, host, profile, last sync, missing packages and each app's state, then lists updates available, unreviewed changes, conflicts, dismissed differences, saved changes waiting for a commit, and uncommitted repo files, each under its own label. Changes nothing. |
-| `dotfiles add` | Walks through your local edits and stages the ones you accept into a repo. Never commits or pushes. |
-| `dotfiles push HOST...` | Copies the committed repos to each host over ssh and syncs there. Add `--init` for a first-time setup. |
-| `dotfiles versions` | Lists tagged versions. |
-| `dotfiles checkout REF` | Switches to a tag or commit, deploys it, and stays there. `dotfiles checkout main` follows `main` again. |
-| `dotfiles verify` | Checks that every deployed file exists. |
-| `dotfiles uninstall` | Removes deployed config and restores your original files. Lists your local changes first and always takes a snapshot, even with `--no-backup`; if that fails, nothing is restored. Installed tools, the `dotfiles` command and drop-ins stay. |
-| `dotfiles help` | Lists every command and flag. |
+| `updates available:` | The repo has changes `pull` would bring in. |
+| `unreviewed changes:` | Local edits `add` hasn't asked about yet. |
+| `conflicts:` | You and the repo both changed them; yours is kept. |
+| `dismissed:` | Edits you kept local on purpose. `add --all` asks again. |
+| `saved, not committed:` | Edits `add` staged in a repo that you haven't committed. |
+| `uncommitted files:` | Repo files that aren't committed, so aren't deployed. |
 
-Most useful flags:
+### versions and checkout
+
+`dotfiles versions` lists tagged versions. `dotfiles checkout REF` switches to a tag, commit or branch and deploys it with `pull --no-fetch`. A tag or commit pins the machine, so `pull` won't move it. `dotfiles checkout main` follows `main` again. It refuses if the repo has uncommitted changes, and refuses a version from before this design as too old.
+
+### add
+
+`dotfiles add` shows each local edit and asks what to do. It needs a terminal, and never commits or pushes. It only offers files dotfiles manages.
+
+| Answer | Effect |
+|---|---|
+| **Save** | Asks which layer: this host, a profile or the public default. Copies the change there and stages it. Merged files save only that key, other files the whole file. |
+| **Dismiss** | Keeps the change local, and `add` doesn't ask again unless the value changes. |
+| **Skip** | Asks again next time. Quitting partway skips everything unanswered. |
+
+When the review ends, `add` lists what it staged in each repo. Commit and push those yourself; other machines don't get them until you do. If you later discard a staged save, `add` asks again.
+
+- `dotfiles add --all` also asks again about dismissed edits.
+- The host layer is offered only when the host's directory in the hosts repo has a `host.yaml`. A detached hosts repo, or a public repo pinned by `checkout`, offers no layers, and `add` says why.
+- Saving to the public repo shows the value and needs you to type `public`.
+- Saving a replaced file to a layer that has no copy creates one, which then hides later changes to the public file on that host. `add` says so before it saves.
+- Arrays are saved as one value, so a save hides later repo changes to that list.
+- A host with no git (a [remote host](#remote-hosts)) can only dismiss, because the next `pull --remote` would wipe a save.
+- Your own `~/.bashrc.d/*.sh` and `~/.gitconfig.local` are never offered.
+- `add` has no dry run: answer `n` to look without saving.
+
+### Resolving conflicts
+
+A conflict means you and the repo changed the same file, or the same key in a merged file, to different things. Your version is kept and `pull` warns each time. Resolve it one of these ways:
+
+- **`dotfiles add`:** save your version to a layer, or dismiss it. Dismissing accepts the repo's current version as the new starting point and stops the warning. For a replaced file, `add` shows your change and the repo's separately and warns before saving, because saving the whole file undoes the repo's change.
+- **`dotfiles pull --force PATH`:** takes the repo's version of that file only, and touches nothing else. `PATH` can be a deployed config file or a drop-in. It refuses a path dotfiles doesn't manage. It keeps local-only keys in merged files and takes a snapshot first.
+
+### init
+
+First setup is described in [Set up a new machine](#set-up-a-new-machine).
+
+On a machine that's already set up, `init` saves your answers, then asks whether to reset. The default is no, which runs a normal `pull`, so changing the hostname or profile wipes nothing.
+
+A reset makes every managed file exactly what the repo layers produce, removes local-only keys, and starts fresh records. It resets to the repo, not to the files from before dotfiles; that's what `uninstall` does.
+
+- It updates the repos first, then lists everything that would be lost. If it can't tell what would be lost (the profile or overlays don't load), it doesn't offer a reset.
+- You must type `reset` to confirm, and it prints the snapshot's path.
+- `--yes`, or no terminal, never resets.
+- Files dotfiles doesn't manage, such as `~/.gitconfig.local`, are left alone.
+- To reset one file only, use `pull --force PATH`.
+- `init` refuses a `host.yaml` that isn't committed yet: commit it, then run `init` again.
+
+Settings flags: `--hosts-dir URL|PATH|none`, `--hostname NAME`, `--profile NAME`, `--update-check on|off`, `--interval <n>m|h|d`, `--yes` and `--no-sync` (write the config only).
+
+### Remote hosts
+
+For a host that can't reach the repos, such as a machine behind a firewall. These commands run on **this** machine and send its committed repos to the host over ssh. The host's copy isn't a git checkout, so it can't fetch.
+
+```bash
+dotfiles init --remote user@host      # first setup; accepts init's flags
+dotfiles pull --remote user@host      # update; --force is passed through
+```
+
+`pull --remote` warns if the repos here are behind their remotes, since the host gets what's committed here. Only committed changes are sent, and conflicts show in your terminal. An edit made on such a host has to be copied back by hand. `init --remote` resets a host the way [`init`](#init) does.
+
+### uninstall
+
+Removes deployed config and restores your original files. It lists your local changes first and always takes a snapshot, even with `--no-backup`; if that fails, nothing is restored. Installed tools, the `dotfiles` command and drop-ins stay.
+
+### verify and help
+
+`dotfiles verify` checks that every deployed file exists. `dotfiles help` lists every command and flag.
+
+## Flags
 
 | Flag | Works with | Effect |
 |---|---|---|
-| `--dry-run` | `sync`, `push`, `checkout`, `uninstall` | Shows what would happen without changing anything. `add` has no dry run: answer `n` to look without saving. |
-| `--force` | `sync` | Redeploys everything. **This overwrites local edits**, though the backup snapshot keeps them unless you also pass `--no-backup`. |
-| `--no-pull` | `sync` | Uses what's already checked out. |
-| `--profile NAME` | `sync`, `status`, `add`, `uninstall`, `verify` | Uses this profile for this run only. |
-| `--hosts-dir PATH` | `sync`, `status`, `add`, `uninstall`, `verify` | Uses this hosts repo for this run only. |
-| `--hostname NAME` | `sync`, `status`, `add`, `uninstall`, `verify` | Uses this host directory for this run only. |
-| `--yes` | `init`, `push --init` | Accepts the defaults without prompting. |
+| `--dry-run` | `pull`, `sync`, `checkout`, `uninstall`, `pull --remote`, `init --remote` | Shows what would happen without changing anything. |
+| `--no-fetch` | `pull`, `sync` | Doesn't fetch. Uses what's checked out. |
+| `--force [PATH]` | `pull`, `pull --remote` | Takes the repo's version of every file, or of `PATH` only. **This overwrites local edits**, though the snapshot it takes keeps them. |
+| `--no-backup` | `pull`, `uninstall` | Skips creating backups. `uninstall` and `pull --force` still take their snapshot. |
+| `--profile NAME` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this profile for this run only. |
+| `--hosts-dir PATH` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this hosts repo for this run only. |
+| `--hostname NAME` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this host directory for this run only. |
+| `--yes` | `init`, `init --remote` | Accepts the defaults without prompting. Never resets. |
 
-To change a profile, hosts repo or hostname permanently, use `dotfiles init`. The background sync reads the saved config and doesn't know about flags from an earlier run.
+To change a profile, hosts repo or hostname permanently, use `dotfiles init`. The update check reads the saved config and doesn't know about flags from an earlier run.
 
 ## Day-to-day
 
 ### Staying up to date
 
-A new terminal starts a sync in the background, at most once per interval. It never prompts:
+A new terminal runs a throttled `git fetch`, at most once per interval, and tells you in the next terminal when there are updates. It **never deploys or installs anything**, and never prompts. When you see the message, run `dotfiles pull`, or `dotfiles sync` to review your edits first.
 
-- **Config updates** are applied, and the next terminal tells you what changed.
-- **Missing packages** are only installed if sudo works without a password. Otherwise every terminal reminds you to run `dotfiles sync` yourself.
+If packages are still missing because they need sudo, every terminal reminds you to run `dotfiles pull`.
 
-To turn it off, run `dotfiles init --auto-sync off`, or start a single shell with `DOTFILES_NO_AUTO_SYNC=1 bash`.
+To turn the check off, run `dotfiles init --update-check off`, or start a single shell with `DOTFILES_NO_UPDATE_CHECK=1 bash`.
 
 ### Changing a config file
 
-There are two ways, and both end with you committing and pushing. Other machines pick up the change on their next sync.
+There are two ways, and both end with you committing and pushing. Other machines pick up the change on their next `pull`.
 
-**Edit the repo** by changing the file under `apps/<app>/files/`, then deploy it:
+**Edit the repo** by changing the file under `apps/<app>/files/`. Only committed content deploys, so commit before you deploy:
 
 ```bash
-dotfiles sync --dry-run   # optional preview
-dotfiles sync             # uncommitted changes are deployed too, so you can try them first
-git add -p && git commit && git push
+git add -p && git commit
+dotfiles pull --no-fetch   # deploy it here
+git push
 ```
+
+To **try a change first**, commit it on a branch, deploy that, and go back when you're done:
+
+```bash
+git switch -c try-tmux
+git commit -am "Try a new prefix"
+dotfiles pull --no-fetch      # deploys the branch
+dotfiles checkout main        # back to main
+```
+
+`dotfiles status` names uncommitted repo files and says they aren't deployed.
 
 **Or edit the live file** (`~/.tmux.conf`, say) and save it back afterwards:
 
@@ -114,25 +267,25 @@ git add -p && git commit && git push
 dotfiles add
 ```
 
-`add` shows a diff of each edited file and asks which layer to save it to: this host, a profile, or the public default. Then review, commit and push from the repo it names.
+`add` shows each edit and asks whether to save it, and to which layer: this host, a profile, or the public default. It stages the change; then review, commit and push from the repo it names.
 
-Until you save them, edits are safe: `sync` leaves an edited file alone, even when the repo changes the same file, and warns you. `add` can't accept changes to merged files like Claude's `settings.json`. It shows the differences, and you edit the repo copy by hand.
+Until you save them, edits are safe: `pull` leaves an edited file alone, even when the repo changes the same file, and warns you. See [Resolving conflicts](#resolving-conflicts).
 
-`add` only handles files dotfiles manages. Your own `~/.bashrc.d/*.sh` drop-ins and `~/.gitconfig.local` are never touched or copied into a repo, which makes them the right place for secrets and one-off settings.
+Your own `~/.bashrc.d/*.sh` drop-ins and `~/.gitconfig.local` are never copied into a repo, which makes them the right place for secrets and one-off settings.
 
 ### Undoing a change
 
-Sync follows the repo, so undo in the repo:
+Pull follows the repo, so undo in the repo:
 
 - **Everywhere:** `git revert <commit>`, then push.
-- **On this machine only:** `dotfiles checkout <tag-or-commit>`, and `dotfiles checkout main` to return. While pinned, this machine doesn't pull.
+- **On this machine only:** `dotfiles checkout <tag-or-commit>`, and `dotfiles checkout main` to return. While pinned, this machine doesn't fetch.
 - **One file:** copy it back from `~/.bak/<app>/`. `original/` holds the file from before dotfiles first touched it, and timestamped folders hold the last few versions.
 
 To cut a version for `dotfiles versions` to list: `git tag v1.0 && git push origin v1.0`.
 
-### Machines updated with `push`
+### Machines updated with `pull --remote`
 
-A pushed copy isn't a git checkout, so it can't pull updates. Run `dotfiles push user@host` again to update it. Only committed changes are sent.
+A host set up with `init --remote` isn't a git checkout, so it can't fetch updates. Run `dotfiles pull --remote user@host` again from a machine that can. See [Remote hosts](#remote-hosts).
 
 ## Add an app
 
@@ -210,12 +363,12 @@ source "$APP_DIR/../../lib/installer.sh"
 installer_main "$@"
 ```
 
-Add the app's name to a profile, then try it, and commit it when it works:
+Add the app's name to a profile and commit it. Only committed content deploys; to try it first, use a branch as in [Changing a config file](#changing-a-config-file). Then:
 
 ```bash
 chmod +x apps/ripgrep/configure.sh
-dotfiles sync --dry-run
-dotfiles sync
+dotfiles pull --dry-run
+dotfiles pull --no-fetch
 dotfiles status
 ```
 
@@ -244,7 +397,7 @@ install:
 ```
 
 ```bash
-chmod +x apps/lazygit/install.sh   # required, or the sync fails
+chmod +x apps/lazygit/install.sh   # required, or the pull fails
 ```
 
 `install.dropin` only works with an `install.sh`. For a tool installed by package manager, put its drop-in under `files:` as in the ripgrep example.
@@ -290,7 +443,7 @@ To start using one, create the repo, push it, and point this machine at it:
 dotfiles init --hosts-dir git@github.com:you/dotfiles-hosts.git
 ```
 
-A URL is cloned to `~/.local/share/dotfiles/dotfiles-hosts`. `sync` pulls this repo too, and uses its working tree as it is, so you can try changes before committing them.
+A URL is cloned to `~/.local/share/dotfiles/dotfiles-hosts`. `pull` fetches this repo too. Like the dotfiles repo, only its committed content is deployed, so commit a change (on a branch, to try it) before you deploy it.
 
 ### Choosing tools per machine
 
@@ -332,7 +485,7 @@ To override a file, put your version at the same `<src>` name, under the app's f
 hosts/my-laptop/apps/tmux/files/.tmux.conf
 ```
 
-The file has to be one the app already lists in its `config.yaml`. An overlay with any other name stops the sync before it changes anything. To add a new file, first add it to the app's `files:` list in this repo.
+The file has to be one the app already lists in its `config.yaml`. An overlay with any other name stops the pull before it changes anything. To add a new file, first add it to the app's `files:` list in this repo.
 
 Layers apply in this order, with the last one winning:
 
@@ -340,7 +493,7 @@ Layers apply in this order, with the last one winning:
 2. Each hosts-repo profile, starting from the base of the `extends` chain
 3. `hosts/<hostname>/apps/<app>/files/<src>`
 
-A layer's copy replaces lower layers entirely, so later changes to the public file stop reaching that machine until you remove or update the copy.
+For a replaced file, the most specific layer's copy wins whole: it replaces every lower layer's copy entirely, so later changes to the public file stop reaching that machine until you remove or update the copy. `dotfiles add` says so when you save a file to a layer that has no copy of it yet.
 
 ### Replace or merge
 
@@ -367,20 +520,22 @@ A merge never deletes a key. To remove one, delete it from the repo layer **and*
 
 ```bash
 dotfiles status            # shows the host and profile in use, and each app's state
-dotfiles sync --dry-run    # shows what would change
+dotfiles pull --dry-run    # shows what would change
 ```
 
 ## Troubleshooting
 
 | Symptom | What to do |
 |---|---|
-| `dotfiles: command not found` | Open a new terminal. If it's still missing, make sure `~/.local/bin` is on `PATH`; the `bash` app adds it. After `init --no-sync` the command isn't linked yet, so run `~/.local/share/dotfiles/dotfiles/dotfiles sync` once. |
-| A sync says `Already up to date`, but a deployed file is missing | That early stop doesn't check deployed files. Run `dotfiles sync --force`, which also overwrites local edits. |
-| `X not installed (needs sudo)` at every terminal | Run `dotfiles sync` so it can ask for your password. |
-| A file isn't updating | It probably has a local edit, which `dotfiles status` will list. Save it with `dotfiles add`, or take the repo's version with `dotfiles sync --force`. |
-| `pull failed` | Your local history has diverged, or the remote can't be reached. Sync carries on with what's checked out. Fix it with git in the repo it names. |
+| `dotfiles: command not found` | Open a new terminal. If it's still missing, make sure `~/.local/bin` is on `PATH`; the `bash` app adds it. After `init --no-sync` the command isn't linked yet, so run `~/.local/share/dotfiles/dotfiles/dotfiles pull` once. |
+| A pull says `Already up to date`, but a deployed file is missing | That early stop doesn't check deployed files. Run `dotfiles pull --force`, or `dotfiles pull --force PATH` for one file. It takes the repo's version, after a snapshot. |
+| `X not installed (needs sudo)` at every terminal | Run `dotfiles pull` so it can ask for your password. |
+| A file isn't updating | It probably has a local edit or a conflict, which `dotfiles status` lists; `pull` keeps your version. Save it with `dotfiles add`, or take the repo's with `dotfiles pull --force PATH`. Or the change isn't committed yet: `status` lists uncommitted repo files. |
+| `pull failed` | The remote can't be reached. Pull carries on with what's checked out. |
+| `pull blocked` | The repo has diverged, or local changes are in the way. Nothing was deployed. Run the git commands it prints, then `dotfiles pull`. |
+| `This host still has records from an older version` | Run `dotfiles init`: it snapshots every managed file and starts fresh records. |
 | `Custom install script not found or not executable` | `chmod +x apps/<app>/install.sh` |
-| A sync warns that this machine is pinned | You ran `dotfiles checkout` on a tag or commit. `dotfiles checkout main` follows `main` again. |
-| Checking what the background sync did | See `~/.local/state/dotfiles/last-sync.log`. |
+| A pull warns that this machine is pinned | You ran `dotfiles checkout` on a tag or commit. `dotfiles checkout main` follows `main` again. |
+| An `updates available` message at a new terminal | The background check found new commits and deployed nothing. Run `dotfiles pull`. |
 
 For every field, flag and edge case, see [docs/schema.md](docs/schema.md).

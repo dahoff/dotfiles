@@ -10,9 +10,12 @@ Ideas and loose ends. Nothing here is scheduled.
 
 ## Local edits
 
-- **Accept merged-file changes in `dotfiles add`.** Needs per-key layer logic, because the same key can be set in several layers.
 - **`dotfiles commit` and a two-way `sync`**, if `add` plus a manual commit becomes tedious. They were dropped for now because most of the risk and work came from the tool committing to a public repo on your behalf. A `commit` could be built on top of `add`.
-- **Tell an older repo version from a hand edit.** A machine that was behind when edit records were introduced has no record, so a file the repo has since changed looks edited, and saving it in `add` would put the old version back. Comparing against the file's git history would settle it. This stops mattering once every machine has synced.
+- **A tool with both `configure.sh` and a drop-in shares one records app.** Pruning the configure.sh files' records drops the drop-in's record. No tool does both today.
+- **Drop-in snapshots ignore `backup.dir` and aren't pruned.** They always go to `~/.bak/<app>`.
+- **`--supplement` files bypass the records.** They get no edit protection and no snapshot. No profile uses them today.
+- **Saving a key re-pretty-prints the layer file.** The value is right, but the file's formatting changes.
+- **A subtree saved over a lower layer's object doesn't round-trip.** It comes back from `add` as "you deleted" items.
 
 ## Bootstrap
 

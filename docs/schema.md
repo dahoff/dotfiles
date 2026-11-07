@@ -41,7 +41,7 @@ A tool listed twice in the final list runs once, at its first position, with the
 | `apt` | string | No | Package name for APT (Debian/Ubuntu). |
 | `dnf` | string | No | Package name for DNF (Fedora/RHEL). |
 | `brew` | string | No | Package name for Homebrew (macOS). |
-| `custom.check` | string | No | Shell command to test if already installed (exit 0 = installed). Without it, `custom.script` runs on every sync. |
+| `custom.check` | string | No | Shell command to test if already installed (exit 0 = installed). Without it, `custom.script` runs on every pull. |
 | `custom.script` | string | No | Install script path, relative to `apps/`. |
 | `custom.dropin` | string | No | Shell drop-in file path, relative to `apps/`, copied to `${SHELL_SCRIPTS_DIR}` only when `check` passes after the install step (or there is no `check`). |
 | `config.dir` | string | No | Folder under `apps/` containing `configure.sh` and `files/`. |
@@ -214,7 +214,7 @@ Layers, lowest to highest: `dotfiles/apps/<app>/files/<src>`, each hosts-dir pro
 `replace`: the highest layer that has the file wins. `merge`: live ⊕ all layers in order.
 In practice the repo layers are pre-merged and then merged onto the live file: live ⊕ (dotfiles ⊕ profiles ⊕ host). This differs from strict left-to-right only when a lower layer sets a scalar or null and a higher layer sets an object at the same path; the result then keeps more live data.
 
-Running an app's `configure.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `dotfiles sync` with the hosts repo to keep host overlays.
+Running an app's `configure.sh` directly deploys the dotfiles layer only (no hosts repo overlays); use `dotfiles pull` with the hosts repo to keep host overlays.
 Strategy: last declaration among the app `config.yaml`, the hosts-dir profile `files:` maps (base-most first), and `host.yaml` `files:`.
 
 ### Errors
@@ -234,14 +234,15 @@ The run aborts before any change if the hosts repo is missing, `host.yaml` lacks
     hosts_dir: ~/.local/share/dotfiles/dotfiles-hosts
     hostname: koi
     profile: complete
-    auto_sync: on          # on/off (also true/false/yes/no)
-    auto_sync_interval: 4h
+    update_check: on       # on/off (also true/false/yes/no)
+    update_check_interval: 4h
 
 - Only the first `: ` splits key from value, so a value may contain `: `.
 - Blank lines and full-line `#` comments are ignored. A trailing ` #...` is a comment when the value is unquoted; a `#` inside quotes is kept. CRLF line ends are tolerated.
 - One pair of matching quotes is stripped from a value. A leading `~` is expanded.
 - Indented lines and list items (`- x`) are ignored with a warning, as are unknown keys and lines without `key: value`. The warning names `file:line`.
-- An invalid `auto_sync`, `auto_sync_interval` or `hostname` aborts the command (in `--auto` it is reported, see Report).
+- An invalid `update_check`, `update_check_interval` or `hostname` aborts the command.
+- `auto_sync` and `auto_sync_interval` are the old names of the two update check keys. They still load, and `init` writes the new names.
 
 The dotfiles repo is always the checkout the running `dotfiles` script lives in; there is no setting for it.
 
@@ -250,8 +251,8 @@ The dotfiles repo is always the checkout the running `dotfiles` script lives in;
 | `hosts_dir` | `~/.local/share/dotfiles/dotfiles-hosts` if that directory exists, else none | dotfiles-hosts checkout |
 | `hostname` | `hostname -s`, then `uname -n` | selects `hosts/<name>/`. Same rules as `--hostname`: non-empty, no `/`, not `.` or `..`. |
 | `profile` | `complete` | used when there is no `host.yaml`; with one, it overrides it with a warning (same as `--profile`) |
-| `auto_sync` | `on` | `off` disables the background sync. `true`/`yes` and `false`/`no` are accepted and normalized to `on`/`off`. |
-| `auto_sync_interval` | `4h` | minimum gap between background syncs: `<n>m`, `<n>h` or `<n>d` |
+| `update_check` | `on` | `off` disables the update check that new terminals start. `true`/`yes` and `false`/`no` are accepted and normalized to `on`/`off`. |
+| `update_check_interval` | `4h` | minimum gap between update checks: `<n>m`, `<n>h` or `<n>d` |
 
 Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > config file > default.
 
@@ -263,78 +264,125 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 | Command | What it does |
 |---|---|
-| `init` | Guided per-host setup: asks a few questions, writes the config file, then runs the first sync. See Setting up a new machine. |
-| `sync` | Pulls the dotfiles and hosts repos (fast-forward only), self-installs, then installs packages and deploys app configs. Idempotent: it installs what is new and upgrades what changed. |
-| `push HOST...` | Ships the repos to each HOST over ssh and runs `dotfiles sync --no-pull` there. Meant for hosts without access to the repos. |
-| `status` | Read-only. Shows the repos (branch and commit, or the pushed copy's `PUSHED` line), the version, host and profile, auto sync state, pending packages, per-app state and local edits. |
+| `init` | Guided per-host setup: asks a few questions, writes the config file, then runs the first `pull`. On a host already set up, it can reset. See Setting up a new machine. |
+| `pull` | Fetches the dotfiles and hosts repos (fast-forward only), self-installs, then installs packages and deploys app configs. Keeps local edits and holds back conflicts. |
+| `pull --remote HOST...` | Sends this machine's committed repos to each HOST over ssh and runs `dotfiles pull --no-fetch` there. See Remote hosts. |
+| `init --remote HOST...` | The same, but runs `dotfiles init` there. First-time setup of a host that can't reach the repos. |
+| `sync` | Fast-forwards both repos, runs `add`, then `pull`. Needs a terminal. |
+| `status` | Read-only. Shows the repos (branch and commit, or the pushed copy's `PUSHED` line), the version, host and profile, update check state, pending packages, per-app state, and the lists described under Local edits. |
 | `versions` | Lists tagged versions, newest first. See Versions. |
 | `checkout REF` | Switches to a tag or commit, deploys it and stays there. See Versions. |
-| `add` | Reviews local edits one by one and stages the accepted ones in a repo layer. See Local edits. |
-| `uninstall` | Removes the deployed configs and restores the originals (unless `--no-backup`). Installs nothing and leaves tools in place. |
+| `add` | Reviews local edits and conflicts one by one and stages the accepted ones in a repo layer. See Local edits. |
+| `add --all` | The same, and asks again about dismissed edits. |
+| `uninstall` | Removes the deployed configs and restores the originals (unless `--no-backup`). Lists your local changes first and always takes a snapshot; if that fails, nothing is restored. Installs nothing and leaves tools in place. |
 | `verify` | Checks every installation. Installs nothing. |
 | `help` | Prints the usage text. |
 
+`dotfiles push` is gone. Running it prints which commands replace it: `pull --remote` (was `push`) and `init --remote` (was `push --init`). A host set up with the old `push` has records from the older version, so run `init --remote` on it once (after reviewing its edits, if it has git) before using `pull --remote`.
+
+### `pull`
+
+- The fetch is `git pull --ff-only` and nothing else. A failed fetch (no network, no access) is a warning, not a failure: the repo is left untouched, the pull continues with what is checked out, and the exit code stays 0. A repo that is not a git work tree, or has no upstream branch, is skipped silently.
+- A fetch that is blocked, because the repo has diverged or local changes are in the way, stops the pull before anything is deployed. It prints the commands to fix it: commit or set aside your changes, `git pull --rebase`, push if the repo has commits of its own, then `dotfiles pull`.
+- `--no-fetch` skips the fetch of both repos. `checkout` and `pull --remote` use it.
+- Only committed repo content is deployed: what `HEAD` holds, whatever the working tree says. A repo with uncommitted files is named in a warning, and `status` lists them as `uncommitted files:`. A repo with no git deploys as it stands.
+- After the fetch and self-install, a pull stops early with `Already up to date` when nothing changed since the last complete pull: the same commits, hosts dir, host, profile and shell scripts dir. An open conflict turns the early stop off, so later pulls evaluate it again. The early stop does not check packages, tools or deployed files, so use `--force` to put back a deleted file. A pull counts as complete only if nothing failed, is pending or was held back as a conflict, every custom script has a check, and it was not a `--force PATH` run. Repos without git history (a pushed copy, a plain directory) never stop early. `dotfiles uninstall` clears the record. It lives in `last-complete` in the state directory.
+- A pull takes a lock in the state directory. A second concurrent one exits with `dotfiles: pull already running`.
+- `--dry-run` previews without changing anything: no lock, no fetch, no self-install, and the state files are not touched.
+- `--force` takes the repo's version of every file, keeping local-only keys in merged files, and always takes a snapshot first.
+- `--force PATH` does the same for one file only and touches nothing else, packages included. `PATH` is a deployed config file or a drop-in (a tool's, or `90-dotfiles.sh`). It refuses a path that isn't managed here.
+- The other flags (`--profile`, `--hosts-dir`, `--hostname`, `--no-backup`, `--verbose`, `--quiet`, `--skip-git-setup`, `--shell-scripts-dir`, `--log`) are listed in `dotfiles help`.
+
 ### `sync`
 
-- Pull is `git pull --ff-only` and nothing else. A failed pull (diverged, no network, no access) is a warning, not a failure: the repo is left untouched, the sync continues with what is checked out, and the exit code stays 0. A repo that is not a git work tree, or has no upstream branch, is skipped silently.
-- `--no-pull` skips the pull of both repos.
-- After the pull and self-install, a sync stops early with `Already up to date` when nothing changed since the last complete sync: the same commits, hosts dir, host, profile and shell scripts dir, with no uncommitted changes in either repo. It does not then check packages, tools or deployed files, so use `--force` to put back a deleted file (`--force` redeploys everything). A sync counts as complete only if nothing failed or is pending, every custom script has a check, and it was not an `--auto` run. Repos without git history (a pushed copy, a plain directory) never stop early. `--auto` runs can stop early too. `dotfiles uninstall` clears the record. It lives in `last-complete` in the state directory.
-- `--auto` is the background mode used by the login drop-in (see Background sync). It never prompts. It installs OS packages and runs custom install scripts only when sudo works without a password and the run has no terminal; otherwise it only checks them and applies configs. Without `setsid` (macOS, for example) the run keeps the login terminal, so background sync never installs: it only reminds you, and a manual `dotfiles sync` does the install.
-- A sync takes a lock in the state directory. A second concurrent sync exits with `dotfiles: sync already running` (an `--auto` run exits silently).
-- `--dry-run` previews without changing anything: no lock, no pull, no self-install, and the state files are not touched.
-- The other flags (`--profile`, `--hosts-dir`, `--hostname`, `--no-backup`, `--verbose`, `--quiet`, `--force`, `--skip-git-setup`, `--shell-scripts-dir`, `--log`) are listed in `dotfiles help`.
+`sync` runs `add`, then `pull`, each as its own process with its own lock. It first fast-forwards both repos, so that `add` compares against the incoming commits and sees conflicts they cause. A failure there is a warning, and `add` still runs on what is checked out; the `pull` reports it again. With no terminal it refuses, because `add` asks questions; `pull` works unattended. `--no-fetch` skips the update before `add` and the fetch in `pull`. `--dry-run` previews the `pull`; `add` has no dry run. Quitting `add` partway does not stop the `pull`, which keeps conflicts and unanswered edits.
 
-### `push`
+### Remote hosts
 
-    dotfiles push [--dry-run] HOST...
+    dotfiles pull --remote [--dry-run] [--force] HOST...
+    dotfiles init --remote [--dry-run] [init flags] HOST...
 
-- Sends `git archive HEAD` of the dotfiles repo (and the hosts repo, if one is in use), so only committed state is shipped; uncommitted changes are not. If the source is not a git work tree, the plain directory is sent. Each snapshot gets a `PUSHED` file recording the source host, commit and time.
+- Sends `git archive HEAD` of the dotfiles repo (and the hosts repo, if one is in use), so only committed state is shipped; uncommitted changes are not. If the source is not a git work tree, the plain directory is sent. Each snapshot gets a `PUSHED` file recording the source host, commit and time. `pull --remote` warns when a repo here is behind its upstream, because the host gets what is committed here.
 - The remote dotfiles path is where the remote `~/.local/bin/dotfiles` link points: the link is followed to its final target, and if that is a file named `dotfiles` in a directory containing `lib/`, the directory is used; otherwise (no link, a dangling link, some other target) the default `~/.local/share/dotfiles/dotfiles`. The remote hosts dir is `hosts_dir` from the remote `config.yaml` (`${DOTFILES_CONFIG:-~/.config/dotfiles/config.yaml}`), parsed the same way as `config_load`, else the default `~/.local/share/dotfiles/dotfiles-hosts`. A relative `hosts_dir` there is ignored with a warning.
-- A remote target that is a git checkout is refused (run `dotfiles sync` there instead). An existing target is replaced only if it holds a `PUSHED` marker or is an empty directory; anything else is refused with `<host>:<path> exists and is not a pushed dotfiles copy; refusing to replace it`, so a wrong remote config line cannot delete user data. An existing pushed copy is replaced by swapping the directory, and the old copy is restored if the swap fails.
-- It then runs `<remote dotfiles repo>/dotfiles sync --no-pull` with `ssh -t`, so prompts such as sudo work. The remote exit status is the push result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed.
-- `--dry-run` reports what would be sent and, if the remote already has dotfiles, runs a remote `sync --no-pull --dry-run`. Nothing is copied.
-- `push --init` sets up a host that has no dotfiles yet. See Setting up a new machine.
+- A remote target that is a git checkout is refused (run `dotfiles pull` there instead). An existing target is replaced only if it holds a `PUSHED` marker or is an empty directory; anything else is refused with `<host>:<path> exists and is not a pushed dotfiles copy; refusing to replace it`, so a wrong remote config line cannot delete user data. An existing pushed copy is replaced by swapping the directory, and the old copy is restored if the swap fails.
+- It then runs `<remote dotfiles repo>/dotfiles pull --no-fetch` (or `init`) with `ssh -t`, so prompts such as sudo work, and conflicts show in your terminal. The remote exit status is the result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed. `--force` is passed through to the remote pull.
+- `--dry-run` reports what would be sent and, if the remote already has dotfiles, runs a remote `pull --no-fetch --dry-run`. Nothing is copied.
+- A host with no git can't keep a save made by `add`: the next send replaces the directory. `add` there offers dismiss only. Copy an edit back by hand.
+- `init --remote` sets up a host that has no dotfiles yet. See Setting up a new machine.
 
 ### Versions
 
     dotfiles versions
     dotfiles checkout [--dry-run] REF
 
-- `versions` marks the current tag, and any tag too old to check out (one from before `checkout` existed).
-- `checkout` takes a tag, a commit or a branch. It refuses a checkout with uncommitted changes, an unknown ref and a version that is too old, leaving everything where it was. If the fetch fails, it uses what is already here. It then runs the new version's own `dotfiles sync --no-pull`.
-- A tag or commit pins the machine: the checkout is left on a detached HEAD, which `sync` doesn't pull. A manual `sync` warns that it is pinned, even when nothing changed. `--auto` stays pinned without warning.
+- `versions` marks the current tag, and any tag too old to check out (one from before the records of local edits existed).
+- `checkout` takes a tag, a commit or a branch. It refuses a checkout with uncommitted changes, an unknown ref and a version that is too old, leaving everything where it was. If the fetch fails, it uses what is already here. It then runs the new version's own `dotfiles pull --no-fetch`.
+- A tag or commit pins the machine: the checkout is left on a detached HEAD, which `pull` doesn't fetch. A manual `pull` warns that it is pinned, even when nothing changed. The update check stays pinned without warning.
 - `dotfiles checkout main` follows `main` again, with the latest commits.
 
 ### Local edits
 
-- Each deploy records a hash of every file it wrote in `<state dir>/deployed/<app>.tsv`. The records hold hashes, not contents.
-- An update leaves a file alone if its live copy differs from the record. If the repo changed the same file, it warns as well. With no record to compare, as on a machine that was behind when records were introduced, an older deployed file looks the same as an edit. `--force` takes the repo's version; the upgrade snapshot keeps yours unless `--no-backup` is given.
-- `status` lists edited files, and a manual `sync` counts them.
-- Merged files are expected to change, so only the keys the repo manages are compared.
+Each managed file, or each key of a merged JSON file, has two saved copies in `<state dir>/records/<app>/`, mode `0600` in directories of mode `0700`:
 
-`dotfiles add` shows a diff of each edit and asks whether to save it, then which layer to save it to: this host, a profile, or the default in the public repo.
+| Copy | Path | Holds | Used by |
+|---|---|---|---|
+| Repo copy | `repo/<src>` | The last repo version accepted | `pull`, to see what the repo changed |
+| Review copy | `review/<src>` | The live file as of your last review | `add`, to see what's new |
 
-- It copies the file into that layer and stages it. It never commits or pushes, so you review it again in git or lazygit.
-- It only offers files dotfiles already manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in.
-- Saving to the public default needs typing `public`, and isn't offered while pinned or without git.
-- A target with uncommitted changes is skipped. A layer above the existing copy shadows lower layers from then on, and it warns when that happens.
-- Merged files are display-only: the same key can be set in several layers, and copying the whole file would pull in local keys.
-- There is no dry run: answer `n` to look without saving.
+`manifest.tsv` in the same folder lists each file's source, destination and strategy. Merged JSON is compared per key, everything else per file, and arrays as one value.
+
+`pull` asks of each file or key whether you changed it (live against repo copy) and whether the repo did (repo now against repo copy):
+
+| You changed it | The repo changed it | `pull` does |
+|---|---|---|
+| No | Yes | Applies it |
+| No | No | Nothing |
+| Yes | No | Keeps yours |
+| Yes | Yes, to your value | Updates its records only |
+| Yes | Yes, to something else | **Conflict:** keeps yours and warns on every pull until resolved |
+
+- A deploy updates the review copy only for what it applied, so an edit nobody reviewed is still flagged later.
+- A key the repo stops managing is removed from the live file if its value still matches the repo copy; otherwise it is kept. A file removed from the repo is left in place and no longer tracked.
+- A key that changes between an object and a plain value counts as a conflict on the whole subtree.
+- Switching a file between replace and merge takes a snapshot and is treated as a fresh deploy.
+- Invalid JSON fails only that file, which is left untouched and retried on the next pull.
+- Records are written per item after the write, so an interrupted run recomputes safely.
+- A host with records in the old layout (`<state dir>/deployed/*.tsv`) refuses `pull` and `add` until `dotfiles init` has run. Review pending edits with the old `add` before updating. `init` snapshots every managed file, drops the old records and starts fresh ones.
+- `--force` takes the repo's version; the snapshot keeps yours.
+
+`status` shows these lists, each under its own label: `updates available:`, `unreviewed changes:`, `conflicts:`, `dismissed:`, `saved, not committed:` and `uncommitted files:`. Before the first `pull` with these records, `unreviewed changes:` says `not tracked yet`.
+
+`dotfiles add` shows each unreviewed edit and each conflict and asks for one of three answers:
+
+- **Save** asks which layer to use (this host, any profile or the public default), copies the change there and stages it. It never commits or pushes. Merged files save only that key; other files save the whole file. A saved edit isn't asked about again while that layer holds the value, and discarding the staged change brings it back.
+- **Dismiss** keeps the change local; `add` asks again only if the value changes. On a conflict it also accepts the repo's current version as the new starting point.
+- **Skip** asks again next time. Quitting partway does the same for anything unanswered.
+
+`add --all` also asks again about dismissed edits. When the review ends, `add` lists the staged files in each repo and tells you to commit and push them.
+
+- It only offers files dotfiles manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in. A tool's drop-in is offered the public default only, and `90-dotfiles.sh` only dismiss and skip.
+- Layers offered: the host layer only when the host directory in the hosts repo has a `host.yaml` in its working copy; each profile in the chain; the public default. A repo with no git, a detached hosts repo and a pinned public repo offer no layers, and `add` says why.
+- Saving to the public default shows the value and needs typing `public`.
+- A save to a layer file with uncommitted changes is allowed only if `add` made them; otherwise that target is skipped.
+- Saving a replaced file to a layer that has no copy of it creates one, which masks lower layers from then on. Saving below a layer that already has the file or key is allowed, with a message that the higher layer still wins.
+- A conflict in a replaced file shows your change and the repo's separately; saving the whole file would undo the repo's change, so `add` warns and asks you to confirm. A key you deleted can be dismissed but not saved. An array save hides later repo changes to the list.
+- `add` needs a terminal and has no dry run: answer `n` to look without saving.
+- To resolve a conflict without `add`, take the repo's version with `pull --force PATH`.
 
 ### `~/.bashrc`
 
 `~/.bashrc` is an ordinary managed file: edit protection and `add` apply to it. A host-specific change can be saved as a host copy with `add`, which then shadows later changes to the public `.bashrc` on that host.
 
-On first install, a custom `~/.bashrc` is replaced like any other file. The original is kept in the app's `original/` backup, and a warning gives the path of the saved copy and says the old content is no longer loaded. On a reinstall after an uninstall, the saved copy is the install's snapshot, because `original/` still holds the first one. A distro's unchanged `/etc/skel/.bashrc` gets no warning.
+On first install, a custom `~/.bashrc` is replaced like any other file, and a warning says the old content is no longer loaded. The warning names the original in the app's `original/` backup when that is the file just replaced. If it isn't (on a reinstall after an uninstall, `original/` still holds the first one), it names the snapshot that holds it. A distro's unchanged `/etc/skel/.bashrc` and an empty file get no warning.
 
 `~/.bashrc` still loads everything in `~/.bashrc.d/`, so an existing `00-local.sh` keeps working. Dotfiles leaves it alone and creates nothing there.
 
 ### Self-install
 
-A real `sync` (not `--dry-run`) installs two things, so the checkout becomes the installed command:
+A real `pull` (not `--dry-run`) installs two things, so the checkout becomes the installed command:
 
-- `~/.local/bin/dotfiles`, a symlink to the running checkout's `dotfiles` script. It is created only when missing or dangling. A valid link to another checkout, or a regular file, is left alone with a warning (`~/.local/bin/dotfiles points at <X>; leaving it (remove the link to switch to <REPO>)`), so running a sync from another checkout (a worktree, say) never re-points the installed command.
-- `<shell scripts dir>/90-dotfiles.sh` (default `~/.bashrc.d/`), a copy of `lib/login.sh` taken from the repo the link resolves to. It is managed by dotfiles; do not edit it.
+- `~/.local/bin/dotfiles`, a symlink to the running checkout's `dotfiles` script. It is created only when missing or dangling. A valid link to another checkout, or a regular file, is left alone with a warning (`~/.local/bin/dotfiles points at <X>; leaving it (remove the link to switch to <REPO>)`), so running a pull from another checkout (a worktree, say) never re-points the installed command.
+- `<shell scripts dir>/90-dotfiles.sh` (default `~/.bashrc.d/`), a copy of `lib/login.sh` taken from the repo the link resolves to. It goes through the normal deploy, so edit protection applies to it too. It is managed by dotfiles; do not edit it.
 
 `~/.local/bin` must be on `PATH`.
 
@@ -357,61 +405,69 @@ Pass init flags after `bash -s --`, for example the hosts repo:
 ### `init`
 
     dotfiles init [--hosts-dir URL|PATH|none] [--hostname NAME] [--profile NAME]
-                  [--auto-sync on|off] [--interval <n>m|h|d] [--yes] [--no-sync]
+                  [--update-check on|off] [--interval <n>m|h|d] [--yes] [--no-sync]
 
-Init asks for the hosts repo, hostname, profile, auto sync and interval, writes the config file and runs a sync. A flag answers its question without asking. Before the profile question it lists the profile names found in the hosts repo, then the dotfiles repo. It ends with a summary and a reminder to open a new terminal.
+Init asks for the hosts repo, hostname, profile, update check and interval, writes the config file and runs a `pull`. A flag answers its question without asking. Before the profile question it lists the profile names found in the hosts repo, then the dotfiles repo. It ends with a summary and a reminder to open a new terminal.
 
-- `--hosts-dir`: a URL (contains `://`, or looks like `user@host:path`) is cloned to `~/.local/share/dotfiles/dotfiles-hosts`; a path must be an existing directory; `none` means no hosts repo. A failed clone exits 1 and writes nothing, except when an interactive run fails over ssh: init then shows a public key (your existing `~/.ssh/id_ed25519`, `id_ecdsa` or `id_rsa`, or a new `id_ed25519` with no passphrase, since background sync can't answer one) and where to add it, and retries when you press Enter (`q` stops). If the default hosts path already holds a pushed (non-checkout) copy, a URL is refused with an error naming the path; the copy is never deleted.
+- `--hosts-dir`: a URL (contains `://`, or looks like `user@host:path`) is cloned to `~/.local/share/dotfiles/dotfiles-hosts`; a path must be an existing directory; `none` means no hosts repo. A failed clone exits 1 and writes nothing, except when an interactive run fails over ssh: init then shows a public key (your existing `~/.ssh/id_ed25519`, `id_ecdsa` or `id_rsa`, or a new `id_ed25519` with no passphrase, since the update check can't answer one) and where to add it, and retries when you press Enter (`q` stops). If the default hosts path already holds a pushed (non-checkout) copy, a URL is refused with an error naming the path; the copy is never deleted.
 - `--hostname`: same rules as everywhere else (no `/`, not `.` or `..`); the prompt applies them too.
 - `--profile`: a profile already set in the config stays active even if `hosts/<hostname>/host.yaml` exists.
-- `--yes` accepts every default (or flag value) without prompting. `--no-sync` writes the config and skips the first sync.
+- `--yes` accepts every default (or flag value) without prompting. `--no-sync` writes the config and skips the pull.
 - Without a terminal and without `--yes`, init exits 1 with `init is interactive; pass --yes to accept defaults`.
+- If `hosts/<hostname>/host.yaml` exists only in the working copy, init stops before writing the config: it isn't committed, so a pull wouldn't use it. Commit it, then run init again. Profiles are validated against the committed tree.
 
 Init writes `${DOTFILES_CONFIG:-~/.config/dotfiles/config.yaml}` in the format described under Config file, with the header `# Written by dotfiles init on <date>`. It is written to `<config>.tmp` and then moved into place.
 
-Re-running init is safe. The defaults offered are the values already in the config, so accepting every answer (or `--yes`) changes nothing. When the new content differs from an existing file, the old one is kept as `<config>.bak`; when nothing changed, no `.bak` is made. Run `dotfiles init` again whenever you want to change a setting.
+Re-running init is safe. The defaults offered are the values already in the config, so accepting every answer (or `--yes`) changes nothing. When the new content differs from an existing file, the old one is kept as `<config>.bak`; when nothing changed, no `.bak` is made.
 
-### `push --init`
+**On a host that already has records, init can reset.** After saving the answers it asks whether to reset every managed file to the repo layers, defaulting to no. No runs a normal `pull`, so changing the hostname or profile wipes nothing. A reset:
 
-    dotfiles push --init [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST...
+- Updates the repos first (fast-forward only), then lists what would be lost: unreviewed, conflicting and dismissed changes, local-only keys in merged files, files no longer managed, and files dotfiles has no record of writing that differ from the repo's.
+- Doesn't offer the question when it can't tell what would be lost (the profile or overlays don't load): it says why and runs a normal `pull`.
+- Needs `reset` typed to confirm, takes a snapshot of every managed file and prints its path, then runs `pull --no-fetch` with every managed file replaced by what the repo layers produce, local-only keys removed, and fresh records.
+- Never happens with `--yes` or with no terminal: init then runs the normal `pull`.
+- Leaves files dotfiles doesn't manage alone, such as `00-local.sh` and `.gitconfig.local`.
+- Is all or nothing; `pull --force PATH` handles single files but keeps local-only keys. `init --remote` behaves the same way on the host.
 
-For a host that cannot reach the repos. It ships the repos as `push` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `sync --no-pull`. The flags above are forwarded to the remote init and are valid only with `--init`; `--hostname` also needs exactly one HOST. A malformed value is refused before anything is shipped; whether a `--profile` exists is checked by the remote init, after shipping. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
+On a host with records from an older version there is no reset to offer: init snapshots every managed file, removes the old records and runs a `pull` that starts fresh ones.
+
+### `init --remote`
+
+    dotfiles init --remote [--dry-run] [--yes] [--hostname NAME] [--profile NAME] [--update-check on|off] [--interval <n>m|h|d] HOST...
+
+For a host that cannot reach the repos. It ships the repos as `pull --remote` does, then runs `dotfiles init` there (with `ssh -t`, so it can prompt) instead of `pull --no-fetch`. The flags above are forwarded to the remote init and are valid only with `init --remote`; `--hostname` also needs exactly one HOST. A malformed value is refused before anything is shipped; whether a `--profile` exists is checked by the remote init, after shipping. When a hosts payload is shipped, the remote init gets `--hosts-dir <remote path>`; otherwise the remote keeps its own default. An existing remote config supplies the defaults, so `--yes` on a configured host does not wipe hand-set values such as `profile`.
 
 ---
 
-## Background sync
+## Update check
 
-The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new terminal it:
+The drop-in `90-dotfiles.sh` runs in interactive shells only. It never deploys or installs anything. In each new terminal it:
 
-1. Prints the report left by the previous background sync (if any), then deletes it.
+1. Prints the report left by the previous check (if any), then deletes it.
 2. While `pending` in the state directory is non-empty, prints at every terminal:
 
-       dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles sync'
+       dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles pull'
 
-   A sync that installs everything leaves `pending` empty, and the reminder stops.
-3. Unless `DOTFILES_NO_AUTO_SYNC` is set to a non-empty value, or `dotfiles` is not on `PATH`, starts `dotfiles sync --auto` detached in the background (`setsid` when available, else a plain background subshell). Its output goes to `launch.log` in the state directory (overwritten each time), so failures before `last-sync.log` exists are visible.
+   A pull that installs everything leaves `pending` empty, and the reminder stops.
+3. Unless `DOTFILES_NO_UPDATE_CHECK` is set to a non-empty value, or `dotfiles` is not on `PATH`, starts `dotfiles check-updates` detached in the background (`setsid` when available, else a plain background subshell). Its output goes to `launch.log` in the state directory (overwritten each time), so a failure to start is visible.
 
-`sync --auto` then:
+`dotfiles check-updates` is the internal command behind this; it is not in `dotfiles help`. It:
 
-- Pulls with a bounded git: ssh `ConnectTimeout=10`, `ServerAliveInterval=15`, `ServerAliveCountMax=2` (plus `BatchMode=yes`) unless `GIT_SSH_COMMAND` is set, `http.lowSpeedLimit=1000`/`http.lowSpeedTime=30`, and `timeout 300` where available. A timeout is a pull failure (warning). Only a repo whose top level is the path itself is pulled; a pushed copy inside a tracked directory is skipped.
-- Exits at once, changing nothing, if `auto_sync: off` or the last sync is younger than `auto_sync_interval` (default `4h`). `auto_sync_interval: 0m` means always sync. A `last-sync` timestamp in the future (clock skew) does not throttle.
-- Otherwise checks for passwordless sudo, then pulls both repos. The check needs both: the run has no terminal (`/dev/tty` cannot be opened; sudo reads passwords from the terminal, not stdin, and a run started without `setsid` may keep the login terminal), and `sudo -n true` succeeds (stdin `/dev/null`, the lock's fd closed, so it can never prompt or hang). `DOTFILES_TEST_HAS_TTY=1` is a test hook that makes the run act as if it had a terminal.
-  - If the check passes, phases 1 and 2 run for real with stdin `/dev/null` for every install command. apt and dnf run as `sudo -n` (apt with `DEBIAN_FRONTEND=noninteractive`), and custom install scripts find a `sudo` shim first on `PATH` (`sudo-shim/` in the state directory) that always adds `-n`, so a `sudo` inside them fails instead of prompting. The log notes `passwordless sudo: installing packages`.
-  - If not (or there is no `sudo`), phases 1 and 2 only check: nothing is installed, and missing packages and custom tools are recorded as pending.
-  - Either way, whatever is still missing afterwards is pending, and a custom tool's drop-in is deployed only once its `check` passes.
-- Writes its output to `last-sync.log`, touches `last-sync` even when it fails (so a broken sync does not retry in every terminal), and writes the report.
+- Exits at once, changing nothing, if `update_check: off`, if another run or a pull holds the lock, or if the last check is younger than `update_check_interval` (default `4h`). `update_check_interval: 0m` means always check. A `last-check` timestamp in the future (clock skew) does not throttle.
+- Touches `last-check`, even when the fetch fails, so an offline machine does not retry at every terminal.
+- Runs `git fetch` on the dotfiles repo and the hosts repo, with a bounded git: ssh `ConnectTimeout=10`, `ServerAliveInterval=15`, `ServerAliveCountMax=2` (plus `BatchMode=yes`) unless `GIT_SSH_COMMAND` is set, `http.lowSpeedLimit=1000`/`http.lowSpeedTime=30`, and `timeout 300` where available. A timeout counts as a failed fetch. A pinned repo, a pushed copy, a repo with no upstream and a repo that isn't a checkout of its own are skipped.
+- Never changes `HEAD`, the working tree, the live files or any package.
+- Writes the report only when a repo has new commits upstream.
 
 ### Report
 
-`report` holds one line per finding, each prefixed `dotfiles: `, in the order below. The file is absent when there is nothing to say.
+`report` holds one line, in the file `report` in the state directory. The file is absent when there is nothing to say; an existing report is left alone when a check finds nothing new.
 
 | Line | Meaning |
 |---|---|
-| `dotfiles: updated a, b` | Apps whose config was successfully updated. |
-| `dotfiles: <path>: pull failed (<reason>) — see <log>` | A pull failed; the repo was left as it was. |
-| `dotfiles: sync failed (<items>) — see <log>` | Items that failed. An early abort before any app ran (missing hosts dir, ...) reports `sync failed (setup)`. An unusable config file (bad `auto_sync`, `auto_sync_interval` or `hostname`) reports `sync failed (config)` with the error text in the log. The config cannot supply the interval then, so the default `4h` throttle applies: the error is reported at most once per 4 hours. |
+| `dotfiles: updates available (dotfiles, hosts) — run 'dotfiles pull'` | The named repos have new commits upstream. |
 
-`<log>` is `last-sync.log`. A manual (non-`--auto`) sync removes a stale report. Pending packages are not in the report; the reminder above shows them at every terminal instead.
+A manual `pull` removes a stale report. `status` shows `updates available:` itself. Pending packages are not in the report; the reminder above shows them at every terminal instead.
 
 ### State directory
 
@@ -419,26 +475,27 @@ The drop-in `90-dotfiles.sh` runs in interactive shells only. In each new termin
 
 | File | Content |
 |---|---|
-| `lock` | Lock held while a sync runs (a `lock.d/` directory where `flock` is unavailable). |
-| `last-sync` | Empty file; its modification time is the last sync and drives the throttle. |
-| `last-sync.log` | Output of the last `--auto` run. |
-| `launch.log` | Output of the login drop-in's launch of `dotfiles sync --auto`; overwritten each time. |
+| `lock` | Lock held while a pull or an update check runs (a `lock.d/` directory where `flock` is unavailable). |
+| `records/` | The saved copies behind local-edit detection. See Local edits. |
+| `last-check` | Empty file; its modification time is the last update check and drives the throttle. |
+| `last-sync` | Empty file; touched by each `pull`. |
+| `last-complete` | The fingerprint of the last complete pull, for the early stop. |
+| `launch.log` | Output of the login drop-in's launch of `dotfiles check-updates`; overwritten each time. |
 | `report` | Message shown at the next terminal, removed once shown. |
-| `sudo-shim/sudo` | Written by an `--auto` run that installs: runs the real `sudo` with `-n`, put first on `PATH` for install commands. |
-| `pending` | Packages still to install, one per line. Shown by `dotfiles status` and by the reminder at every terminal. Refreshed by each real sync; empty when nothing is missing. |
+| `pending` | Packages still to install, one per line. Shown by `dotfiles status` and by the reminder at every terminal. Refreshed by each real pull; empty when nothing is missing. |
 
 ### Turning it off
 
-- Permanently: `auto_sync: off` in the config file.
-- For one shell: `DOTFILES_NO_AUTO_SYNC=1` in the environment before the shell starts, for example `DOTFILES_NO_AUTO_SYNC=1 bash`.
+- Permanently: `update_check: off` in the config file, or `dotfiles init --update-check off`.
+- For one shell: `DOTFILES_NO_UPDATE_CHECK=1` in the environment before the shell starts, for example `DOTFILES_NO_UPDATE_CHECK=1 bash`.
 
 ---
 
 ## Undoing a change
 
-Sync follows the repo, so undo in the repo:
+Pull follows the repo, so undo in the repo:
 
-- Revert and publish: `git revert <commit>` in the dotfiles (or hosts) repo, push it, and let each host pull on its next sync (or run `dotfiles sync`). For hosts that receive pushes, push again.
+- Revert and publish: `git revert <commit>` in the dotfiles (or hosts) repo, push it, and let each host pick it up with `dotfiles pull`. For hosts that receive sends, run `dotfiles pull --remote HOST` again.
 - Roll one host back without publishing: `dotfiles checkout <tag-or-commit>`. Return later with `dotfiles checkout main`. See Versions.
 
 ---

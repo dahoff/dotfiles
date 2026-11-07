@@ -1,6 +1,6 @@
 # Design: updates, local edits and drift
 
-Status: approved 2026-11-06. Not built yet. The revised design has not had a second review.
+Status: approved 2026-11-06. Built on the `updates-and-local-edits` branch.
 
 ## Goals
 
@@ -99,7 +99,7 @@ To resolve a conflict, either save or dismiss it in `add`, or take the repo's ve
 | `uninstall` | Lists your local changes and always takes a snapshot first. Today it can destroy edits. |
 | Re-running `init` only to change settings | It asks its questions and saves the answers, then asks whether to reset, defaulting to no. Answering no runs a normal `pull`, so changing the hostname or profile doesn't wipe anything. |
 | Re-running `init` as a reset | Resets to the repo layers, not to the files from before dotfiles; that's what `uninstall` does. Files dotfiles doesn't manage, like `00-local.sh` and `.gitconfig.local`, stay untouched. `--yes` doesn't skip the confirmation, and with no terminal it refuses. It's all or nothing; `pull --force PATH` handles single files but keeps local-only keys. `init --remote` behaves the same way. |
-| Moving a host to this design | `init` snapshots all managed files and starts fresh records. Review pending edits with today's `add` first, because replaced files get overwritten. |
+| Moving a host to this design | `init` snapshots all managed files and starts fresh records. Review pending edits with today's `add` before updating, because the new `add` refuses old records and replaced files get overwritten. |
 | `checkout` to a version from before this design | Refused as too old. |
 
 ## Not included
