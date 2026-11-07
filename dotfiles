@@ -526,7 +526,8 @@ Usage: dotfiles <command> [options]
 Commands:
   init                 Guided per-host setup: write the config file, then pull
   pull                 Fetch, then install if new, upgrade if exists; stops early if nothing changed
-  sync                 Run 'add' to review local edits, then 'pull'; needs a terminal
+  sync                 Update the repos, run 'add' to review local edits, then 'pull';
+                       needs a terminal
   pull --remote HOST...  Send this machine's committed repos to HOST over ssh and pull there
   init --remote HOST...  Send them, then run 'dotfiles init' there instead of pull (first-time setup)
   uninstall            Uninstall all configs
@@ -535,8 +536,9 @@ Commands:
   versions             List tagged versions
   checkout REF         Switch to a tag or commit and deploy it; this machine stays there
                        until you run 'dotfiles checkout main'
-  add                  Review local edits one by one and stage the ones you accept in the
-                       repo; never commits or pushes
+  add                  Review local edits and conflicts one by one: save one to a repo layer
+                       (staged; never commits or pushes), dismiss it or skip it
+  add --all            Also ask again about anything you dismissed
   verify               Verify all installations
   help                 Show this help message
 
@@ -597,7 +599,7 @@ Examples:
   dotfiles versions                  # List tagged versions
   dotfiles checkout v1.2             # Pin this machine to v1.2 (a tag or commit)
   dotfiles checkout main             # Follow main again
-  dotfiles add                       # Stage local edits you accept; you commit them
+  dotfiles add                       # Save, dismiss or skip local edits; you commit what's saved
   dotfiles uninstall --no-backup     # Remove all configs
 
 EOF
@@ -735,6 +737,14 @@ parse_args() {
                 ;;
             --no-fetch)
                 SYNC_NO_FETCH=true
+                shift
+                ;;
+            --all)
+                if [[ "$COMMAND" != "add" ]]; then
+                    echo "Error: --all is only valid with add" >&2
+                    exit 1
+                fi
+                ADD_ALL=true
                 shift
                 ;;
             --force)
@@ -876,9 +886,27 @@ sync_record() {
 # Point a pull at files with local edits nobody has reviewed
 sync_warn_edits() {
     local n
-    n=$(records_count_edits)
+    n=$(add_count_edits)
     [[ "$n" -gt 0 ]] || return 0
     log_warn "$n file(s) have local edits, run 'dotfiles add' to review them"
+}
+
+# Bring the repos forward before sync's add, so that it sees incoming conflicts: it compares
+# against committed content, which fetched commits aren't until they're merged. Fast-forward
+# only, like the pull that follows. A failure isn't a stop: add still works on what's here,
+# and the pull reports it again, stopping if the repo is blocked.
+sync_update_before_add() {
+    resolve_settings || exit 1
+    if ! sync_lock; then
+        echo "dotfiles: pull already running" >&2
+        exit 1
+    fi
+    local repo reason
+    for repo in "$DOTFILES_REPO" ${HOSTS_DIR:+"$HOSTS_DIR"}; do
+        reason=$(sync_pull_repo "$repo") \
+            || log_warn "$repo: could not update before the review ($reason); add compares against what's here"
+    done
+    sync_unlock
 }
 
 # Pull one repo. A failure (the network, say) is a warning, not a sync failure, and
@@ -1034,7 +1062,7 @@ cmd_status() {
             if [[ -n "$ver_fresh" ]]; then
                 while IFS=$'\t' read -r rec_src rec_dest rec_strategy; do
                     items=$(records_items "$app_name" "$rec_src" "$rec_dest" "$stage/files/$rec_src" false 2>/dev/null) || items=edited
-                    if [[ "$items" == *conflict* ]]; then
+                    if [[ $'\n'"$items" == *$'\n'conflict$'\t'* ]]; then
                         status_edits+=("$(printf 'conflict\t%s\t%s' "$rec_src" "$rec_dest")")
                     elif [[ -n "$items" ]]; then
                         status_edits+=("$(printf 'edited\t%s\t%s' "$rec_src" "$rec_dest")")
@@ -1090,8 +1118,8 @@ cmd_push() {
     exit $failed
 }
 
-# dotfiles sync: add, then pull. Each is its own process, so each takes its
-# own lock and settings. A dry run previews the pull; add has no dry run.
+# dotfiles sync: update the repos, add, then pull. Add and pull are each their own process,
+# so each takes its own lock and settings. A dry run previews the pull; add has no dry run.
 cmd_sync() {
     local -a layer=()
     [[ -z "$PROFILE_ARG" ]] || layer+=(--profile "$PROFILE_ARG")
@@ -1108,6 +1136,7 @@ cmd_sync() {
         echo "dotfiles sync needs a terminal: it runs 'dotfiles add', which asks about each local edit" >&2
         exit 1
     fi
+    [[ "$SYNC_NO_FETCH" == true ]] || sync_update_before_add
     "$SCRIPT_DIR/dotfiles" add ${layer[@]+"${layer[@]}"} || exit $?
     exec "$SCRIPT_DIR/dotfiles" "${pull_args[@]}"
 }
@@ -1165,10 +1194,10 @@ main() {
         exit 0
     fi
 
-    # Old records don't say enough to protect an edit
-    if [[ "$COMMAND" == "pull" ]] && compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null; then
+    # Old records don't say enough to protect an edit, or to review one
+    if [[ "$COMMAND" == "pull" || "$COMMAND" == "add" ]] && compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null; then
         log_error "This host still has records from an older version, in $STATE_DIR/deployed"
-        echo "Run 'dotfiles init' to start fresh records. Review pending edits with 'dotfiles add' first." >&2
+        echo "Run 'dotfiles init' to start fresh records; it takes a snapshot of every managed file first." >&2
         exit 1
     fi
 

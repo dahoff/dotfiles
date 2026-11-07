@@ -398,21 +398,6 @@ records_has_edits() {
     [[ -n "$items" ]]
 }
 
-# Number of recorded files with edits nobody has reviewed, across all apps
-records_count_edits() {
-    local file app src dest strategy count=0
-    for file in "$STATE_DIR"/records/*/manifest.tsv; do
-        [[ -f "$file" ]] || continue
-        app=$(basename "$(dirname "$file")")
-        while IFS=$'\t' read -r src dest strategy; do
-            if records_has_edits "$app" "$src" "$dest"; then
-                count=$((count + 1))
-            fi
-        done < "$file"
-    done
-    echo "$count"
-}
-
 # Usage: records__chmod MODE DEST
 records__chmod() {
     chmod "$1" "$2" 2>/dev/null || { records__error "could not set the mode of $2"; return 1; }
@@ -648,10 +633,11 @@ records_deploy() {
 }
 
 # What add should ask about for one file, conflicts first. An item is an edit since the
-# last review, unless it matches the repo copy, which counts as reviewed. Dismissed items
-# differ from the repo copy but match the review copy, and show only when ALL is true.
-# Conflicts always show. A deleted live file has no items: the next deploy restores it.
-# With no STAGE_FILE (the repo dropped the file), nothing can conflict with the repo.
+# last review, unless it matches the repo copy or the repo's new version, which both count
+# as reviewed. Dismissed items differ from the repo copy but match the review copy, and show
+# only when ALL is true. Conflicts always show. A deleted live file has no items: the next
+# deploy restores it. With no STAGE_FILE (the repo dropped the file), nothing can conflict
+# with the repo.
 # Usage: records_items APP SRC DEST STAGE_FILE ALL
 # Prints: KIND<TAB>PATH_JSON lines; KIND is edited, conflict or dismissed, and PATH_JSON
 # is [] for a replaced file.
@@ -674,15 +660,16 @@ records_items() {
 
     local decision
     decision=$(records_decide_file "$dest" "$repo" "$new") || return 1
-    if [[ "$decision" == conflict ]]; then
-        printf 'conflict\t[]\n'
-    elif ! cmp -s "$dest" "$repo"; then
-        if ! cmp -s "$dest" "$review"; then
-            printf 'edited\t[]\n'
-        elif [[ "$all" == true ]]; then
-            printf 'dismissed\t[]\n'
-        fi
-    fi
+    case "$decision" in
+        conflict) printf 'conflict\t[]\n' ;;
+        keep)
+            if ! cmp -s "$dest" "$review"; then
+                printf 'edited\t[]\n'
+            elif [[ "$all" == true ]]; then
+                printf 'dismissed\t[]\n'
+            fi
+            ;;
+    esac
 }
 
 # Usage: records__items_merged LIVE REPO NEW REVIEW ALL
@@ -691,7 +678,7 @@ records__items_merged() {
     conflicts=$(records_merge3 "$repo" "$new" "$live" "$review" | jq -c .conflicts) || return 1
     [[ -n "$conflicts" ]] || return 1
     jq -nr \
-        --slurpfile live "$live" --slurpfile repo "$repo" --slurpfile review "$review" \
+        --slurpfile live "$live" --slurpfile repo "$repo" --slurpfile new "$new" --slurpfile review "$review" \
         --argjson conflicts "$conflicts" --arg all "$all" '
         def at($p):
           if ($p | length) == 0 then [.]
@@ -700,27 +687,41 @@ records__items_merged() {
         def child($k): if length == 1 then .[0] | at([$k]) else [] end;
         def big: length == 1 and (.[0] | type) == "object" and (.[0] | length) > 0;
         def any_object: length == 1 and (.[0] | type) == "object";
-        # The smallest paths where wrapped values differ: into objects on both sides, or
-        # into the only side present, so a new subtree is one path per key.
-        def diff($l; $r; $p):
-          if $l == $r then empty
-          elif ($l | any_object) and ($r | any_object)
-            or ($l == [] and ($r | big)) or ($r == [] and ($l | big)) then
-            ((($l[0] // {}) | keys_unsorted) + (($r[0] // {}) | keys_unsorted) | unique)[] as $k
-            | diff($l | child($k); $r | child($k); $p + [$k])
-          else $p end;
+        def kids: if any_object then .[0] | keys_unsorted else [] end;
         def is_prefix($a; $b): $b[:($a | length)] == $a;
         def near_conflict($p):
           any($conflicts[]; is_prefix(.; $p) or is_prefix($p; .));
+        def above_conflict($p):
+          any($conflicts[]; is_prefix($p; .) and . != $p);
+        # The smallest paths where wrapped values differ: into objects on both sides, or
+        # into the only side present, so a new subtree is one path per key. Also into a
+        # live object held apart from a plain value above a conflict, or the conflict would
+        # hide its siblings.
+        def diff($l; $r; $p):
+          if $l == $r then empty
+          elif ($l | any_object) and ($r | any_object)
+            or ($l == [] and ($r | big)) or ($r == [] and ($l | big))
+            or (($l | any_object) and above_conflict($p)) then
+            (($l | kids) + ($r | kids) | unique)[] as $k
+            | diff($l | child($k); $r | child($k); $p + [$k])
+          else $p end;
+        # Under a plain value in the repo the whole value is the item: what is under it
+        # means nothing to the repo, so comparing there would miss a change.
+        def whole($b; $p):
+          first((range(1; $p | length) as $i
+                 | $p[:$i]
+                 | select(. as $q | $b | at($q) | length == 1 and (.[0] | type) != "object")),
+                $p);
         def item($kind): "\($kind)\t\(tojson)";
-        $live[0] as $l | $repo[0] as $b | $review[0] as $v
-        | ($conflicts[] | item("conflict")),
-          (diff([$l]; [$v]; []) as $p
-            | select(($l | at($p)) != ($b | at($p)) and (near_conflict($p) | not))
+        $live[0] as $l | $repo[0] as $b | $new[0] as $n | $review[0] as $v
+        | def settled($p): ($l | at($p)) == ($b | at($p)) or ($l | at($p)) == ($n | at($p));
+          ($conflicts[] | item("conflict")),
+          (([diff([$l]; [$v]; []) as $p | whole($b; $p)] | unique)[] as $p
+            | select((settled($p) or near_conflict($p)) | not)
             | $p | item("edited")),
           (if $all == "true" then
              diff([$l]; [$b]; []) as $p
-             | select(($l | at($p)) == ($v | at($p)) and (near_conflict($p) | not))
+             | select(($l | at($p)) == ($v | at($p)) and ((settled($p) or near_conflict($p)) | not))
              | $p | item("dismissed")
            else empty end)
     '

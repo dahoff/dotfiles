@@ -645,7 +645,7 @@ items_is "conflict with all"                         rf f "$LIVE" "$STAGE" true 
 rec rf f replace old mine mine new
 items_is "conflict on a reviewed value is still returned" rf f "$LIVE" "$STAGE" false "conflict${TAB}[]"
 rec rf f replace old old mine mine
-items_is "live already matches the new repo version, unreviewed" rf f "$LIVE" "$STAGE" false "edited${TAB}[]"
+items_is "live already matches the new repo version: reviewed" rf f "$LIVE" "$STAGE" true ""
 rec rf f replace old old old new
 items_is "repo moved, live didn't: nothing"          rf f "$LIVE" "$STAGE" false ""
 rm "$LIVE"
@@ -707,7 +707,41 @@ rec mg s.json merge '{"a":{"x":1,"y":2}}' '{"a":7}' '{"a":7}' '{"a":{"x":1,"y":2
 items_is "live object to scalar, dismissed: hidden"  mg s.json "$LIVE" "$STAGE" false ""
 items_is "live object to scalar, dismissed: shown with all" mg s.json "$LIVE" "$STAGE" true "dismissed${TAB}[\"a\"]"
 rec mg s.json merge '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":5}' '{"a":5}'
-items_is "live already the repo's new scalar: an unreviewed edit, no conflict" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+items_is "live already the repo's new scalar: reviewed, no conflict" mg s.json "$LIVE" "$STAGE" true ""
+rec mg s.json merge '{"k":1,"j":1}' '{"k":1,"j":1}' '{"k":2,"j":9}' '{"k":2,"j":1}'
+items_is "a key already the repo's new value is reviewed, another isn't" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"j\"]"
+rec mg s.json merge '{"k":1}' '{"k":3}' '{"k":2}' '{"k":2}'
+items_is "a key matching the repo's new value: nothing even with all" mg s.json "$LIVE" "$STAGE" true ""
+rec mg s.json merge '{"k":[{"a":1,"b":2}]}' '{"k":[{"a":1,"b":2}]}' '{"k":[{"b":2,"a":1}]}' '{"k":[{"a":1,"b":2}]}'
+items_is "reordered object keys inside an array aren't an edit" mg s.json "$LIVE" "$STAGE" true ""
+
+info "records_items: a plain value in the repo where live has an object"
+rec mg s.json merge '{"a":5}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1}}' '{"a":5}'
+items_is "a key removed under the object is an edit, at the top" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"a":5}' '{"a":{"x":1}}' '{"a":{}}' '{"a":5}'
+items_is "the object emptied is an edit, at the top" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"a":5}' '{"a":{"x":1}}' '{"a":{"x":2}}' '{"a":5}'
+items_is "a changed key under the object is one edit at the top" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"a":5}' '{"a":{"x":1}}' '{"a":{"x":1,"y":2}}' '{"a":5}'
+items_is "a new key under the object is one edit at the top" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"a":5}' '{"a":{"x":1}}' '{}' '{"a":5}'
+items_is "the whole object deleted is an edit at the top" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"a\"]"
+rec mg s.json merge '{"t":{"a":5}}' '{"t":{"a":{"x":1,"y":2}}}' '{"t":{"a":{"x":1}}}' '{"t":{"a":5}}'
+items_is "the same, deeper" mg s.json "$LIVE" "$STAGE" false "edited${TAB}[\"t\",\"a\"]"
+rec mg s.json merge '{"a":5}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1}}' '{"a":{"x":1}}'
+items_is "the repo moved to the live object: reviewed" mg s.json "$LIVE" "$STAGE" true ""
+rec mg s.json merge '{"a":{"x":1}}' '{"a":{"x":1,"y":2}}' '{"a":{"x":1}}' '{"a":{"x":1}}'
+items_is "no plain value: a removed local key matches the repo, nothing" mg s.json "$LIVE" "$STAGE" true ""
+
+info "records_items: a sibling edit near a conflict, with a scalar above it in the review copy"
+rec mg s.json merge '{"a":{"x":1}}' '{"a":5}' '{"a":{"x":9,"y":2}}' '{"a":{"x":3}}'
+items_is "the sibling shows beside the conflict" mg s.json "$LIVE" "$STAGE" false "conflict${TAB}[\"a\",\"x\"]"$'\n'"edited${TAB}[\"a\",\"y\"]"
+rec mg s.json merge '{"t":{"a":{"x":1}}}' '{"t":5}' '{"t":{"a":{"x":9},"b":2}}' '{"t":{"a":{"x":3}}}'
+items_is "two levels up: only the sibling" mg s.json "$LIVE" "$STAGE" false "conflict${TAB}[\"t\",\"a\",\"x\"]"$'\n'"edited${TAB}[\"t\",\"b\"]"
+rec mg s.json merge '{"a":{"x":1}}' '{"a":5}' '{"a":{"x":9}}' '{"a":{"x":3}}'
+items_is "no sibling: only the conflict" mg s.json "$LIVE" "$STAGE" false "conflict${TAB}[\"a\",\"x\"]"
+rec mg s.json merge '{"a":{"x":1},"z":1}' '{"a":{"x":1,"y":2},"z":1}' '{"a":{"x":9,"y":3},"z":1}' '{"a":{"x":3},"z":1}'
+items_is "no scalar: a sibling already showed" mg s.json "$LIVE" "$STAGE" false "conflict${TAB}[\"a\",\"x\"]"$'\n'"edited${TAB}[\"a\",\"y\"]"
 rec mg s.json merge '{"a":{"x":1}}' '{"a":{"x":1}}' '{"a":5}' '{"a":{"x":2}}'
 items_is "live object to scalar, repo changes inside: one conflict, no edit" mg s.json "$LIVE" "$STAGE" true "conflict${TAB}[\"a\"]"
 
