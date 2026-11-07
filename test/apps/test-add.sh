@@ -113,6 +113,24 @@ cat > "$AD/files/settings.json" <<'EOF'
 }
 EOF
 printf '{"k": 1, "other key": 2}\n' > "$AD/files/sub dir/it's.json"
+# An app whose name isn't its directory: its records go under the name
+mkdir -p "$R/apps/af/files"
+cp "$AD/configure.sh" "$R/apps/af/configure.sh"
+cat > "$R/apps/af/config.yaml" <<'EOF'
+app:
+  name: other-name
+  description: named differently
+
+files:
+  - src: f.conf
+    dest: ~/ad/f.conf
+    mode: '0644'
+
+backup:
+  dir: ~/.bak/af
+  max_backups: 3
+EOF
+printf 'f1\n' > "$R/apps/af/files/f.conf"
 git -C "$R" init -q
 git -C "$R" add -A
 git -C "$R" commit -q -m base
@@ -122,6 +140,9 @@ cp -R "$TEST_DIR/fixtures/hosts-dir" "$H"
 mkdir -p "$H/hosts/addhost"
 printf 'profile: adp\n' > "$H/hosts/addhost/host.yaml"
 printf 'packages:\n  - name: ad\n    config:\n      dir: ad\n  - name: ae\n    config:\n      dir: ae\n' > "$H/profiles/adp.yaml"
+mkdir -p "$H/hosts/namehost"
+printf 'profile: adn\n' > "$H/hosts/namehost/host.yaml"
+printf 'packages:\n  - name: af\n    config:\n      dir: af\n' > "$H/profiles/adn.yaml"
 git -C "$H" init -q
 git -C "$H" add -A
 git -C "$H" commit -q -m base
@@ -896,8 +917,8 @@ add s y 1
 cmp -s "$A" "$HOST_A" || fail "not saved after confirmation"
 add
 has_line "No local edits"
-add_all k
-has_line "=== ~/ad/a.conf ==="
+add_all
+has_line "No local edits"
 git -C "$H" commit -q -m "yours"
 do_pull
 no_line "kept your edit"
@@ -967,14 +988,156 @@ no_line "profile: adp"
 public_clean "without the word"
 pass "no host layers without git"
 
-info "Review: the host layer is offered with no host directory in the commit; a save creates it"
+info "Review: the host layer needs a host.yaml in the working copy, and add says so if it's missing"
 fresh
 echo mine >> "$A"
-OUT=$(printf 's\n1\n' | DOTFILES_ADD_ASSUME_TTY=1 "$R/dotfiles" add --hostname brandnew --profile adp 2>&1) || fail "add failed: $OUT"
+NEWH="$H/hosts/brandnew"
+ADD_ARGS=(--hostname brandnew --profile adp)
+add s 1
+ADD_ARGS=()
+has_line "Not offering this host's layer"
+has_line "$NEWH/host.yaml"
+no_line "host: brandnew"
+has_line "1) profile: adp (hosts repo)"
+cmp -s "$A" "$PROF_A" || fail "not saved to the first layer offered"
+[[ ! -e "$NEWH" ]] || fail "host dir created"
+git -C "$H" reset -q --hard
+git -C "$H" clean -qfd
+# A copy there doesn't count as saved: it wouldn't take effect
+mkdir -p "$NEWH/apps/ad/files"
+cp "$A" "$NEWH/apps/ad/files/a.conf"
+ADD_ARGS=(--hostname brandnew --profile adp)
+add k
+has_line "=== ~/ad/a.conf ==="
+# An uncommitted host.yaml is enough: the same copy now counts
+printf 'profile: adp\n' > "$NEWH/host.yaml"
+add
+has_line "No local edits"
+rm -rf "$NEWH/apps"
+add s 1
+ADD_ARGS=()
+no_line "Not offering this host's layer"
 has_line "1) host: brandnew (hosts repo)"
-cmp -s "$A" "$H/hosts/brandnew/apps/ad/files/a.conf" || fail "host dir not created"
+cmp -s "$A" "$NEWH/apps/ad/files/a.conf" || fail "host dir not created"
 [[ "$(staged_in "$H")" == "hosts/brandnew/apps/ad/files/a.conf" ]] || fail "not staged: $(staged_in "$H")"
-pass "new host directory"
+pass "host layer needs host.yaml"
+
+info "Review: a detached hosts repo offers no layers, and says why; so does a pinned public repo"
+fresh
+echo mine >> "$A"
+git -C "$H" checkout -q --detach
+add s 1 no
+has_line "Not offering the hosts repo's layers"
+has_line "detached HEAD"
+no_line "host: addhost"
+no_line "profile: adp"
+has_line "1) dotfiles default (PUBLIC"
+git -C "$R" checkout -q --detach
+add s
+has_line "Saving isn't possible here"
+has_line "Not offering the public repo"
+has_line "pinned"
+git -C "$R" checkout -q main
+git -C "$H" checkout -q main
+pass "detached hosts repo"
+
+info "Review: a conflict a lower layer holds is still asked about (value)"
+fresh
+mkdir -p "$LH"
+printf '{"model":"hostv1"}\n' > "$LH/settings.json"
+git -C "$H" add -A
+git -C "$H" commit -q -m "host v1"
+do_pull
+printf '{"model":"hostv2"}\n' > "$LH/settings.json"
+git -C "$H" commit -q -am "host v2"
+edit_s '.model = "m1"'
+add k
+has_line 'key ["model"]'
+has_line "You and the repo both changed this"
+no_line "No local edits"
+add d
+run pull --no-backup --no-fetch
+no_line "Keeping your values"
+[[ "$(jq -r .model "$S")" == m1 ]] || fail "live moved"
+pass "held below, value"
+
+info "Review: a conflict a lower layer holds is still asked about (whole file)"
+fresh
+mkdir -p "$LH"
+printf 'hostv1\n' > "$HOST_A"
+git -C "$H" add -A
+git -C "$H" commit -q -m "host v1"
+do_pull
+printf 'hostv2\n' > "$HOST_A"
+git -C "$H" commit -q -am "host v2"
+cp "$PUB_A" "$A"
+add k
+has_line "=== ~/ad/a.conf ==="
+has_line "The repo's change"
+pass "held below, file"
+
+info "Review: the same with the winning layer not offered, in a detached hosts repo"
+fresh
+mkdir -p "$LH"
+printf 'hostv1\n' > "$HOST_A"
+git -C "$H" add -A
+git -C "$H" commit -q -m "host v1"
+do_pull
+printf 'hostv2\n' > "$HOST_A"
+git -C "$H" commit -q -am "host v2"
+git -C "$H" checkout -q --detach
+cp "$PUB_A" "$A"
+add k
+has_line "=== ~/ad/a.conf ==="
+git -C "$H" checkout -q main
+pass "held below an unoffered layer"
+
+info "Review: a conflict saved below the winning layer and committed can still be answered"
+fresh
+mkdir -p "$LH"
+printf '{"model":"hostv1"}\n' > "$LH/settings.json"
+git -C "$H" add -A
+git -C "$H" commit -q -m "host v1"
+do_pull
+printf '{"model":"hostv2"}\n' > "$LH/settings.json"
+git -C "$H" commit -q -am "host v2"
+edit_s '.model = "mine"'
+add s 2
+has_line "still wins"
+git -C "$H" commit -q -m "saved low"
+run pull --no-backup --no-fetch
+has_line "Keeping your values"
+add k
+has_line 'key ["model"]'
+add d
+run pull --no-backup --no-fetch
+no_line "Keeping your values"
+[[ "$(jq -r .model "$S")" == mine ]] || fail "live moved"
+pass "saved below the winner"
+
+info "Review: a conflict saved to the winning layer goes quiet; discarding it brings it back"
+fresh
+mkdir -p "$LH"
+printf '{"model":"hostv1"}\n' > "$LH/settings.json"
+git -C "$H" add -A
+git -C "$H" commit -q -m "host v1"
+do_pull
+printf '{"model":"hostv2"}\n' > "$LH/settings.json"
+git -C "$H" commit -q -am "host v2"
+edit_s '.model = "mine"'
+add s 1
+add
+has_line "No local edits"
+git -C "$H" reset -q --hard
+add k
+has_line "You and the repo both changed this"
+add s 1
+git -C "$H" commit -q -m "saved"
+do_pull
+no_line "Keeping your values"
+add_all
+has_line "No local edits"
+pass "saved to the winner"
 
 info "Review: the closing message lists staged files per repo, on every way out"
 fresh
@@ -1260,6 +1423,108 @@ if command -v script >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
     pass "terminal"
 fi
 
+info "Fixes: a read-only layer file fails plainly, with no false alarm"
+fresh
+mkdir -p "$LH"
+printf 'committed\n' > "$HOST_A"
+git -C "$H" add -A
+git -C "$H" commit -q -m "host copy"
+do_pull
+echo mine >> "$A"
+chmod 444 "$HOST_A"
+add s 1
+chmod 644 "$HOST_A"
+has_line "Could not write and stage"
+has_line "stays pending"
+no_line "Could not put"
+no_line "add-keep"
+[[ "$(cat "$HOST_A")" == committed ]] || fail "layer changed"
+hosts_clean "read-only layer"
+pass "read-only layer"
+
+info "Fixes: an invalid committed layer JSON is named as the reason nothing can be saved"
+fresh
+edit_s '.model = "mine"'
+mkdir -p "$LH"
+printf 'not json\n' > "$LH/settings.json"
+git -C "$H" add -A
+git -C "$H" commit -q -m "bad layer"
+add k
+has_line "not a valid JSON object"
+has_line "can't be seen"
+no_line "no longer provides"
+no_line "s(ave)"
+printf '[1]\n' > "$LH/settings.json"
+git -C "$H" commit -q -am "not an object"
+add k
+has_line "not a valid JSON object"
+no_line "no longer provides"
+pass "real reason"
+
+info "Fixes: a file the repo really dropped still says so"
+fresh
+echo mine >> "$B"
+sed -i '/src: b.conf/,/mode:/d' "$AD/config.yaml"
+git -C "$R" add -A
+git -C "$R" commit -q -m "drop b.conf"
+add k
+has_line "=== ~/ad/b.conf ==="
+has_line "no longer provides"
+no_line "not a valid JSON object"
+pass "dropped file"
+
+info "Fixes: q quits at every prompt of a save"
+fresh
+echo mine >> "$A"
+repo_set a.conf a2
+echo mine >> "$B"
+add s q
+no_line "=== ~/ad/b.conf ==="
+has_line "asked again next time"
+[[ ! -e "$HOST_A" ]] || fail "saved"
+fresh
+echo mine >> "$A"
+echo mine >> "$B"
+add s 3 q
+no_line "=== ~/ad/b.conf ==="
+has_line "asked again next time"
+public_clean "q at the public prompt"
+pass "q quits"
+
+info "Fixes: an app that can't be staged is warned about, not called clean"
+fresh
+git -C "$R" rm -q apps/ae/files/e.conf
+git -C "$R" commit -q -m "ae loses its source"
+add
+has_line "repo's files for ae"
+has_line "aren't offered"
+no_line "No local edits"
+echo mine >> "$A"
+add d
+cmp -s "$REC/review/a.conf" "$A" || fail "the other app wasn't reviewed"
+pass "stage failure warned"
+
+info "Fixes: an app named differently from its directory gets a review"
+fresh
+do_pull --hostname namehost
+[[ -f "$STATE_DIR/records/other-name/manifest.tsv" ]] || fail "not recorded under its name: $OUT"
+run status --hostname namehost
+has_line "up to date"
+has_line "local edits:     none"
+F="$HOME/ad/f.conf"
+echo mine >> "$F"
+ADD_ARGS=(--hostname namehost)
+add k
+has_line "=== ~/ad/f.conf ==="
+run pull --no-backup --no-fetch --hostname namehost
+has_line "1 file(s) have local edits"
+run status --hostname namehost
+has_line "~/ad/f.conf"
+add d
+ADD_ARGS=()
+cmp -s "$STATE_DIR/records/other-name/review/f.conf" "$F" || fail "not dismissed"
+pass "named app"
+
 info "Scope: an app no longer in the profile isn't counted, listed or offered"
 fresh
 E="$HOME/ad/e.conf"
@@ -1401,6 +1666,19 @@ sync_ans
 [[ $RC -eq 0 && "$(git -C "$R" rev-parse HEAD)" == "$HEAD_R" ]] || fail "a pinned repo moved: $OUT"
 git -C "$R" checkout -q main
 pass "no-fetch and pinned"
+
+info "Sync: old records refuse before the repos move"
+set_up_remotes
+author_set 'upstream'
+HEAD_R=$(git -C "$R" rev-parse HEAD)
+mkdir -p "$STATE_DIR/deployed"
+printf 'abc\tx\ty\n' > "$STATE_DIR/deployed/scripts.tsv"
+sync_ans
+[[ $RC -ne 0 ]] || fail "sync ran over old records: $OUT"
+has_line "dotfiles init"
+[[ "$(git -C "$R" rev-parse HEAD)" == "$HEAD_R" ]] || fail "sync moved the repo before refusing"
+rm -rf "$STATE_DIR/deployed"
+pass "old records"
 drop_remotes
 
 echo

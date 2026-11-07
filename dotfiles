@@ -883,6 +883,14 @@ sync_record() {
     return 0
 }
 
+# Old records don't say enough to protect an edit, or to review one
+refuse_old_records() {
+    compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null || return 0
+    log_error "This host still has records from an older version, in $STATE_DIR/deployed"
+    echo "Run 'dotfiles init' to start fresh records; it takes a snapshot of every managed file first." >&2
+    exit 1
+}
+
 # Point a pull at files with local edits nobody has reviewed
 sync_warn_edits() {
     local n
@@ -1037,9 +1045,7 @@ cmd_status() {
             dir="${PKG_CONFIG_DIR[$idx]}"
             [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
             name="${PKG_NAMES[$idx]}"
-            yaml_load "$APPS_DIR/$dir/config.yaml"
-            app_name=$(yaml_get app.name)
-            [[ -n "$app_name" ]] || app_name=$(basename "$dir")
+            app_name=$(add_app_name "$dir")
             stage="$STAGE_ROOT/apps/$dir"
             ver_fresh=""
             if overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
@@ -1136,6 +1142,7 @@ cmd_sync() {
         echo "dotfiles sync needs a terminal: it runs 'dotfiles add', which asks about each local edit" >&2
         exit 1
     fi
+    refuse_old_records
     [[ "$SYNC_NO_FETCH" == true ]] || sync_update_before_add
     "$SCRIPT_DIR/dotfiles" add ${layer[@]+"${layer[@]}"} || exit $?
     exec "$SCRIPT_DIR/dotfiles" "${pull_args[@]}"
@@ -1194,12 +1201,7 @@ main() {
         exit 0
     fi
 
-    # Old records don't say enough to protect an edit, or to review one
-    if [[ "$COMMAND" == "pull" || "$COMMAND" == "add" ]] && compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null; then
-        log_error "This host still has records from an older version, in $STATE_DIR/deployed"
-        echo "Run 'dotfiles init' to start fresh records; it takes a snapshot of every managed file first." >&2
-        exit 1
-    fi
+    [[ "$COMMAND" != "pull" && "$COMMAND" != "add" ]] || refuse_old_records
 
     if [[ "$COMMAND" == "pull" && -n "${DOTFILES_FORCE_PATH:-}" ]]; then
         force_path_precheck

@@ -13,9 +13,13 @@
 # moves them, so a discarded save becomes an edit again.
 # Reads globals from the dotfiles script (PKG_*, LAYER_ROOTS, HOSTS_PROFILE_CHAIN, ...).
 
-# Layers for the current file, highest priority first (filled by add_build_layers)
+# Layers for the current file, highest priority first (filled by add_build_layers): the
+# ones a save can go to, every one that takes effect here whether or not it can take a
+# save, and why any were left out
 declare -a ADD_LABELS=()
 declare -a ADD_ROOTS=()
+declare -a ADD_EFFECTIVE_ROOTS=()
+declare -a ADD_NOT_OFFERED=()
 ADD_PUBLIC_ROOT=""
 # Repo root -> 1, for each repo something was staged in
 declare -A ADD_STAGED=()
@@ -74,29 +78,62 @@ add__hash() {
     fi
 }
 
-# Fill ADD_LABELS/ADD_ROOTS: this host, its profiles (nearest first), then the default in
-# the public repo. A repo with no git is left out, because the next 'pull --remote' would
-# replace a save there; so is the public repo when pinned, where a commit would not land
-# on a branch. The host layer doesn't need a host directory yet: a save creates it.
+# Fill the layer lists: this host, its profiles (nearest first), then the default in the
+# public repo. A repo with no git is left out, because the next 'pull --remote' would
+# replace a save there; so is a pinned public repo or a detached hosts repo, where a commit
+# would not land on a branch. The host layer needs a host.yaml in the working copy, committed
+# or not: without one, deploys ignore the host directory, so a save there would never take
+# effect. Its apps/ directory can be missing: a save creates it.
 # Usage: add_build_layers DIR
 add_build_layers() {
-    local i p
+    local i p host_root offer_hosts=false has_host=false
     ADD_LABELS=()
     ADD_ROOTS=()
-    if [[ -n "$HOSTS_DIR" ]] && versions_is_checkout "$HOSTS_DIR"; then
-        ADD_LABELS+=("host: $OVERLAY_HOST (hosts repo)")
-        ADD_ROOTS+=("$HOSTS_DIR/hosts/$OVERLAY_HOST")
+    ADD_EFFECTIVE_ROOTS=()
+    ADD_NOT_OFFERED=()
+    ADD_PUBLIC_ROOT="$DOTFILES_REPO"
+    if [[ -n "$HOSTS_DIR" ]]; then
+        host_root="$HOSTS_DIR/hosts/$OVERLAY_HOST"
+        [[ ! -f "$host_root/host.yaml" ]] || has_host=true
+        if versions_is_pinned "$HOSTS_DIR"; then
+            ADD_NOT_OFFERED+=("Not offering the hosts repo's layers: it's on a detached HEAD, so a commit there wouldn't land on a branch.")
+        elif versions_is_checkout "$HOSTS_DIR"; then
+            offer_hosts=true
+            if [[ "$has_host" != true ]]; then
+                ADD_NOT_OFFERED+=("Not offering this host's layer: $host_root/host.yaml is missing, and without it a file there wouldn't take effect.")
+            fi
+        fi
+        if [[ "$has_host" == true ]]; then
+            ADD_EFFECTIVE_ROOTS+=("$host_root")
+            if [[ "$offer_hosts" == true ]]; then
+                ADD_LABELS+=("host: $OVERLAY_HOST (hosts repo)")
+                ADD_ROOTS+=("$host_root")
+            fi
+        fi
         for (( i = ${#HOSTS_PROFILE_CHAIN[@]} - 1; i >= 0; i-- )); do
             p="${HOSTS_PROFILE_CHAIN[$i]}"
-            ADD_LABELS+=("profile: $p (hosts repo)")
-            ADD_ROOTS+=("$HOSTS_DIR/profiles/$p")
+            ADD_EFFECTIVE_ROOTS+=("$HOSTS_DIR/profiles/$p")
+            if [[ "$offer_hosts" == true ]]; then
+                ADD_LABELS+=("profile: $p (hosts repo)")
+                ADD_ROOTS+=("$HOSTS_DIR/profiles/$p")
+            fi
         done
     fi
-    ADD_PUBLIC_ROOT="$DOTFILES_REPO"
-    if versions_is_checkout "$DOTFILES_REPO" && ! versions_is_pinned "$DOTFILES_REPO"; then
+    ADD_EFFECTIVE_ROOTS+=("$ADD_PUBLIC_ROOT")
+    if versions_is_pinned "$DOTFILES_REPO"; then
+        ADD_NOT_OFFERED+=("Not offering the public repo: this machine is pinned, so a commit there wouldn't land on a branch.")
+    elif versions_is_checkout "$DOTFILES_REPO"; then
         ADD_LABELS+=("dotfiles default (PUBLIC repo, all machines)")
         ADD_ROOTS+=("$ADD_PUBLIC_ROOT")
     fi
+}
+
+# Why layers are missing from the list, if any are
+add__say_not_offered() {
+    local reason
+    for reason in ${ADD_NOT_OFFERED[@]+"${ADD_NOT_OFFERED[@]}"}; do
+        echo "$reason"
+    done
 }
 
 # True if a layer's file holds the value at PATH_JSON. [] means the whole file holds it,
@@ -126,20 +163,44 @@ add_saved_elsewhere() {
     return 1
 }
 
+# True if a layer's file exists and, for a key, has that key
+# Usage: add__layer_has LAYER_FILE PATH_JSON
+add__layer_has() {
+    local file="$1" path="$2"
+    [[ -f "$file" ]] || return 1
+    [[ "$path" == "[]" ]] && return 0
+    jq -ne --argjson p "$path" --slurpfile b "$file" "$ADD_JQ_DEFS"'
+        ($b[0] | at($p) | length) == 1' >/dev/null 2>&1
+}
+
 # Index in ADD_ROOTS of the highest layer that has this file, or this key of it; -1 if none
 # Usage: add_current_layer DIR SRC [PATH_JSON]
 add_current_layer() {
-    local dir="$1" src="$2" path="${3:-[]}" i file
+    local dir="$1" src="$2" path="${3:-[]}" i
     for i in "${!ADD_ROOTS[@]}"; do
-        file="${ADD_ROOTS[$i]}/apps/$dir/files/$src"
-        [[ -f "$file" ]] || continue
-        if [[ "$path" == "[]" ]] || jq -ne --argjson p "$path" --slurpfile b "$file" "$ADD_JQ_DEFS"'
-                ($b[0] | at($p) | length) == 1' >/dev/null 2>&1; then
+        if add__layer_has "${ADD_ROOTS[$i]}/apps/$dir/files/$src" "$path"; then
             echo "$i"
             return 0
         fi
     done
     echo -1
+}
+
+# Succeed if the winning layer's working copy holds the live value, so that it takes effect
+# once committed and a conflict there is answered. Looks at every layer that takes effect,
+# offered or not: a layer that can't take a save can still be the one that wins.
+# Usage: add__winner_holds DIR SRC PATH_JSON DEST
+add__winner_holds() {
+    local dir="$1" src="$2" path="$3" dest="$4" root file
+    [[ -e "$dest" ]] || return 1
+    for root in "${ADD_EFFECTIVE_ROOTS[@]}"; do
+        file="$root/apps/$dir/files/$src"
+        if add__layer_has "$file" "$path"; then
+            add__layer_holds "$file" "$path" "$dest"
+            return
+        fi
+    done
+    return 1
 }
 
 # The note of what add last wrote to a layer file
@@ -192,7 +253,9 @@ add__install() {
     fi
     if ! cp "$new" "$target" 2>/dev/null || ! git --literal-pathspecs -C "$top" add -- "$rel" 2>/dev/null; then
         if [[ -n "$keep" ]]; then
-            cp -p "$keep" "$target" 2>/dev/null || log_warn "Could not put $target back; its old content is at $keep"
+            if ! cmp -s "$keep" "$target" && ! cp -p "$keep" "$target" 2>/dev/null; then
+                log_warn "Could not put $target back; restore it with: git -C $top checkout -- '$rel'"
+            fi
         else
             rm -f "$target"
         fi
@@ -336,6 +399,7 @@ add__save_item() {
         add_ask answer "Save it anyway? y(es) n(o)" "n" || return 2
         case "$answer" in
             y|Y|yes) ;;
+            q|Q|quit) return 2 ;;
             *) log_info "Skipped"; return 0 ;;
         esac
     fi
@@ -345,6 +409,7 @@ add__save_item() {
     if [[ "$current" -ge 0 && "${ADD_ROOTS[$current]}" != "$ADD_PUBLIC_ROOT" ]]; then
         default="$current"
     fi
+    add__say_not_offered
     echo "Save $(add_tilde "$dest") to:"
     for i in "${!ADD_LABELS[@]}"; do
         printf '  %d) %s\n' "$((i + 1))" "${ADD_LABELS[$i]}"
@@ -376,10 +441,11 @@ add__save_item() {
             echo "  $path = $(jq -c . "$value")"
         fi
         add_ask answer "Type 'public' to confirm" "no" || return 2
-        if [[ "$answer" != public ]]; then
-            log_info "Skipped"
-            return 0
-        fi
+        case "$answer" in
+            public) ;;
+            q|Q|quit) return 2 ;;
+            *) log_info "Skipped"; return 0 ;;
+        esac
     fi
 
     if [[ "$current" -ge 0 && "$i" -gt "$current" ]]; then
@@ -412,12 +478,15 @@ add_review_item() {
     if [[ "$path" != "[]" && "$(add__show_key "$dest" "$path")" == "(absent)" ]]; then
         no_save="You deleted this repo-managed key. Saving isn't possible; dismiss keeps it deleted."
     elif [[ ${#ADD_ROOTS[@]} -eq 0 ]]; then
-        no_save="Saving isn't possible here: no repo on this host can take it (none has git, or the only one is pinned). To keep this edit elsewhere, copy it by hand."
+        no_save="Saving isn't possible here: no repo on this host can take it. To keep this edit elsewhere, copy it by hand."
+    elif grep -qxF -- "$src" "${stage_file%/files/"$src"}/skip" 2>/dev/null; then
+        no_save="A layer's committed copy of this file is not a valid JSON object, so there is no repo version to compare with: saving isn't possible, and a conflict with the repo can't be seen. Fix that layer and commit it."
     elif [[ ! -e "$stage_file" ]]; then
         no_save="The repo no longer provides this file, so there's nowhere to save it."
     fi
     if [[ -n "$no_save" ]]; then
         echo "$no_save"
+        [[ ${#ADD_ROOTS[@]} -ne 0 ]] || add__say_not_offered
         options="Dismiss or skip? d(ismiss) k(skip) q(uit)"
     else
         options="Save, dismiss or skip? s(ave) d(ismiss) k(skip) q(uit)"
@@ -445,20 +514,30 @@ add_review_item() {
 }
 
 # The items of one file that add asks about: what records_items says, less what a layer's
-# working copy already holds. --all also brings back a conflict held by a layer, where a
-# save below the winning layer would otherwise leave it warning with nothing to answer.
+# working copy already holds. A conflict needs the winning layer to hold it: anywhere lower,
+# pull would go on warning about it, so add has to go on asking.
 # Usage: add_file_items APP DIR SRC DEST STAGE_FILE ALL
 add_file_items() {
     local app="$1" dir="$2" src="$3" dest="$4" stage_file="$5" all="$6" items kind path
     items=$(records_items "$app" "$src" "$dest" "$stage_file" "$all" 2>/dev/null) || return 1
     [[ -n "$items" ]] || return 0
     while IFS=$'\t' read -r kind path; do
-        if add_saved_elsewhere "$dir" "$src" "$path" "$dest" \
-            && ! [[ "$all" == true && "$kind" == conflict ]]; then
-            continue
+        if [[ "$kind" == conflict ]]; then
+            add__winner_holds "$dir" "$src" "$path" "$dest" && continue
+        else
+            add_saved_elsewhere "$dir" "$src" "$path" "$dest" && continue
         fi
         printf '%s\t%s\n' "$kind" "$path"
     done <<< "$items"
+}
+
+# The name an app's records and state go under: the same lookup as the installer's. The
+# parser's keys are flat and it keeps what earlier files set, so this starts clean.
+# Usage: add_app_name DIR
+add_app_name() {
+    unset YAML_DATA
+    yaml_load "$APPS_DIR/$1/config.yaml"
+    yaml_get name unknown
 }
 
 # Number of files that have something for add to ask about, among the apps in this profile:
@@ -473,9 +552,7 @@ add_count_edits() {
     for idx in "${!PKG_NAMES[@]}"; do
         dir="${PKG_CONFIG_DIR[$idx]}"
         [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
-        yaml_load "$APPS_DIR/$dir/config.yaml"
-        app=$(yaml_get app.name)
-        [[ -n "$app" ]] || app=$(basename "$dir")
+        app=$(add_app_name "$dir")
         add_build_layers "$dir"
         while IFS=$'\t' read -r src dest strategy; do
             # A file that can't be read for that counts as edited
@@ -527,11 +604,13 @@ cmd_add() {
     for idx in "${!PKG_NAMES[@]}"; do
         dir="${PKG_CONFIG_DIR[$idx]}"
         [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]] || continue
-        yaml_load "$APPS_DIR/$dir/config.yaml"
-        app=$(yaml_get app.name)
-        [[ -n "$app" ]] || app=$(basename "$dir")
+        app=$(add_app_name "$dir")
         stage="$STAGE_ROOT/apps/$dir"
-        overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null || continue
+        if ! overlay_stage_app "$APPS_DIR/$dir" "$stage" "$STRATEGIES_FILE" "${LAYER_ROOTS[@]}" 2>/dev/null; then
+            found=true
+            log_warn "Could not put together the repo's files for $app, so its edits aren't offered"
+            continue
+        fi
         add_build_layers "$dir"
 
         local -a entries=()
