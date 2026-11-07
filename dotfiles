@@ -403,6 +403,19 @@ force_path_is_managed() {
     return 1
 }
 
+# Refuse --force PATH for a file nothing here manages, before anything changes. The file
+# may only arrive with the next commit: a plain 'dotfiles pull' brings that in.
+force_path_precheck() {
+    [[ -z "$HOSTS_DIR" || -d "$HOSTS_DIR" ]] || return 0
+    load_packages_for_profile "$PROFILE_ARG" "${HOSTNAME_ARG:-$(hosts_local_name)}" || exit 1
+    if ! force_path_is_managed; then
+        log_error "$DOTFILES_FORCE_PATH is not managed by dotfiles here, so there is no repo version to take"
+        exit 1
+    fi
+    # The pull may move HEAD: the deploy needs its own export
+    rm -rf "$WORK_DIR/export"
+}
+
 # Run all phases locally
 # Usage: run_all PROFILE_ARG
 run_all() {
@@ -443,8 +456,9 @@ run_all() {
         return 1
     fi
 
-    # Only pull installs tools; uninstall and verify act on configs alone
-    if [[ "$COMMAND" == "pull" ]]; then
+    # Only pull installs tools; uninstall and verify act on configs alone, and --force PATH
+    # on that one file
+    if [[ "$COMMAND" == "pull" && -z "${DOTFILES_FORCE_PATH:-}" ]]; then
         # Phase 1: OS packages (batch install)
         log_info "[$target] Phase 1: OS packages"
         run_phase_os_packages || true
@@ -1158,6 +1172,10 @@ main() {
         exit 1
     fi
 
+    if [[ "$COMMAND" == "pull" && -n "${DOTFILES_FORCE_PATH:-}" ]]; then
+        force_path_precheck
+    fi
+
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
         if ! sync_lock; then
             echo "dotfiles: pull already running" >&2
@@ -1184,7 +1202,9 @@ main() {
             sync_pull_one "$DOTFILES_REPO"
             [[ -z "$HOSTS_DIR" ]] || sync_pull_one "$HOSTS_DIR"
         fi
-        is_dry_run || sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
+        if ! is_dry_run && [[ -z "${DOTFILES_FORCE_PATH:-}" ]]; then
+            sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
+        fi
         versions_warn_pinned "$DOTFILES_REPO"
     fi
 
@@ -1212,7 +1232,8 @@ main() {
 
     # Pending packages are only worked out by pull
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
-        sync_write_pending ${PENDING[@]+"${PENDING[@]}"}
+        # --force PATH didn't look at the packages
+        [[ -n "${DOTFILES_FORCE_PATH:-}" ]] || sync_write_pending ${PENDING[@]+"${PENDING[@]}"}
         sync_record_complete "$fingerprint"
     fi
 

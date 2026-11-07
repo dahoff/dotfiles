@@ -157,8 +157,90 @@ records_list() {
     [[ ! -f "$file" ]] || cat "$file"
 }
 
-# Forget every source of APP whose DEST isn't listed, and its copies. The manifest goes
-# first, so an interrupted run leaves unused copies rather than a line missing its copies.
+# Where the copies of a forgotten DEST wait, in case another app or source takes it over.
+# Usage: records__released_dir DEST
+records__released_dir() {
+    echo "$STATE_DIR/records/.released/$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+}
+
+# Keep the copies of a file no app tracks any more. Best effort: without them, a later
+# deploy of the same DEST starts over, after a snapshot.
+# Usage: records__release APP SRC DEST STRATEGY
+records__release() {
+    local dir
+    dir=$(records__released_dir "$3")
+    (
+        umask 077
+        rm -rf "$dir"
+        mkdir -p "$dir" \
+            && cat "$STATE_DIR/records/$1/repo/$2" > "$dir/repo" \
+            && cat "$STATE_DIR/records/$1/review/$2" > "$dir/review" \
+            && printf '%s\t%s\n' "$3" "$4" > "$dir/meta"
+    ) 2>/dev/null || rm -rf "$dir"
+}
+
+# Forget one source of APP and its copies, the manifest first
+# Usage: records__forget APP SRC
+records__forget() {
+    local app="$1" src="$2" file tmp
+    file=$(records__manifest "$app")
+    [[ -f "$file" ]] || return 0
+    tmp="$file.tmp.$$"
+    if ! (
+        umask 077
+        RECORDS_SRC="$src" awk -F'\t' '($1 "") != (ENVIRON["RECORDS_SRC"] "")' "$file" > "$tmp"
+    ) 2>/dev/null; then
+        rm -f "$tmp"
+        records__error "could not write $tmp"
+        return 1
+    fi
+    if [[ ! -s "$tmp" ]]; then
+        rm -f "$tmp"
+        records_remove "$app"
+        return
+    fi
+    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    rm -f "$STATE_DIR/records/$app/repo/$src" "$STATE_DIR/records/$app/review/$src"
+    find "$STATE_DIR/records/$app/repo" "$STATE_DIR/records/$app/review" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+}
+
+# Forget every source of APP that's gone from its config, once a listed source records the
+# same DEST. Until then the old line is the only base there is for that file.
+# Usage: records_prune_srcs APP SRC...
+records_prune_srcs() {
+    local app="$1" file src dest strategy other s listed covered
+    records__check_app "$app" || return 1
+    shift
+    file=$(records__manifest "$app")
+    [[ -f "$file" ]] || return 0
+    local -a srcs=() dests=()
+    while IFS=$'\t' read -r src dest strategy; do
+        srcs+=("$src")
+        dests+=("$dest")
+    done < "$file"
+    local i j
+    for i in "${!srcs[@]}"; do
+        listed=false
+        for s in "$@"; do
+            [[ "$s" != "${srcs[$i]}" ]] || listed=true
+        done
+        [[ "$listed" == false ]] || continue
+        covered=false
+        for j in "${!srcs[@]}"; do
+            [[ "${dests[$j]}" == "${dests[$i]}" && "$j" != "$i" ]] || continue
+            for s in "$@"; do
+                [[ "$s" != "${srcs[$j]}" ]] || covered=true
+            done
+        done
+        if [[ "$covered" == true ]]; then
+            records__forget "$app" "${srcs[$i]}" || return 1
+        fi
+    done
+}
+
+# Forget every source of APP whose DEST isn't listed. Its copies move aside, so that another
+# app taking the file over still has a base. The manifest goes first, so an interrupted run
+# leaves unused copies rather than a line missing its copies.
 # Usage: records_prune APP DEST...
 records_prune() {
     local app="$1" file tmp src dest strategy d keep
@@ -178,6 +260,7 @@ records_prune() {
             printf '%s\t%s\t%s\n' "$src" "$dest" "$strategy" >> "$tmp"
         else
             drop+=("$src")
+            records__release "$app" "$src" "$dest" "$strategy"
         fi
     done < "$file"
     if [[ ! -s "$tmp" ]]; then
@@ -246,6 +329,50 @@ records_has_dest() {
         [[ "$dest" != "$2" ]] || return 0
     done < <(records_list "$1")
     return 1
+}
+
+# True if dotfiles has written DEST: any app records it, or did until it was dropped
+# Usage: records_knows_dest DEST
+records_knows_dest() {
+    local file src dest strategy
+    for file in "$STATE_DIR"/records/*/manifest.tsv; do
+        [[ -f "$file" ]] || continue
+        while IFS=$'\t' read -r src dest strategy; do
+            [[ "$dest" != "$1" ]] || return 0
+        done < "$file"
+    done
+    [[ -f "$(records__released_dir "$1")/meta" ]]
+}
+
+# Take over the record of DEST when SRC has none of its own: the source was renamed, or the
+# file moved from another app, so what's live is still judged against what was accepted.
+# Needs the same strategy; a switch starts over. Looks in this app, then the others, then
+# the copies of a dropped file.
+# Usage: records__adopt APP SRC DEST STRATEGY
+records__adopt() {
+    local app="$1" src="$2" dest="$3" strategy="$4" file owner o_src o_dest o_strategy dir meta
+    records_is_fresh "$app" "$src" "$dest" "$strategy" || return 0
+    for file in "$(records__manifest "$app")" "$STATE_DIR"/records/*/manifest.tsv; do
+        [[ -f "$file" ]] || continue
+        owner=$(basename "$(dirname "$file")")
+        while IFS=$'\t' read -r o_src o_dest o_strategy; do
+            [[ "$o_dest" == "$dest" && "$o_strategy" == "$strategy" ]] || continue
+            [[ "$owner" != "$app" || "$o_src" != "$src" ]] || continue
+            [[ -r "$STATE_DIR/records/$owner/repo/$o_src" && -r "$STATE_DIR/records/$owner/review/$o_src" ]] || continue
+            records_put "$app" "$src" "$dest" "$strategy" \
+                "$STATE_DIR/records/$owner/repo/$o_src" "$STATE_DIR/records/$owner/review/$o_src" || return 1
+            records__forget "$owner" "$o_src" || return 1
+            rm -rf "$(records__released_dir "$dest")"
+            return 0
+        done < "$file"
+    done
+    dir=$(records__released_dir "$dest")
+    [[ -f "$dir/meta" ]] || return 0
+    meta=$(cat "$dir/meta")
+    if [[ "$meta" == "$dest"$'\t'"$strategy" ]]; then
+        records_put "$app" "$src" "$dest" "$strategy" "$dir/repo" "$dir/review" || return 1
+        rm -rf "$dir"
+    fi
 }
 
 # True if deploying SRC starts over rather than comparing against its record: no record,
@@ -496,6 +623,13 @@ records_deploy() {
         records__error "$dest is not a regular file"
         return 1
     fi
+    case "$strategy" in
+        replace | merge)
+            if [[ "$RECORDS_FORCE" != reset ]]; then
+                records__adopt "$app" "$src" "$dest" "$strategy" || return 1
+            fi
+            ;;
+    esac
     case "$strategy" in
         replace)
             records__deploy_replaced "$app" "$src" "$new" "$dest" "$mode"

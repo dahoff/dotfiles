@@ -926,6 +926,27 @@ fp_run pull
 expect_skip pull
 pass "a conflict is re-checked until resolved"
 
+# Case 35c
+info "Case 35c: --force PATH: an unmanaged path fetches nothing; a managed one takes what the fetch brings"
+author_commit FORCEFETCH one
+BEFORE=$(git -C "$WORK/dotfiles" rev-parse HEAD)
+fp_run pull --force "$HOME/not-managed"
+[[ $RC -eq 1 && "$OUT" == *"not managed"* ]] || fail "unmanaged: rc=$RC: $OUT"
+[[ "$(git -C "$WORK/dotfiles" rev-parse HEAD)" == "$BEFORE" ]] || fail "the refused run fetched"
+[[ -e "$STATE/last-complete" ]] || fail "the refused run forgot the last complete pull"
+printf '" force fetched\n' >> "$WORK/author/apps/vim/files/.vimrc"
+git -C "$WORK/author" add apps/vim/files/.vimrc
+git -C "$WORK/author" commit -q -m "force fetched"
+git -C "$WORK/author" push -q origin HEAD
+echo '" stale' > "$VIMRC"
+fp_run pull --force "$VIMRC"
+[[ $RC -eq 0 ]] || fail "--force PATH failed: $OUT"
+grep -q '" force fetched' "$VIMRC" || fail "deployed an export from before the fetch: $(cat "$VIMRC")"
+[[ "$OUT" != *"Phase 1"* ]] || fail "package phase ran: $OUT"
+fp_run pull
+[[ $RC -eq 0 ]] || fail "pull failed: $OUT"
+pass "--force PATH validates first and deploys what was fetched"
+
 # Case 36
 info "Case 36: uninstall means the next sync reinstalls"
 expect_skip pull

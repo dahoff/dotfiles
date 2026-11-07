@@ -87,7 +87,33 @@ printf 's1\n' > "$RT/files/my file.conf"
 BASE_SETTINGS='{"model":"m1","theme":"t1","nested":{"x":1,"y":2},"list":[1,2],"a.b@c":"dotted"}'
 printf '%s\n' "$BASE_SETTINGS" > "$RT/files/settings.json"
 printf '{"o":1}\n' > "$RT/files/other.json"
-printf 'packages:\n  - name: rt\n    config:\n      dir: rt\n' > "$REPO/profiles/rt.yaml"
+# A second app, after rt in the profile, for files moving between apps
+RT2="$REPO/apps/rt2"
+mkdir -p "$RT2/files"
+cat > "$RT2/config.yaml" <<'EOF'
+app:
+  name: rt2
+  description: second test app
+
+files:
+  - src: z.conf
+    dest: ~/rt/z.conf
+    mode: '0644'
+  - src: z.json
+    dest: ~/rt/z.json
+    mode: '0644'
+    strategy: merge
+
+backup:
+  dir: ~/.bak/rt2
+  max_backups: 3
+EOF
+cp "$RT/configure.sh" "$RT2/configure.sh"
+printf 'z1\n' > "$RT2/files/z.conf"
+printf '{"z":1,"y":1}\n' > "$RT2/files/z.json"
+printf 'packages:\n  - name: rt\n    config:\n      dir: rt\n  - name: rt2\n    config:\n      dir: rt2\n' > "$REPO/profiles/rt.yaml"
+# With a tool to install, to show which runs reach the package phases
+printf 'packages:\n  - name: rt\n    config:\n      dir: rt\n  - name: faketool\n    custom:\n      check: "false"\n      script: ../test/fixtures/testtool/install.sh\n' > "$REPO/profiles/rtpkg.yaml"
 git -C "$REPO" init -q
 git -C "$REPO" add -A
 git -C "$REPO" commit -q -m base
@@ -1222,6 +1248,270 @@ pull_ok --hosts-dir "$HOSTS" --hostname h2
 content "$LIVE/b.conf" b-h2
 content "$R/repo/b.conf" b-h2
 pass "profile and host"
+
+# --- Renamed sources and files moving between apps ------------------------------
+
+# Rename a file of the app in the repo and in config.yaml, keeping its dest; commit.
+# Usage: repo_rename OLD NEW
+repo_rename() {
+    git -C "$REPO" mv "apps/rt/files/$1" "apps/rt/files/$2"
+    sed -i "s#src: $1\$#src: $2#" "$RT/config.yaml"
+    git -C "$REPO" add -A apps/rt
+    git -C "$REPO" commit -q -m "rename $1"
+}
+# How many pulls in a row report exactly N edited files, to catch a phantom
+edits_line() {
+    if [[ "$1" == 0 ]]; then hasnt "file(s) have local edits"; else has "$1 file(s) have local edits"; fi
+}
+
+info "Renaming a src, same dest: an edit stays, flagged; no stale record or phantom edit"
+fresh_installed
+echo mine > "$LIVE/a.conf"
+repo_rename a.conf a2.conf
+pull_ok
+content "$LIVE/a.conf" mine
+content "$R/repo/a2.conf" a1
+content "$R/review/a2.conf" a1
+[[ ! -e "$R/repo/a.conf" && ! -e "$R/review/a.conf" ]] || fail "old copies left"
+[[ "$(grep -cF "$LIVE/a.conf" "$R/manifest.tsv")" == 1 ]] || fail "manifest: $(cat "$R/manifest.tsv")"
+grep -qF "$(printf 'a2.conf\t%s\treplace' "$LIVE/a.conf")" "$R/manifest.tsv" || fail "manifest: $(cat "$R/manifest.tsv")"
+edits_line 1
+hasnt "kept your edit"
+hasnt "unreviewed edits"
+flagged_src() { [[ "$(items "$1" "$2")" == *edited* ]] || fail "$1: not flagged: $(items "$1" "$2")"; }
+flagged_src a2.conf "$LIVE/a.conf"
+RC=0
+OUT=$("$REPO/dotfiles" status 2>&1) || RC=$?
+has "$(printf '~/rt/a.conf')" "status doesn't list the edit"
+# The repo then changes it: a conflict, and a hand revert applies it
+repo_set a2.conf a3
+pull_ok
+content "$LIVE/a.conf" mine
+has "kept your edit to $LIVE/a.conf"
+echo a1 > "$LIVE/a.conf"
+pull_ok
+content "$LIVE/a.conf" a3
+hasnt "kept your edit"
+edits_line 0
+repo_unrelated
+pull_ok
+edits_line 0
+pass "rename keeps the edit"
+
+info "Renaming a src along with a repo change over an edit is a conflict; untouched follows"
+fresh_installed
+echo mine > "$LIVE/a.conf"
+git -C "$REPO" mv apps/rt/files/a.conf apps/rt/files/a2.conf
+git -C "$REPO" mv apps/rt/files/b.conf apps/rt/files/b2.conf
+sed -i 's#src: a.conf$#src: a2.conf#;s#src: b.conf$#src: b2.conf#' "$RT/config.yaml"
+printf 'a2\n' > "$RT/files/a2.conf"
+printf 'b2\n' > "$RT/files/b2.conf"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m "rename and change"
+pull_ok
+content "$LIVE/a.conf" mine
+content "$R/repo/a2.conf" a1
+has "kept your edit to $LIVE/a.conf"
+content "$LIVE/b.conf" b2
+content "$R/repo/b2.conf" b2
+complete_absent "rename conflict"
+pass "rename with a change"
+
+info "Renaming a merged src: per-key rules go on, local-only keys stay"
+fresh_installed
+jq '.theme = "mine" | .localOnly = 1' "$LIVE/settings.json" > "$T/s" && cp "$T/s" "$LIVE/settings.json"
+git -C "$REPO" mv apps/rt/files/settings.json apps/rt/files/settings2.json
+sed -i 's#src: settings.json$#src: settings2.json#' "$RT/config.yaml"
+settings '{"model":"m2"}' > "$RT/files/settings2.json"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m "rename merged"
+pull_ok
+[[ "$(jv "$LIVE/settings.json" .theme)" == '"mine"' && "$(jv "$LIVE/settings.json" .localOnly)" == 1 ]] || fail "edit lost"
+[[ "$(jv "$LIVE/settings.json" .model)" == '"m2"' ]] || fail "repo change not applied"
+[[ "$(jv "$R/repo/settings2.json" .model)" == '"m2"' ]] || fail "records"
+[[ "$(jv "$R/review/settings2.json" .theme)" == '"t1"' ]] || fail "review took the edit"
+[[ ! -e "$R/repo/settings.json" ]] || fail "old copy left"
+edits_line 1
+pass "rename of a merged file"
+
+info "A rename whose deploy fails keeps the old base for the retry"
+fresh_installed
+jq '.theme = "mine"' "$LIVE/settings.json" > "$T/s" && cp "$T/s" "$LIVE/settings.json"
+git -C "$REPO" mv apps/rt/files/settings.json apps/rt/files/settings2.json
+sed -i 's#src: settings.json$#src: settings2.json#' "$RT/config.yaml"
+printf '{broken\n' > "$RT/files/settings2.json"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m "rename, bad layer"
+pull
+[[ $RC -eq 1 ]] || fail "expected failure: $OUT"
+[[ "$(jv "$LIVE/settings.json" .theme)" == '"mine"' ]] || fail "live touched"
+[[ -e "$R/repo/settings.json" ]] || fail "the only base was pruned"
+settings '{"model":"m2"}' > "$RT/files/settings2.json"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m "fixed"
+pull_ok
+[[ "$(jv "$LIVE/settings.json" .theme)" == '"mine"' && "$(jv "$LIVE/settings.json" .model)" == '"m2"' ]] || fail "retry"
+[[ ! -e "$R/repo/settings.json" ]] || fail "old copy left"
+pass "failed rename retried"
+
+info "A rename with a strategy switch starts over, with a snapshot, and leaves no stale record"
+fresh_installed
+echo '{"mine":1}' > "$LIVE/a.conf"
+git -C "$REPO" mv apps/rt/files/a.conf apps/rt/files/a2.json
+sed -i 's#src: a.conf$#src: a2.json#' "$RT/config.yaml"
+sed -i '/dest: ~\/rt\/a.conf/a\    strategy: merge' "$RT/config.yaml"
+printf '{"a":1}\n' > "$RT/files/a2.json"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m "rename and switch"
+pull_ok
+json "$LIVE/a.conf" '{"mine":1,"a":1}'
+snapshot_with a.conf mine
+[[ "$(grep -cF "$LIVE/a.conf" "$R/manifest.tsv")" == 1 ]] || fail "manifest: $(cat "$R/manifest.tsv")"
+[[ ! -e "$R/repo/a.conf" ]] || fail "old copy left"
+pass "rename and switch"
+
+# Move a file between the test apps, keeping its dest; commit.
+# Usage: repo_move FROM_DIR TO_DIR SRC DEST [STRATEGY]
+repo_move() {
+    local from="$1" to="$2" src="$3" dest="$4" strategy="${5:-}" entry
+    git -C "$REPO" mv "apps/$from/files/$src" "apps/$to/files/$src"
+    if [[ -n "$strategy" ]]; then
+        sed -i "/src: $src\$/,/strategy:/d" "$REPO/apps/$from/config.yaml"
+    else
+        sed -i "/src: $src\$/,/mode:/d" "$REPO/apps/$from/config.yaml"
+    fi
+    entry="  - src: $src\n    dest: $dest\n    mode: '0644'"
+    [[ -z "$strategy" ]] || entry+="\n    strategy: $strategy"
+    sed -i "s#^backup:#$entry\n\nbackup:#" "$REPO/apps/$to/config.yaml"
+    git -C "$REPO" add -A "apps/$from" "apps/$to"
+    git -C "$REPO" commit -q -m "move $src"
+}
+R2() { echo "$STATE_DIR/records/rt2"; }
+
+info "A dest moved to an app that runs later: the edit stays, flagged, with no phantom edit"
+fresh_installed
+echo mine > "$LIVE/b.conf"
+repo_move rt rt2 b.conf '~/rt/b.conf'
+pull_ok
+content "$LIVE/b.conf" mine
+content "$(R2)/repo/b.conf" b1
+content "$(R2)/review/b.conf" b1
+if grep -qF "$LIVE/b.conf" "$R/manifest.tsv"; then fail "old app still tracks it"; fi
+grep -qF "$LIVE/b.conf" "$(R2)/manifest.tsv" || fail "new app doesn't track it"
+edits_line 1
+[[ ! -e "$HOME/.bak/rt2/original/b.conf" ]] || fail "a file dotfiles wrote was saved as an original"
+repo_unrelated
+pull_ok
+content "$LIVE/b.conf" mine
+edits_line 1
+hasnt "unreviewed edits" "warned again"
+printf 'b2\n' > "$RT2/files/b.conf"
+git -C "$REPO" add -A apps/rt2
+git -C "$REPO" commit -q -m "b2"
+pull_ok
+content "$LIVE/b.conf" mine
+has "kept your edit to $LIVE/b.conf"
+echo b1 > "$LIVE/b.conf"
+pull_ok
+content "$LIVE/b.conf" b2
+edits_line 0
+[[ -z "$(find "$STATE_DIR/records/.released" -type f 2>/dev/null)" ]] || fail "released copies left"
+pass "moved to a later app"
+
+info "A dest moved to an app that runs earlier: the same"
+fresh_installed
+echo mine > "$LIVE/z.conf"
+repo_move rt2 rt z.conf '~/rt/z.conf'
+pull_ok
+content "$LIVE/z.conf" mine
+content "$R/repo/z.conf" z1
+if grep -qF "$LIVE/z.conf" "$(R2)/manifest.tsv"; then fail "old app still tracks it"; fi
+edits_line 1
+hasnt "unreviewed edits" "old app warned about a file the new app holds"
+repo_set z.conf z2
+pull_ok
+content "$LIVE/z.conf" mine
+has "kept your edit to $LIVE/z.conf"
+pass "moved to an earlier app"
+
+info "A merged dest moved between apps keeps its per-key rules"
+fresh_installed
+jq '.z = 9 | .localOnly = 1' "$LIVE/z.json" > "$T/s" && cp "$T/s" "$LIVE/z.json"
+repo_move rt2 rt z.json '~/rt/z.json' merge
+pull_ok
+[[ "$(jv "$LIVE/z.json" .z)" == 9 && "$(jv "$LIVE/z.json" .localOnly)" == 1 ]] || fail "edit lost: $(cat "$LIVE/z.json")"
+[[ "$(jv "$R/repo/z.json" .z)" == 1 ]] || fail "repo copy"
+edits_line 1
+repo_set z.json '{"z":2,"y":2}'
+pull_ok
+[[ "$(jv "$LIVE/z.json" .z)" == 9 ]] || fail "conflict overwritten"
+[[ "$(jv "$LIVE/z.json" .y)" == 2 ]] || fail "other key not applied"
+has "kept your edit to $LIVE/z.json"
+pass "merged file moved between apps"
+
+info "A file dropped, then added back later: an edit made meanwhile isn't overwritten"
+fresh_installed
+GOOD_CONFIG="$RT/config.yaml"
+cp "$GOOD_CONFIG" "$T/config-before"
+echo mine > "$LIVE/a.conf"
+sed -i '/src: a.conf/,/mode:/d' "$GOOD_CONFIG"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m drop
+pull_ok
+content "$LIVE/a.conf" mine
+cp "$T/config-before" "$GOOD_CONFIG"
+git -C "$REPO" add -A apps/rt
+git -C "$REPO" commit -q -m "add back"
+pull_ok
+content "$LIVE/a.conf" mine
+content "$R/repo/a.conf" a1
+edits_line 1
+pass "added back"
+
+# --- --force PATH touches that file and nothing else -------------------------------
+
+# Everything a run could change outside the repo, with modification times
+fingerprint() {
+    find "$HOME" "$STATE_DIR" "$XDG_STATE_HOME" -printf '%p %y %T@\n' 2>/dev/null | sort
+}
+
+info "--force PATH runs no package phase, no self-install, and keeps the pending list"
+fresh
+NOSUDO="$T/nosudo"
+mkdir -p "$NOSUDO"
+printf '#!/bin/sh\nexit 1\n' > "$NOSUDO/sudo"
+chmod +x "$NOSUDO/sudo"
+export DOTFILES_TEST_MARKER="$T/marker$N"
+PATH="$NOSUDO:$PATH" pull --profile rtpkg
+[[ -e "$DOTFILES_TEST_MARKER" ]] || fail "fixture: the package phase should run: $OUT"
+grep -qx faketool "$XDG_STATE_HOME/dotfiles/pending" || fail "fixture: faketool should be pending"
+rm -f "$DOTFILES_TEST_MARKER" "$HOME/.local/bin/dotfiles" "$HOME/.bashrc.d/90-dotfiles.sh"
+echo mine > "$LIVE/a.conf"
+PATH="$NOSUDO:$PATH" pull --profile rtpkg --force "$LIVE/a.conf"
+[[ $RC -eq 0 ]] || fail "failed: $OUT"
+content "$LIVE/a.conf" a1
+hasnt "Phase 1"
+hasnt "Phase 2"
+[[ ! -e "$DOTFILES_TEST_MARKER" ]] || fail "a custom install ran"
+[[ ! -e "$HOME/.local/bin/dotfiles" && ! -e "$HOME/.bashrc.d/90-dotfiles.sh" ]] || fail "self-install ran"
+grep -qx faketool "$XDG_STATE_HOME/dotfiles/pending" || fail "pending list lost"
+unset DOTFILES_TEST_MARKER
+pass "--force PATH leaves packages alone"
+
+info "An unmanaged --force PATH changes nothing at all"
+fresh_installed
+rm -f "$HOME/.bashrc.d/90-dotfiles.sh" "$HOME/.local/bin/dotfiles"
+echo x > "$HOME/unmanaged"
+fingerprint > "$T/fp-before"
+sleep 1
+pull --force "$HOME/unmanaged"
+[[ $RC -eq 1 ]] || fail "expected exit 1: $OUT"
+has "not managed"
+hasnt "Phase"
+fingerprint > "$T/fp-after"
+cmp -s "$T/fp-before" "$T/fp-after" || fail "something changed: $(diff "$T/fp-before" "$T/fp-after")"
+complete_written "unmanaged PATH"
+pass "unmanaged PATH: nothing changed"
 
 # --- Reset, uninstall, old records, dry run ------------------------------------
 

@@ -303,7 +303,7 @@ installer_report_warning() {
 # Usage: installer_save_original dest
 installer_save_original() {
     [[ -f "$1" ]] || return 0
-    records_has_dest "$APP_NAME" "$1" && return 0
+    records_knows_dest "$1" && return 0
     backup_create_original "$1" "$BACKUP_DIR"
 }
 
@@ -371,7 +371,7 @@ installer_warn_removed() {
         list_contains "$dest" ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"} && continue
         [[ -e "$dest" ]] || continue
         if records_has_edits "$APP_NAME" "$src" "$dest"; then
-            installer_report_warning "$dest is no longer managed and has unreviewed edits; it was left in place"
+            installer_report_warning "$dest is no longer managed by $APP_NAME and has unreviewed edits; it was left in place"
         fi
     done < <(records_list "$APP_NAME")
 }
@@ -416,7 +416,10 @@ deploy_all_files() {
     for i in "${!CONFIG_FILES[@]}"; do
         installer_deploy_one "$i" "$verb" || return 1
     done
-    is_dry_run || records_prune "$APP_NAME" ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"}
+    if ! is_dry_run; then
+        records_prune "$APP_NAME" ${CONFIG_DESTS[@]+"${CONFIG_DESTS[@]}"}
+        records_prune_srcs "$APP_NAME" ${CONFIG_FILES[@]+"${CONFIG_FILES[@]}"}
+    fi
 }
 
 # Version recorded in state: incomplete when any file failed, conflict when any file or
