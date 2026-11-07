@@ -571,6 +571,35 @@ init_status_report() {
         show { print }' <<< "$out")
 }
 
+# Bring the repos up to date the way pull does (fast-forward only), before a reset is listed
+# and snapshotted: the pull that follows must not find anything new to manage. A blocked
+# update (diverged, or local changes in the way) stops with nothing changed; a failure like
+# the network is a warning, and the reset is judged on what is here. A pinned checkout and a
+# repo with no git don't move.
+init_update_repos() {
+    local repo reason rc
+    if ! sync_lock; then
+        echo "dotfiles: pull already running" >&2
+        exit 1
+    fi
+    for repo in "$DOTFILES_REPO" ${INIT_HOSTS_DIR:+"$INIT_HOSTS_DIR"}; do
+        rc=0
+        reason=$(sync_pull_repo "$repo") || rc=$?
+        [[ $rc -ne 0 ]] || continue
+        if [[ $rc -eq 2 ]]; then
+            log_error "$repo: pull blocked ($reason); nothing was changed"
+            echo "Commit or set aside your changes there, then bring it up to date:" >&2
+            echo "  cd $repo && git pull --rebase" >&2
+            echo "Push if the repo has commits of its own, then run: dotfiles init" >&2
+            exit 1
+        fi
+        log_warn "$repo: pull failed ($reason); a reset would be judged on what is here"
+    done
+    sync_unlock
+    # Exports of the committed content made before the update are out of date
+    rm -rf "${WORK_DIR:?}/export"
+}
+
 # Ask whether to reset. Returns 0 only when confirmed: the question defaults to no, and
 # anything but 'reset' at the confirmation cancels.
 init_confirm_reset() {
@@ -717,6 +746,7 @@ init_main() {
             rm -rf "${STATE_DIR:?}/deployed"
             sync_forget_complete
         elif [[ "$INIT_YES" != true ]] && records_any; then
+            init_update_repos
             if ! init_status_report; then
                 log_warn "Can't tell what a reset would lose: 'dotfiles status' can't load the profile and overlays." \
                     "No reset is offered; running a normal pull. Fix the configuration and run init again to reset"
@@ -731,7 +761,8 @@ init_main() {
             fi
         fi
         if [[ "$reset" == true ]]; then
-            DOTFILES_RESET=1 DOTFILES_RESET_SNAPSHOTTED=1 "$DOTFILES_REPO/dotfiles" pull || rc=$?
+            # The repos were updated above, before the summary and the snapshot
+            DOTFILES_RESET=1 DOTFILES_RESET_SNAPSHOTTED=1 "$DOTFILES_REPO/dotfiles" pull --no-fetch || rc=$?
         else
             env -u DOTFILES_RESET "$DOTFILES_REPO/dotfiles" pull || rc=$?
         fi

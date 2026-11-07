@@ -434,7 +434,7 @@ fresh_host() {
     rm -rf "$HOME"/.[!.]* "$HOME"/* "$STATE_DIR" "$XDG_STATE_HOME" "$CFG" "$CFG.bak"
     mkdir -p "$STATE_DIR/apps"
     cp -p "$BAK_ORIG" "$DF/apps/claude/files/tmux-notify.sh"
-    run_init --yes --hosts-dir "$HD" --hostname "${1:-testhost}"
+    run_init --yes --hosts-dir "${2:-$HD}" --hostname "${1:-testhost}"
     [[ $RC -eq 0 ]] || fail "baseline init failed ($RC): $OUT"
 }
 # Re-run init interactively, accepting the four settings questions, then answering the
@@ -904,6 +904,85 @@ OUT=$( ( sleep 1; for a in "" "" "" "" yes reset; do printf '%s\n' "$a"; sleep 1
 [[ "$OUT" != *"running git-setup"* ]] || fail "F10: git-setup ran during a reset: $OUT"
 [[ "$(cat "$HOME/.gitconfig.local")" == "[user]" ]] || fail "F10: .gitconfig.local changed: $(cat "$HOME/.gitconfig.local")"
 pass "git-setup is skipped during a reset"
+
+# Case F11
+# A hosts repo with an origin: ff-work pushes to ff.git, and ff-host is the host's checkout
+# of it. The host starts on profile base; the pushed commit moves it to dropprof, which adds
+# lazygit and so its drop-in.
+ff_setup() {
+    rm -rf "$T/ff.git" "$T/ff-work" "$T/ff-host"
+    cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/ff-work"
+    mkdir -p "$T/ff-work/hosts/ffhost"
+    printf 'profile: base\n' > "$T/ff-work/hosts/ffhost/host.yaml"
+    printf 'packages:\n  - claude\n  - scripts\n  - lazygit\n' > "$T/ff-work/profiles/dropprof.yaml"
+    git -C "$T/ff-work" init -q -b main
+    git -C "$T/ff-work" add -A
+    git -C "$T/ff-work" commit -q -m base
+    git clone -q --bare "$T/ff-work" "$T/ff.git"
+    git -C "$T/ff-work" remote add origin "$T/ff.git"
+    git -C "$T/ff-work" fetch -q origin
+    git -C "$T/ff-work" branch -q -u origin/main main
+    git clone -q "$T/ff.git" "$T/ff-host"
+    fresh_host ffhost "$T/ff-host"
+}
+ff_push_profile() {
+    printf 'profile: dropprof\n' > "$T/ff-work/hosts/ffhost/host.yaml"
+    git -C "$T/ff-work" commit -q -am "ffhost gets lazygit"
+    git -C "$T/ff-work" push -q origin main
+}
+
+info "Case F11: the repos are brought up to date before a reset is listed and snapshotted"
+ff_setup
+mkdir -p "$HOME/.bashrc.d"
+echo "alias lg='my-own-lazygit'" > "$HOME/.bashrc.d/50-lazygit.sh"
+ff_push_profile
+rerun_as ffhost yes reset
+[[ $RC -eq 0 ]] || fail "F11: reset failed ($RC): $OUT"
+LISTED="${OUT#*This would be lost:}"
+LISTED="${LISTED%%00-local.sh and .gitconfig.local are not touched*}"
+[[ "$LISTED" == *"~/.bashrc.d/50-lazygit.sh"* ]] || fail "F11: the file the update newly manages is not listed: $LISTED"
+grep -rqF "my-own-lazygit" "$HOME/.bak/lazygit" || fail "F11: no snapshot of the file the update newly manages: $(find "$HOME/.bak" -type f)"
+cmp -s "$DF/apps/lazygit/files/50-lazygit.sh" "$HOME/.bashrc.d/50-lazygit.sh" || fail "F11: the file is not the repo's"
+# Saying no still pulls normally
+ff_setup
+echo "alias lg='my-own-lazygit'" > "$HOME/.bashrc.d/50-lazygit.sh"
+ff_push_profile
+rerun_as ffhost ""
+[[ $RC -eq 0 && "$OUT" == *"Not resetting"* ]] || fail "F11: no: rc=$RC $OUT"
+pass "an update that newly manages an existing file is listed and snapshotted"
+
+# Case F12
+info "Case F12: a blocked update stops before the question, with nothing changed"
+ff_setup
+echo "my own line" >> "$CL/CLAUDE.md"
+git -C "$T/ff-host" commit -q --allow-empty -m "local commit"
+ff_push_profile
+SUM_BEFORE=$(tree_sum)
+rerun_as ffhost yes reset
+[[ $RC -eq 1 ]] || fail "F12: expected exit 1, got $RC: $OUT"
+[[ "$OUT" == *"pull blocked"* && "$OUT" == *"git pull --rebase"* ]] || fail "F12: no explanation: $OUT"
+[[ "$OUT" != *"Reset every managed file"* ]] || fail "F12: the question was asked: $OUT"
+[[ "$(tree_sum)" == "$SUM_BEFORE" ]] || fail "F12: something changed"
+pass "a blocked update stops with the rebase instructions"
+
+# Case F13
+info "Case F13: a network failure is a warning, and the reset is still offered"
+ff_setup
+echo "my own line" >> "$CL/CLAUDE.md"
+git -C "$T/ff-host" remote set-url origin "file://$T/nowhere.git"
+rerun_as ffhost yes reset
+[[ $RC -eq 0 ]] || fail "F13: reset failed ($RC): $OUT"
+[[ "$OUT" == *"pull failed"* ]] || fail "F13: the failed update was not warned about: $OUT"
+[[ "$OUT" == *"Type 'reset' to go ahead"* ]] || fail "F13: no reset was offered: $OUT"
+! grep -q "my own line" "$CL/CLAUDE.md" || fail "F13: the reset did not happen"
+# A pinned checkout doesn't move
+ff_setup
+git -C "$T/ff-host" checkout -q --detach
+PIN=$(git -C "$T/ff-host" rev-parse HEAD)
+ff_push_profile
+rerun_as ffhost yes reset
+[[ $RC -eq 0 && "$(git -C "$T/ff-host" rev-parse HEAD)" == "$PIN" ]] || fail "F13: a pinned checkout moved: rc=$RC"
+pass "network failure warns; a pinned checkout stays"
 
 echo
 echo -e "${GREEN}All init tests passed${NC}"
