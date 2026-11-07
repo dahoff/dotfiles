@@ -10,6 +10,7 @@ source "$APP_DIR/../../lib/installer.sh"
 # Bash-specific flags
 SUPPLEMENT_FILES=()
 BASHRC_REPLACED=""
+BASHRC_COPY=""
 
 app_parse_arg() {
     case $1 in
@@ -96,13 +97,20 @@ install_supplements() {
 # and an empty one aren't worth a warning.
 app_pre_deploy() {
     BASHRC_REPLACED=""
+    BASHRC_COPY=""
     [[ "${1:-}" == install ]] || return 0
-    local dest skel="${DOTFILES_SKEL_BASHRC:-/etc/skel/.bashrc}"
+    local dest name skel="${DOTFILES_SKEL_BASHRC:-/etc/skel/.bashrc}"
     for dest in "${CONFIG_DESTS[@]}"; do
         [[ "$(basename "$dest")" == ".bashrc" && -f "$dest" ]] || continue
         [[ -n "$(tr -d '[:space:]' < "$dest")" ]] || continue
         ! { [[ -f "$skel" ]] && cmp -s "$dest" "$skel"; } || continue
         BASHRC_REPLACED="$dest"
+        name=$(basename "$dest")
+        if cmp -s "$dest" "$BACKUP_DIR/original/$name"; then
+            BASHRC_COPY="$BACKUP_DIR/original/$name"
+        elif [[ -n "${SNAPSHOT_TS:-}" ]] && cmp -s "$dest" "$BACKUP_DIR/$SNAPSHOT_TS/$name"; then
+            BASHRC_COPY="$BACKUP_DIR/$SNAPSHOT_TS/$name"
+        fi
     done
 }
 
@@ -110,7 +118,9 @@ app_pre_deploy() {
 app_post_deploy() {
     install_supplements || return 1
     if [[ -n "$BASHRC_REPLACED" ]] && ! is_dry_run; then
-        installer_report_warning "$BASHRC_REPLACED was replaced; the old content is no longer loaded. The original is at $BACKUP_DIR/original/$(basename "$BASHRC_REPLACED")"
+        local msg="$BASHRC_REPLACED was replaced; the old content is no longer loaded."
+        [[ -z "$BASHRC_COPY" ]] || msg="$msg The old file is at $BASHRC_COPY"
+        installer_report_warning "$msg"
     fi
 }
 

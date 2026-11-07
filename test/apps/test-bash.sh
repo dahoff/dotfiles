@@ -341,10 +341,36 @@ OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configur
 [[ ! -s "$WARNINGS" ]] || fail "27: warned in a dry run"
 pass "Dry run quiet"
 
+# Test 28: the warning names a copy that holds what was replaced
+info "Test 28: Reinstall names the snapshot, not the stale original"
+reset_bash
+echo '# first custom' > "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$SKEL" ./configure.sh install --no-backup &>/dev/null || fail "28: install failed"
+./configure.sh uninstall --no-backup &>/dev/null || fail "28: uninstall failed"
+echo '# second custom EDIT' > "$HOME/.bashrc"
+rm -f "$WARNINGS"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "28: reinstall failed"
+grep -qF 'no longer loaded' "$WARNINGS" || fail "28: no warning: $(cat "$WARNINGS" 2>/dev/null)"
+NAMED=$(grep -o "$HOME/.bak/bash/[^ ]*/.bashrc" "$WARNINGS" | head -1)
+[[ -n "$NAMED" && -f "$NAMED" ]] || fail "28: named path missing: $(cat "$WARNINGS")"
+grep -qF 'second custom EDIT' "$NAMED" || fail "28: $NAMED lacks the edit"
+[[ "$NAMED" != "$HOME/.bak/bash/original/.bashrc" ]] || fail "28: named the stale original"
+pass "Warning points at the replaced content"
+
+# Test 29: a first install names the original, and it holds the replaced content
+info "Test 29: First install names the original"
+reset_bash
+echo '# replaced content' > "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "29: install failed"
+grep -qF "$HOME/.bak/bash/original/.bashrc" "$WARNINGS" || fail "29: original not named: $(cat "$WARNINGS")"
+grep -qF 'replaced content' "$HOME/.bak/bash/original/.bashrc" || fail "29: original lacks the content"
+grep -qF 'no longer loaded' "$WARNINGS" || fail "29: wording"
+pass "Original named"
+
 rm -rf "$SUPP_DIR"
 cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 27 bash-specific tests passed!${NC}"
+echo -e "${GREEN}All 29 bash-specific tests passed!${NC}"
 echo "======================================"
