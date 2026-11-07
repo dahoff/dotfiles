@@ -899,8 +899,6 @@ pass "profile, hostname and config changes are noticed"
 
 # Case 35b
 info "Case 35b: a held conflict turns off the early stop, and resolving it restores it"
-expect_full pull
-expect_skip pull
 fp_run pull --force
 [[ -f "$VIMRC" ]] || fail "forced pull did not deploy: $OUT"
 echo '" conflict edit' >> "$VIMRC"
