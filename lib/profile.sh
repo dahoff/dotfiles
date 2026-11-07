@@ -326,7 +326,7 @@ load_manifest() {
 # Resolve profile name to file path (hosts dir first unless skip_hosts)
 # Usage: resolve_profile_path name [skip_hosts]
 resolve_profile_path() {
-    hosts_resolve_profile_path "$PROFILES_DIR" "$HOSTS_DIR" "$1" "${2:-false}"
+    hosts_resolve_profile_path "$PROFILES_DIR" "$HOSTS_TREE" "$1" "${2:-false}"
 }
 
 # Apply exclude/include/extra from a profile or host.yaml to PKG_* arrays
@@ -519,7 +519,7 @@ load_profile() {
     fi
 
     local from_hosts=false
-    if [[ -n "$HOSTS_DIR" && "$profile_path" == "$HOSTS_DIR/profiles/"* ]]; then
+    if [[ -n "$HOSTS_TREE" && "$profile_path" == "$HOSTS_TREE/profiles/"* ]]; then
         from_hosts=true
     fi
 
@@ -562,24 +562,42 @@ load_profile() {
     return 0
 }
 
-# Resolve host and profile, load packages into PKG_* arrays
+# Point everything that is read to decide what deploys at an export of HEAD of the
+# dotfiles repo (PROFILES_DIR, APPS_DIR) and the hosts repo (HOSTS_TREE), so only
+# committed content deploys. HOSTS_DIR and DOTFILES_REPO stay the real paths, which
+# add writes to. A repo with no git is read as it stands. Returns 1 for a repo with
+# no commits. Safe to call again: the exports are made once.
+use_committed_trees() {
+    local dotfiles_tree
+    dotfiles_tree=$(repo_committed_tree "$DOTFILES_REPO") || return 1
+    PROFILES_DIR="$dotfiles_tree/profiles"
+    APPS_DIR="$dotfiles_tree/apps"
+    HOSTS_TREE=""
+    if [[ -n "$HOSTS_DIR" ]]; then
+        HOSTS_TREE=$(repo_committed_tree "$HOSTS_DIR") || return 1
+    fi
+}
+
+# Resolve host and profile, load packages into PKG_* arrays. Reads the committed
+# content only (see use_committed_trees).
 # Usage: load_packages_for_profile profile_arg hostname
 #   profile_arg: explicit profile ("" = not given)
-# Sets RESOLVED_PROFILE, HOSTS_PROFILE_CHAIN, HOST_YAML
+# Sets RESOLVED_PROFILE, HOSTS_PROFILE_CHAIN, HOST_YAML (the path in the export)
 load_packages_for_profile() {
     local profile_arg="$1" hostname="$2"
 
     reset_pkg_arrays
     HOSTS_PROFILE_CHAIN=()
     HOST_YAML=""
+    use_committed_trees || return 1
 
     if [[ ! -d "$PROFILES_DIR" ]]; then
         log_error "No profiles directory found: $PROFILES_DIR"
         return 1
     fi
 
-    if [[ -n "$HOSTS_DIR" ]]; then
-        local host_dir="$HOSTS_DIR/hosts/$hostname"
+    if [[ -n "$HOSTS_TREE" ]]; then
+        local host_dir="$HOSTS_TREE/hosts/$hostname"
         if [[ -f "$host_dir/host.yaml" ]]; then
             HOST_YAML="$host_dir/host.yaml"
         elif [[ -d "$host_dir" ]]; then
@@ -613,7 +631,8 @@ load_packages_for_profile() {
 }
 
 # Collect layer roots and the strategies file, then validate every app's
-# overlays. Runs before any change; returns 1 to abort.
+# overlays. Runs before any change; returns 1 to abort. Layers are read from the
+# committed export (load_packages_for_profile sets it up).
 # Usage: prepare_overlays target
 prepare_overlays() {
     local target="$1"
@@ -623,29 +642,14 @@ prepare_overlays() {
     mkdir -p "$STAGE_ROOT" || return 1
     : > "$STRATEGIES_FILE"
 
-    # Only committed content deploys: read the dotfiles repo (APPS_DIR) and the hosts
-    # repo (layers, strategies) from an export of HEAD. HOSTS_DIR, DOTFILES_REPO and
-    # HOST_YAML stay the real paths, which add writes to.
-    local dotfiles_tree hosts_tree="" host_rel=""
-    dotfiles_tree=$(repo_committed_tree "$DOTFILES_REPO") || return 1
-    APPS_DIR="$dotfiles_tree/apps"
-    if [[ -n "$HOSTS_DIR" ]]; then
-        hosts_tree=$(repo_committed_tree "$HOSTS_DIR") || return 1
-    fi
-    [[ -z "$HOST_YAML" ]] || host_rel="${HOST_YAML#"$HOSTS_DIR"/}"
-
     local p
     for p in "${HOSTS_PROFILE_CHAIN[@]}"; do
-        LAYER_ROOTS+=("$hosts_tree/profiles/$p")
-        # A profile that is not committed yet has nothing to deploy
-        [[ -f "$hosts_tree/profiles/$p.yaml" ]] || continue
-        hosts_parse_files_map "$hosts_tree/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
+        LAYER_ROOTS+=("$HOSTS_TREE/profiles/$p")
+        hosts_parse_files_map "$HOSTS_TREE/profiles/$p.yaml" >> "$STRATEGIES_FILE" || return 1
     done
     if [[ -n "$HOST_YAML" ]]; then
-        LAYER_ROOTS+=("$(dirname "$hosts_tree/$host_rel")")
-        if [[ -f "$hosts_tree/$host_rel" ]]; then
-            hosts_parse_files_map "$hosts_tree/$host_rel" >> "$STRATEGIES_FILE" || return 1
-        fi
+        LAYER_ROOTS+=("$(dirname "$HOST_YAML")")
+        hosts_parse_files_map "$HOST_YAML" >> "$STRATEGIES_FILE" || return 1
     fi
 
     local -a dirs=()
@@ -661,7 +665,7 @@ prepare_overlays() {
             [[ -d "$app_path" ]] || continue
             app=$(basename "$app_path")
             if ! list_contains "$app" "${dirs[@]}"; then
-                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$hosts_tree"/}: not in the package list"
+                log_warn "[$target] Ignoring overlays for '$app' in ${root#"$HOSTS_TREE"/}: not in the package list"
             fi
         done
     done

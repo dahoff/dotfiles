@@ -749,6 +749,74 @@ info "Case 30e: repo_committed_tree: export of HEAD, modes kept, copy inside ano
 )
 pass "repo_committed_tree and repo_warn_dirty"
 
+# Case 30f
+info "Case 30f: uncommitted profiles, host.yaml, os-packages.yaml and app configs change nothing, and are named"
+# Each broken edit would fail the pull (or move the file) if it were read
+probe_deployed() {
+    rm -f "$VIMRC"
+    fp_run pull --force "$@"
+    [[ $RC -eq 0 ]] || fail "uncommitted edit changed the pull ($*): $OUT"
+    [[ -f "$VIMRC" ]] || fail "vim not deployed ($*): $OUT"
+}
+# A committed host directory, then uncommitted edits to it
+mkdir -p "$HOSTS_FP/hosts/nohost"
+printf 'profile: fptest\n' > "$HOSTS_FP/hosts/nohost/host.yaml"
+hosts_commit "host nohost"
+printf 'profile: nosuchprofile\n' > "$HOSTS_FP/hosts/nohost/host.yaml"
+probe_deployed
+[[ "$OUT" == *"hosts/nohost/host.yaml"* && "$OUT" == *"not deployed"* ]] || fail "host.yaml edit not named: $OUT"
+printf 'profile: fptest\nexclude:\n  - vim\n' > "$HOSTS_FP/hosts/nohost/host.yaml"
+probe_deployed
+git -C "$HOSTS_FP" checkout -q -- hosts/nohost/host.yaml
+# A new host directory that is not committed
+mkdir -p "$HOSTS_FP/hosts/newhost"
+printf 'profile: nosuchprofile\n' > "$HOSTS_FP/hosts/newhost/host.yaml"
+probe_deployed --hostname newhost
+[[ "$OUT" == *"hosts/newhost/host.yaml"* ]] || fail "new host dir not named: $OUT"
+fp_run status --hostname newhost
+[[ "$OUT" == *"no host directory"* ]] || fail "status read the uncommitted host dir: $OUT"
+rm -rf "$HOSTS_FP/hosts/newhost"
+# A hosts profile
+cp "$HOSTS_FP/profiles/fptest.yaml" "$T/fptest.yaml.orig"
+printf 'packages:\n  - name: nosuchtool\n' > "$HOSTS_FP/profiles/fptest.yaml"
+probe_deployed
+[[ "$OUT" == *"profiles/fptest.yaml"* ]] || fail "profile edit not named: $OUT"
+cp "$T/fptest.yaml.orig" "$HOSTS_FP/profiles/fptest.yaml"
+# A public profile
+author_commit profiles/fpvim.yaml $'packages:\n  - name: vim\n    config:\n      dir: vim'
+fp_run pull --profile fpvim
+[[ $RC -eq 0 && -f "$WORK/dotfiles/profiles/fpvim.yaml" ]] || fail "public profile not pulled: $OUT"
+printf 'packages:\n  - name: nosuchtool\n' > "$WORK/dotfiles/profiles/fpvim.yaml"
+probe_deployed --profile fpvim
+[[ "$OUT" == *"profiles/fpvim.yaml"* ]] || fail "public profile edit not named: $OUT"
+git -C "$WORK/dotfiles" checkout -q -- profiles/fpvim.yaml
+# os-packages.yaml: defining vim twice would be an error
+printf 'packages:\n  - vim\n' >> "$WORK/dotfiles/apps/os-packages.yaml"
+probe_deployed
+[[ "$OUT" == *"apps/os-packages.yaml"* ]] || fail "os-packages edit not named: $OUT"
+git -C "$WORK/dotfiles" checkout -q -- apps/os-packages.yaml
+# An app's config.yaml
+sed -i 's#dest: ~/.vimrc#dest: ~/.vimrc-moved#' "$WORK/dotfiles/apps/vim/config.yaml"
+probe_deployed
+[[ ! -e "$HOME/.vimrc-moved" ]] || fail "uncommitted config.yaml moved the file"
+[[ "$OUT" == *"apps/vim/config.yaml"* ]] || fail "config.yaml edit not named: $OUT"
+git -C "$WORK/dotfiles" checkout -q -- apps/vim/config.yaml
+# The login drop-in comes from the committed lib/login.sh
+echo '# uncommitted drop-in change' >> "$WORK/dotfiles/lib/login.sh"
+DROPIN=$(find "$HOME" -name 90-dotfiles.sh | head -1)
+[[ -n "$DROPIN" ]] || fail "no drop-in installed"
+rm -f "$DROPIN"
+fp_run pull --force
+[[ -f "$DROPIN" ]] || fail "drop-in not reinstalled"
+git -C "$WORK/dotfiles" show HEAD:lib/login.sh | cmp -s - "$DROPIN" || fail "uncommitted lib/login.sh reached the drop-in"
+git -C "$WORK/dotfiles" checkout -q -- lib/login.sh
+# Back to the plain hosts repo
+git -C "$HOSTS_FP" rm -q -r hosts
+hosts_commit "no host dir"
+fp_run pull --force
+[[ $RC -eq 0 ]] || fail "pull after the cleanup failed: $OUT"
+pass "only committed profiles, host.yaml, os-packages, app configs and login.sh take effect"
+
 # Case 31
 info "Case 31: a failed sync is retried with the same commit"
 CONFIGURE_GOOD="$T/configure-good.sh"

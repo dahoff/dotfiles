@@ -457,15 +457,18 @@ resolved() {
         cd "$ROOT_DIR"
         bash -c '
             set -euo pipefail
-            for f in logging yaml utils hosts overlay profile; do source lib/$f.sh; done
-            PROFILES_DIR="$PWD/profiles"; APPS_DIR="$PWD/apps"; HOSTS_DIR=""
+            for f in logging yaml utils hosts overlay profile sync; do source lib/$f.sh; done
+            # Profiles and apps are read from the committed export of the repo
+            DOTFILES_REPO="$PWD"; WORK_DIR="$2"; HOSTS_DIR=""; HOSTS_TREE=""
+            PROFILES_DIR="$PWD/profiles"; APPS_DIR="$PWD/apps"
             declare -a PKG_NAMES PKG_APT PKG_DNF PKG_BREW PKG_CUSTOM_CHECK PKG_CUSTOM_SCRIPT
             declare -a PKG_CUSTOM_DROPIN PKG_CONFIG_DIR PKG_CONFIG_FLAGS HOSTS_PROFILE_CHAIN
+            mkdir -p "$WORK_DIR"
             load_packages_for_profile "$1" nohost
             for i in "${!PKG_NAMES[@]}"; do
                 echo "${PKG_NAMES[$i]}|${PKG_APT[$i]}|${PKG_DNF[$i]}|${PKG_BREW[$i]}|${PKG_CUSTOM_CHECK[$i]}|${PKG_CUSTOM_SCRIPT[$i]}|${PKG_CUSTOM_DROPIN[$i]}|${PKG_CONFIG_DIR[$i]}|${PKG_CONFIG_FLAGS[$i]}"
             done
-        ' _ "$1"
+        ' _ "$1" "$T/work-$1"
     )
 }
 WANT_COMPLETE='git|git|git|||||git|

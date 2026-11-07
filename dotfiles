@@ -51,6 +51,8 @@ COMMAND=""
 INSTALLER_CMD=""
 PROFILE_ARG=""
 HOSTS_DIR=""
+# Export of the hosts repo's HEAD that profiles and layers are read from (see use_committed_trees)
+HOSTS_TREE=""
 HOSTNAME_ARG=""
 DOTFILES_REPO=""
 UPDATE_CHECK="on"
@@ -892,10 +894,10 @@ cmd_status() {
     # Host and profile
     local host host_note="(no host directory)" profile_note=""
     host="${HOSTNAME_ARG:-$(hosts_local_name)}"
-    [[ -n "$HOSTS_DIR" && -f "$HOSTS_DIR/hosts/$host/host.yaml" ]] && host_note="(hosts/$host/host.yaml)"
     if [[ "$ok" == true ]]; then
         if load_packages_for_profile "$PROFILE_ARG" "$host"; then
             profile_note="   profile: $RESOLVED_PROFILE"
+            [[ -z "$HOST_YAML" ]] || host_note="(hosts/$host/host.yaml)"
         else
             ok=false
         fi

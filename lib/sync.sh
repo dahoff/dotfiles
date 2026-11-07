@@ -173,8 +173,14 @@ sync_self_install() {
         ln -sfn "$repo/dotfiles" "$link"
         log_debug "Linked $link -> $repo/dotfiles"
     fi
-    local src="$src_repo/lib/login.sh"
-    [[ -f "$src" ]] || src="$repo/lib/login.sh"
+    # From the committed content: an uncommitted edit does not reach the drop-in
+    local tree src
+    tree=$(repo_committed_tree "$src_repo") || return 0
+    src="$tree/lib/login.sh"
+    if [[ ! -f "$src" ]]; then
+        tree=$(repo_committed_tree "$repo") || return 0
+        src="$tree/lib/login.sh"
+    fi
 
     mkdir -p "$scripts_dir"
     if ! cmp -s "$src" "$scripts_dir/90-dotfiles.sh"; then

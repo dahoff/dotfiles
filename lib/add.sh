@@ -48,7 +48,7 @@ add_build_layers() {
     ADD_ROOTS=()
     if [[ -n "$HOST_YAML" ]]; then
         ADD_LABELS+=("host: $OVERLAY_HOST (hosts repo)")
-        ADD_ROOTS+=("$(dirname "$HOST_YAML")")
+        ADD_ROOTS+=("$HOSTS_DIR/hosts/$OVERLAY_HOST")
     fi
     for (( i = ${#HOSTS_PROFILE_CHAIN[@]} - 1; i >= 0; i-- )); do
         p="${HOSTS_PROFILE_CHAIN[$i]}"
