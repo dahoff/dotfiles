@@ -298,6 +298,191 @@ init_write_config() {
     mv "$tmp" "$file"
 }
 
+# Read one line for a question about a reset. Unlike init_ask, no answer is not an
+# error: EOF, or a terminal that can't be read, returns 1 with VAR empty, and the caller
+# takes that as no.
+# Usage: init_read_line VAR PROMPT
+init_read_line() {
+    local var="$1" line_in="" rc=0
+    printf '%s' "$2" >&2
+    if [[ "${DOTFILES_INIT_ASSUME_TTY:-}" == 1 ]]; then
+        IFS= read -r line_in || rc=$?
+    else
+        IFS= read -r line_in </dev/tty 2>/dev/null || rc=$?
+    fi
+    if [[ $rc -ne 0 && -z "$line_in" ]]; then
+        echo >&2
+        printf -v "$var" '%s' ""
+        return 1
+    fi
+    line_in="${line_in//$'\r'/}"
+    line_in="${line_in#"${line_in%%[![:space:]]*}"}"
+    line_in="${line_in%"${line_in##*[![:space:]]}"}"
+    printf -v "$var" '%s' "$line_in"
+}
+
+# What this profile manages, from the config just written, one per line:
+# "app NAME" for an app that deploys files and "dropin APP DEST" for a drop-in. Nothing,
+# and a failure, when the profile can't be loaded.
+init_profile_info() {
+    (
+        resolve_settings >/dev/null 2>&1 || exit 1
+        OVERLAY_HOST="${HOSTNAME_ARG:-$(hosts_local_name)}"
+        load_packages_for_profile "$PROFILE_ARG" "$OVERLAY_HOST" >/dev/null 2>&1 || exit 1
+        profile_app_names
+        add_dropin_units 2>/dev/null | awk -F'\t' '{ print "dropin\t" $1 "\t" $4 }'
+    )
+}
+
+# Every managed file there is a trace of, as APP<TAB>DEST lines: the records, the old
+# records, the files the state names, and this profile's drop-ins.
+# Usage: init_managed_files
+init_managed_files() {
+    local dir app src dest strategy hash f line kind
+    for dir in "$STATE_DIR"/records/*/; do
+        [[ -f "$dir/manifest.tsv" ]] || continue
+        app=$(basename "$dir")
+        while IFS=$'\t' read -r src dest strategy; do
+            printf '%s\t%s\n' "$app" "$dest"
+        done < "$dir/manifest.tsv"
+    done
+    for f in "$STATE_DIR"/deployed/*.tsv; do
+        [[ -f "$f" ]] || continue
+        app=$(basename "$f" .tsv)
+        while IFS=$'\t' read -r hash src dest; do
+            [[ -z "$dest" ]] || printf '%s\t%s\n' "$app" "$dest"
+        done < "$f"
+    done
+    for f in "$STATE_DIR"/apps/*.yaml; do
+        [[ -f "$f" ]] || continue
+        app=$(basename "$f" .yaml)
+        while IFS= read -r line; do
+            [[ -z "$line" ]] || printf '%s\t%s\n' "$app" "$line"
+        done < <(state_get_files "$app" 2>/dev/null || true)
+    done
+    while IFS=$'\t' read -r kind app dest; do
+        [[ "$kind" != dropin ]] || printf '%s\t%s\n' "$app" "$dest"
+    done < <(init_profile_info || true)
+}
+
+# One snapshot of every managed file that exists, before anything changes. Each app's
+# files go to its own backup folder, as the installers' snapshots do. Returns 1 if one
+# can't be taken, with nothing else changed.
+# Usage: init_snapshot_managed
+init_snapshot_managed() {
+    local ts line app dest dir="" last="" taken=false
+    local -a pairs=()
+    ts=$(timestamp)
+    mapfile -t pairs < <(init_managed_files | sort -u)
+    for line in ${pairs[@]+"${pairs[@]}"}; do
+        app="${line%%$'\t'*}"
+        dest="${line#*$'\t'}"
+        [[ -f "$dest" ]] || continue
+        if [[ "$app" != "$last" ]]; then
+            [[ "$taken" != true ]] || state_add_snapshot "$last" "$ts" 2>/dev/null || true
+            dir=""
+            if state_is_installed "$app"; then
+                dir=$(state_get_backup_dir "$app" 2>/dev/null || true)
+            fi
+            [[ -n "$dir" ]] || dir="$HOME/.bak/$app"
+            if ! backup_init "$app" "$dir"; then
+                log_error "Could not set up $dir for the snapshot"
+                return 1
+            fi
+            last="$app"
+            taken=false
+        fi
+        if ! backup_create_snapshot "$dest" "$dir" "$ts" >/dev/null; then
+            log_error "Could not take a snapshot of $dest"
+            return 1
+        fi
+        taken=true
+    done
+    [[ "$taken" != true ]] || state_add_snapshot "$last" "$ts" 2>/dev/null || true
+    return 0
+}
+
+# Print what a reset would lose: the unreviewed, conflicting and dismissed changes status
+# reports, the keys only this host has in merged files, and the files of apps this profile
+# no longer manages, which a reset leaves alone but stops tracking.
+# Usage: init_reset_summary
+init_reset_summary() {
+    local n=0 report dir app src dest strategy repo keys key info items lines=""
+    # Status knows which is which, against the content that would deploy
+    report=$("$DOTFILES_REPO/dotfiles" status 2>/dev/null | awk '
+        /^[^ ]/ { show = ($0 ~ /^(unreviewed changes|conflicts|dismissed|saved, not committed):  \(/) }
+        show { print }') || report=""
+    if [[ -n "$report" ]]; then
+        printf '%s\n' "$report"
+        n=$((n + 1))
+    fi
+
+    # Keys only this host has, in files that were deployed as a merge: the record holds
+    # what the repo had
+    for dir in "$STATE_DIR"/records/*/; do
+        [[ -f "$dir/manifest.tsv" ]] || continue
+        app=$(basename "$dir")
+        while IFS=$'\t' read -r src dest strategy; do
+            [[ "$strategy" == merge && -f "$dest" ]] || continue
+            repo="$STATE_DIR/records/$app/repo/$src"
+            [[ -r "$repo" ]] || continue
+            keys=$(jq -nr --slurpfile l "$dest" --slurpfile b "$repo" '
+                def lo($l; $b; $p):
+                  if ($l | type) == "object" and ($b | type) == "object" then
+                    ($l | keys_unsorted[]) as $k
+                    | if $b | has($k) then lo($l[$k]; $b[$k]; $p + [$k]) else ($p + [$k] | tojson) end
+                  else empty end;
+                lo($l[0]; $b[0]; [])' 2>/dev/null) || keys=""
+            [[ -n "$keys" ]] || continue
+            echo "local-only keys, not in the repo's version (a reset removes them):"
+            while IFS= read -r key; do
+                printf '  %s  key %s\n' "$(add_tilde "$dest")" "$key"
+            done <<< "$keys"
+            n=$((n + 1))
+        done < "$dir/manifest.tsv"
+    done
+
+    # Apps this profile doesn't manage
+    if info=$(init_profile_info 2>/dev/null) && [[ -n "$info" ]]; then
+        info+=$'\n'
+        for dir in "$STATE_DIR"/records/*/; do
+            [[ -f "$dir/manifest.tsv" ]] || continue
+            app=$(basename "$dir")
+            [[ $'\n'"$info" != *$'\n'"app"$'\t'"$app"$'\n'* && $'\n'"$info" != *$'\n'"dropin"$'\t'"$app"$'\t'* ]] || continue
+            while IFS=$'\t' read -r src dest strategy; do
+                [[ -e "$dest" ]] || continue
+                items=$(records_items "$app" "$src" "$dest" "" true 2>/dev/null) || items=edited
+                [[ -z "$items" ]] || lines+="  $(add_tilde "$dest")  ($app)"$'\n'
+            done < "$dir/manifest.tsv"
+        done
+        if [[ -n "$lines" ]]; then
+            echo "files of apps this profile doesn't manage, with local edits (left in place, no longer tracked):"
+            printf '%s' "$lines"
+            n=$((n + 1))
+        fi
+    fi
+    [[ $n -gt 0 ]] || echo "no local changes would be lost"
+}
+
+# Ask whether to reset. Returns 0 only when confirmed: the question defaults to no, and
+# anything but 'reset' at the confirmation cancels.
+init_confirm_reset() {
+    local answer=""
+    init_read_line answer "Reset every managed file to the repo layers? [no]: " || return 1
+    case "$answer" in
+        y|Y|yes|YES|Yes) ;;
+        *) return 1 ;;
+    esac
+    {
+        echo "A reset replaces every managed file with what the repo layers deploy, and starts fresh records."
+        echo "This would be lost:"
+        init_reset_summary
+        echo "00-local.sh and .gitconfig.local are not touched. A snapshot of every managed file is taken first."
+    } >&2
+    init_read_line answer "Type 'reset' to go ahead: " || return 1
+    [[ "$answer" == reset ]]
+}
+
 # dotfiles init [flags]: exits with init's exit code
 init_main() {
     local f_hosts="" f_hostname="" f_profile="" f_update="" f_interval=""
@@ -405,7 +590,34 @@ init_main() {
 
     local rc=0
     if [[ "$INIT_NO_SYNC" != true ]]; then
-        "$DOTFILES_REPO/dotfiles" pull || rc=$?
+        local reset=false
+        if compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null; then
+            # Records from an older version: no reset to offer. Everything managed is
+            # snapshotted, then the old records go and the pull deploys fresh ones.
+            echo "This host has records from an older version. Taking a snapshot of every managed file," \
+                "then starting fresh records: replaced files take the repo's version, merged files keep your own keys."
+            if ! init_snapshot_managed; then
+                log_error "Could not take a snapshot of the managed files, so nothing was changed"
+                exit 1
+            fi
+            rm -rf "${STATE_DIR:?}/deployed"
+            sync_forget_complete
+        elif [[ "$INIT_YES" != true ]] && records_any; then
+            if init_confirm_reset; then
+                if ! init_snapshot_managed; then
+                    log_error "Could not take a snapshot of the managed files, so nothing was reset"
+                    exit 1
+                fi
+                reset=true
+            else
+                echo "Not resetting; running a normal pull" >&2
+            fi
+        fi
+        if [[ "$reset" == true ]]; then
+            DOTFILES_RESET=1 "$DOTFILES_REPO/dotfiles" pull || rc=$?
+        else
+            env -u DOTFILES_RESET "$DOTFILES_REPO/dotfiles" pull || rc=$?
+        fi
     fi
 
     # host.yaml selects the profile only when no explicit profile overrides it

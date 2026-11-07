@@ -246,6 +246,28 @@ CFG4=$(test_ssh 'cat ~/.config/dotfiles/config.yaml')
 test_ssh 'test ! -e ~/.config/dotfiles/config.yaml.bak' || fail "PI4: config.bak written"
 pass "PI4: no hosts payload, remote hosts_dir kept"
 
+# The remote has no git (a pushed copy), and the terminal is the one ssh -t gives it. script
+# supplies a local terminal; the answers follow after a pause, so the remote is reading.
+info "PI5: push --init asks about a reset over ssh -t: no keeps local edits, reset restores the repo's"
+test_ssh 'echo "remote local edit" >> ~/.claude/CLAUDE.md; echo mine > ~/.bashrc.d/00-local.sh'
+init_tty() {
+    RC=0
+    # Input sent before the remote has set the terminal up is dropped, so one line at a time
+    OUT=$( ( sleep 8; for a in "" "" "" "$@"; do printf '%s\n' "$a"; sleep 2; done; sleep 2 ) \
+        | script -qec "${PUSH_BIN:-./dotfiles} init --remote $TARGET" /dev/null 2>&1 ) || RC=$?
+}
+init_tty ""
+[[ $RC -eq 0 ]] || fail "PI5: init --remote exited $RC: $OUT"
+grep -qF "Reset every managed file to the repo layers? [no]:" <<< "$OUT" || fail "PI5: no reset question over ssh -t: $OUT"
+test_ssh 'grep -qx "remote local edit" ~/.claude/CLAUDE.md' || fail "PI5: an empty answer lost the remote edit"
+init_tty yes reset
+[[ $RC -eq 0 ]] || fail "PI5: reset exited $RC: $OUT"
+grep -qF "~/.claude/CLAUDE.md" <<< "$OUT" || fail "PI5: the lost edit was not listed: $OUT"
+test_ssh '! grep -q "remote local edit" ~/.claude/CLAUDE.md' || fail "PI5: the reset left the remote edit"
+test_ssh 'grep -rq "remote local edit" ~/.bak/claude' || fail "PI5: no snapshot of the remote edit"
+test_ssh 'test "$(cat ~/.bashrc.d/00-local.sh)" = mine' || fail "PI5: 00-local.sh changed"
+pass "PI5: the reset question reaches the terminal over ssh -t, and works without git"
+
 echo
 echo "======================================"
 echo -e "${GREEN}All push tests passed${NC}"

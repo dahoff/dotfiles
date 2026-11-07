@@ -402,5 +402,351 @@ run_interactive "$HD" "testhost" "" ""
 [[ "$OUT" != *"Background sync"* ]] || fail "old prompt text left: $OUT"
 pass "update check flag and prompts"
 
+# ---------------------------------------------------------------------------
+# Re-running init: the reset question, the reset, and the move from old records
+# ---------------------------------------------------------------------------
+CL="$HOME/.claude"
+BAK_ORIG="$T/tmux-notify.orig"
+cp -p "$DF/apps/claude/files/tmux-notify.sh" "$BAK_ORIG"
+mkdir -p "$T/fakebin"
+printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/lazygit"
+chmod +x "$T/fakebin/lazygit"
+# A profile and host with a tool that has a drop-in
+cat > "$HD/profiles/dropprof.yaml" <<'EOF'
+packages:
+  - claude
+  - scripts
+  - lazygit
+EOF
+mkdir -p "$HD/hosts/dropin"
+printf 'profile: dropprof\n' > "$HD/hosts/dropin/host.yaml"
+
+# A host that has been through init --yes, from nothing
+# Usage: fresh_host [HOSTNAME]
+fresh_host() {
+    chmod -R u+rwx "$HOME" 2>/dev/null || true
+    rm -rf "$HOME"/.[!.]* "$HOME"/* "$STATE_DIR" "$XDG_STATE_HOME" "$CFG" "$CFG.bak"
+    mkdir -p "$STATE_DIR/apps"
+    cp -p "$BAK_ORIG" "$DF/apps/claude/files/tmux-notify.sh"
+    run_init --yes --hosts-dir "$HD" --hostname "${1:-testhost}"
+    [[ $RC -eq 0 ]] || fail "baseline init failed ($RC): $OUT"
+}
+# Re-run init interactively, accepting the four settings questions, then answering the
+# rest. With no answers the input ends at the reset question.
+# Usage: rerun [ANSWER...]
+rerun() {
+    RC=0
+    OUT=$(printf '%s\n' "" "" "" "" "$@" | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/fakebin:$T/nosudo:$PATH" \
+        "$DF/dotfiles" init 2>&1) || RC=$?
+}
+rerun_eof() {
+    RC=0
+    OUT=$(printf '\n\n\n\n' | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/fakebin:$T/nosudo:$PATH" \
+        "$DF/dotfiles" init 2>&1) || RC=$?
+}
+status_out() { "$DF/dotfiles" status 2>&1 </dev/null; }
+# A fingerprint of everything under HOME and the state dirs
+tree_sum() {
+    (cd / && find "${HOME#/}" "${STATE_DIR#/}" -type f 2>/dev/null | sort | xargs -d '\n' sha256sum) | sha256sum
+}
+# Hold the same statuses and edits on a host: an unreviewed edit, a dismissed edit, a held
+# conflict, a local-only key in a merged file, and the files init must leave alone.
+make_local_state() {
+    echo "# dismissed edit" >> "$CL/statusline-command.sh"
+    printf 'd\n' | DOTFILES_ADD_ASSUME_TTY=1 "$DF/dotfiles" add >/dev/null 2>&1 \
+        || fail "could not dismiss the statusline edit"
+    echo "my own line" >> "$CL/CLAUDE.md"
+    jq '.localOnly = {"mine": true} | .model = "my-model"' "$CL/settings.json" > "$T/s.json"
+    cp "$T/s.json" "$CL/settings.json"
+    # A held conflict: the repo moved on since the last deploy (the record holds an older
+    # version, and the app's state is stale so that the pull looks at it), and so did the file
+    echo "# conflict, local" >> "$CL/tmux-notify.sh"
+    echo "# an older repo version" > "$STATE_DIR/records/claude/repo/tmux-notify.sh"
+    sed -i 's/^  version: .*/  version: stale/' "$STATE_DIR/apps/claude.yaml"
+    "$DF/dotfiles" pull >/dev/null 2>&1 </dev/null || true
+    grep -q 'version: conflict:' "$STATE_DIR/apps/claude.yaml" || fail "the test setup did not hold a conflict"
+    echo "mine" > "$HOME/.bashrc.d/00-local.sh"
+    echo "[user]" > "$HOME/.gitconfig.local"
+    echo "# drop-in edit" >> "$HOME/.bashrc.d/90-dotfiles.sh"
+    echo "data" > "$HOME/.ghost.conf"
+    mkdir -p "$STATE_DIR/records/ghost/repo" "$STATE_DIR/records/ghost/review"
+    printf 'a.conf\t%s\treplace\n' "$HOME/.ghost.conf" > "$STATE_DIR/records/ghost/manifest.tsv"
+    echo "data" > "$STATE_DIR/records/ghost/repo/a.conf"
+    echo "data" > "$STATE_DIR/records/ghost/review/a.conf"
+    echo "data, edited" > "$HOME/.ghost.conf"
+    sed 's/^  name: claude/  name: ghost/; s/^  version: .*/  version: conflict:abc123/' "$STATE_DIR/apps/claude.yaml" > "$STATE_DIR/apps/ghost.yaml"
+    mkdir -p "$STATE_DIR/records/.released/1" "$STATE_DIR/records/.add-saved"
+    echo old > "$STATE_DIR/records/.released/1/repo"
+    echo old > "$STATE_DIR/records/.add-saved/abc"
+}
+live_local_state_held() {
+    grep -qx "my own line" "$CL/CLAUDE.md" \
+        && [[ "$(jq -r .localOnly.mine "$CL/settings.json")" == true ]] \
+        && [[ "$(jq -r .model "$CL/settings.json")" == my-model ]] \
+        && grep -qx "# dismissed edit" "$CL/statusline-command.sh" \
+        && grep -qx "# conflict, local" "$CL/tmux-notify.sh"
+}
+
+# Case R1
+info "Case R1: a re-run saves its answers, then asks about a reset; no keeps everything"
+fresh_host
+make_local_state
+live_local_state_held || fail "R1: the test setup did not hold its edits"
+SUM_BEFORE=$(tree_sum)
+rerun ""
+[[ $RC -eq 0 ]] || fail "R1: init failed ($RC): $OUT"
+[[ "$OUT" == *"Wrote $CFG"* ]] || fail "R1: answers not saved: $OUT"
+[[ "$OUT" == *"Reset every managed file to the repo layers? [no]: "* ]] || fail "R1: no reset question with a default of no: $OUT"
+[[ "${OUT%%Reset every managed*}" == *"Wrote $CFG"* ]] || fail "R1: the question came before the answers were saved: $OUT"
+[[ "$OUT" == *"Not resetting"* ]] || fail "R1: no note that nothing was reset: $OUT"
+live_local_state_held || fail "R1: an empty answer lost local edits: $OUT"
+[[ -f "$HOME/.bashrc.d/00-local.sh" && -f "$HOME/.gitconfig.local" ]] || fail "R1: untouched files lost"
+# Anything but yes means no, and the pull that follows is a normal one
+for a in n no N maybe "reset" " "; do
+    rerun "$a"
+    [[ $RC -eq 0 ]] || fail "R1: answer '$a' failed ($RC): $OUT"
+    [[ "$OUT" != *"Type 'reset'"* ]] || fail "R1: answer '$a' went on to the confirmation: $OUT"
+    live_local_state_held || fail "R1: answer '$a' lost local edits"
+done
+# EOF at the question: no reset, a normal pull
+rerun_eof
+[[ $RC -eq 0 ]] || fail "R1: EOF run failed ($RC): $OUT"
+[[ "$OUT" == *"Not resetting"* ]] || fail "R1: EOF not taken as no: $OUT"
+live_local_state_held || fail "R1: EOF lost local edits"
+# A yes that is not confirmed with 'reset' cancels
+for a in "" no Reset RESET "reset please" y; do
+    rerun yes "$a"
+    [[ $RC -eq 0 ]] || fail "R1: confirmation '$a' failed ($RC): $OUT"
+    [[ "$OUT" == *"Type 'reset' to go ahead: "* ]] || fail "R1: no confirmation asked for '$a': $OUT"
+    [[ "$OUT" == *"Not resetting"* ]] || fail "R1: cancel not reported for '$a': $OUT"
+    live_local_state_held || fail "R1: cancelled confirmation '$a' lost local edits"
+done
+# EOF at the confirmation cancels too
+rerun yes
+[[ $RC -eq 0 && "$OUT" == *"Not resetting"* ]] || fail "R1: EOF at the confirmation not a cancel: rc=$RC $OUT"
+live_local_state_held || fail "R1: EOF at the confirmation lost local edits"
+[[ -d "$STATE_DIR/records/ghost" && -d "$STATE_DIR/records/.add-saved" ]] || fail "R1: records touched without a reset"
+pass "the question defaults to no; no, EOF and a missing 'reset' all run a normal pull"
+
+# Case R2
+info "Case R2: confirming lists what is lost, then resets everything to the repo layers"
+fresh_host
+cp -R "$STATE_DIR/records" "$T/records-before"
+make_local_state
+rerun yes reset
+[[ $RC -eq 0 ]] || fail "R2: reset failed ($RC): $OUT"
+LISTED="${OUT#*This would be lost:}"
+LISTED="${LISTED%%00-local.sh and .gitconfig.local are not touched*}"
+[[ "$LISTED" == *"~/.claude/CLAUDE.md"* ]] || fail "R2: the unreviewed edit is not listed: $LISTED"
+[[ "$LISTED" == *'~/.claude/settings.json  key ["localOnly"]'* ]] || fail "R2: the local-only key is not listed: $LISTED"
+[[ "$LISTED" == *'~/.claude/settings.json  key ["model"]'* ]] || fail "R2: the changed value is not listed: $LISTED"
+[[ "$LISTED" == *"conflicts:"* && "$LISTED" == *"~/.claude/tmux-notify.sh  (the repo changed it too)"* ]] || fail "R2: the conflict is not listed: $LISTED"
+[[ "$LISTED" == *"dismissed:"* && "$LISTED" == *"~/.claude/statusline-command.sh"* ]] || fail "R2: the dismissed edit is not listed: $LISTED"
+[[ "$LISTED" == *"~/.bashrc.d/90-dotfiles.sh"* ]] || fail "R2: the drop-in edit is not listed: $LISTED"
+[[ "$LISTED" == *"~/.ghost.conf"* && "$LISTED" == *"doesn't manage"* ]] || fail "R2: the file of an app out of the profile is not listed: $LISTED"
+[[ "$LISTED" != *"00-local.sh"* ]] || fail "R2: an unmanaged file is listed as lost: $LISTED"
+# Every managed file is the repo layers exactly
+for f in CLAUDE.md settings.json settings.local.json statusline-command.sh tmux-notify.sh; do
+    cmp -s "$T/records-before/claude/repo/$f" "$CL/$f" || fail "R2: $f is not the repo's: $(cat "$CL/$f")"
+done
+cmp -s "$T/records-before/dotfiles/repo/90-dotfiles.sh" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "R2: the drop-in is not the repo's"
+[[ "$(jq -r '.localOnly // "gone"' "$CL/settings.json")" == gone ]] || fail "R2: a local-only key survived"
+# Untouched
+[[ "$(cat "$HOME/.bashrc.d/00-local.sh")" == mine && "$(cat "$HOME/.gitconfig.local")" == "[user]" ]] || fail "R2: 00-local.sh or .gitconfig.local changed"
+# Fresh records: the repo copy, the review copy and the live file agree
+for f in CLAUDE.md settings.json settings.local.json statusline-command.sh tmux-notify.sh; do
+    cmp -s "$STATE_DIR/records/claude/repo/$f" "$CL/$f" || fail "R2: repo copy of $f is not what was deployed"
+    cmp -s "$STATE_DIR/records/claude/review/$f" "$CL/$f" || fail "R2: review copy of $f is not what was deployed"
+done
+# Nothing old survives under records/, and no app out of the profile keeps a record
+[[ "$(ls -A "$STATE_DIR/records" | sort | tr '\n' ' ')" == "claude dotfiles scripts " ]] \
+    || fail "R2: records holds more than the profile's apps: $(ls -A "$STATE_DIR/records")"
+[[ ! -e "$STATE_DIR/records/.released" && ! -e "$STATE_DIR/records/.add-saved" ]] || fail "R2: .released or .add-saved survived"
+! grep -q 'version: conflict:' "$STATE_DIR"/apps/*.yaml || fail "R2: a conflict state survived: $(grep -h 'version:' "$STATE_DIR"/apps/*.yaml)"
+grep -q 'version: abc123' "$STATE_DIR/apps/ghost.yaml" || fail "R2: the out-of-profile app's state is not settled: $(cat "$STATE_DIR/apps/ghost.yaml")"
+# The files of the app out of the profile are left alone, and said so in the summary
+[[ "$(cat "$HOME/.ghost.conf")" == "data, edited" ]] || fail "R2: a file of an app out of the profile changed"
+[[ "$OUT" == *"$HOME/.ghost.conf is not managed by ghost in this profile and has local edits"* ]] || fail "R2: the summary does not name it: $OUT"
+# Status reads clean
+ST=$(status_out)
+for label in "unreviewed changes" conflicts dismissed; do
+    grep -qx "$label: none" <<< "$ST" || fail "R2: status is not clean ($label): $ST"
+done
+# A snapshot holds the old content, drop-in included
+SNAP_CL=$(grep -rl "my own line" "$HOME/.bak/claude" | head -1) || true
+[[ -n "$SNAP_CL" && "$(basename "$SNAP_CL")" == CLAUDE.md && "$(dirname "$SNAP_CL")" != */original ]] || fail "R2: no snapshot of the edited CLAUDE.md"
+grep -rq "localOnly" "$HOME/.bak/claude" || fail "R2: no snapshot of the local-only key"
+grep -rq "# drop-in edit" "$HOME/.bak/dotfiles" || fail "R2: no snapshot of the edited drop-in: $(find "$HOME/.bak/dotfiles")"
+# A second reset has nothing to lose
+rerun yes reset
+[[ $RC -eq 0 && "$OUT" == *"no local changes would be lost"* ]] || fail "R2: a clean host still lists losses: rc=$RC $OUT"
+pass "reset lists the losses and makes every managed file the repo's, with fresh records"
+
+# Case R3
+info "Case R3: --yes never resets; a run with no terminal does not reset either"
+fresh_host
+make_local_state
+run_init --yes
+[[ $RC -eq 0 ]] || fail "R3: --yes failed ($RC): $OUT"
+[[ "$OUT" != *"Reset every"* ]] || fail "R3: --yes asked about a reset: $OUT"
+live_local_state_held || fail "R3: --yes lost local edits"
+printf '%s\n' reset reset | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/nosudo:$PATH" "$DF/dotfiles" init --yes >/dev/null 2>&1 || fail "R3: --yes with answers on stdin failed"
+live_local_state_held || fail "R3: --yes with 'reset' on stdin lost local edits"
+run_init
+[[ $RC -eq 1 && "$OUT" == *"init is interactive"* ]] || fail "R3: no terminal and no --yes: rc=$RC $OUT"
+live_local_state_held || fail "R3: a refused run lost local edits"
+# A terminal that can't be read: no answer, a normal pull
+RC=0
+OUT=$(DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/nosudo:$PATH" "$DF/dotfiles" init < <(printf '\n\n\n\n') 2>&1) || RC=$?
+[[ $RC -eq 0 && "$OUT" == *"Not resetting"* ]] || fail "R3: no answer at the question: rc=$RC $OUT"
+live_local_state_held || fail "R3: no answer lost local edits"
+pass "--yes and a missing terminal never reset"
+
+# Case R4
+info "Case R4: a failed snapshot stops a reset with nothing changed"
+fresh_host
+make_local_state
+rm -rf "$HOME/.bak/claude"
+: > "$HOME/.bak/claude"
+SUM_BEFORE=$(tree_sum)
+rerun yes reset
+[[ $RC -eq 1 ]] || fail "R4: expected exit 1, got $RC: $OUT"
+[[ "$OUT" == *"nothing was reset"* ]] || fail "R4: no explanation: $OUT"
+[[ "$(tree_sum)" == "$SUM_BEFORE" ]] || fail "R4: files or records changed after a failed snapshot"
+live_local_state_held || fail "R4: local edits lost"
+rm -f "$HOME/.bak/claude"
+rerun yes reset
+[[ $RC -eq 0 ]] || fail "R4: the retry failed ($RC): $OUT"
+[[ "$(jq -r '.localOnly // "gone"' "$CL/settings.json")" == gone ]] || fail "R4: the retry did not reset: $OUT"
+pass "snapshot failure: exit 1, nothing changed; the retry resets"
+
+# Case R5
+info "Case R5: an interrupted reset: the failing file is reported and left, the rest reset, and init again finishes"
+fresh_host
+make_local_state
+echo "{ not json" > "$DF/apps/claude/files/settings.json"
+rerun yes reset
+[[ $RC -ne 0 ]] || fail "R5: a reset with a broken layer file exited 0: $OUT"
+[[ "$OUT" == *"settings.json"* && "$OUT" == *"FAIL"* ]] || fail "R5: the failing file is not reported: $OUT"
+# The broken file is left as it was; the other files of the app and the other apps reset
+[[ "$(jq -r .localOnly.mine "$CL/settings.json")" == true ]] || fail "R5: the file that failed was changed"
+cmp -s "$T/records-before/claude/repo/CLAUDE.md" "$CL/CLAUDE.md" || fail "R5: CLAUDE.md was not reset"
+cmp -s "$T/records-before/claude/repo/tmux-notify.sh" "$CL/tmux-notify.sh" || fail "R5: tmux-notify.sh was not reset"
+cmp -s "$T/records-before/dotfiles/repo/90-dotfiles.sh" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "R5: the drop-in was not reset"
+# Its record is the one it had, so the edit is still seen as one
+grep -q settings.json "$STATE_DIR/records/claude/manifest.tsv" || fail "R5: the record of the failed file is gone"
+[[ ! -e "$STATE_DIR/records/.released" && ! -e "$STATE_DIR/records/.add-saved" && ! -d "$STATE_DIR/records/ghost" ]] || fail "R5: the old leftovers were not cleared"
+# Fix the file and run init again: the reset finishes
+cp "$T/records-before/claude/repo/settings.json" "$DF/apps/claude/files/settings.json"
+rerun yes reset
+[[ $RC -eq 0 ]] || fail "R5: the second reset failed ($RC): $OUT"
+[[ "$(jq -r '.localOnly // "gone"' "$CL/settings.json")" == gone ]] || fail "R5: the second reset left the local-only key"
+ST=$(status_out)
+for label in "unreviewed changes" conflicts dismissed; do
+    grep -qx "$label: none" <<< "$ST" || fail "R5: status is not clean after finishing ($label): $ST"
+done
+pass "a failing file is reported and left; init again finishes the reset"
+
+# Case R6
+info "Case R6: a tool's drop-in is reset, and a snapshot holds its old content"
+fresh_host dropin
+[[ -f "$HOME/.bashrc.d/50-lazygit.sh" ]] || fail "R6: the lazygit drop-in was not deployed: $OUT"
+echo "alias lg='my-lazygit'" > "$HOME/.bashrc.d/50-lazygit.sh"
+cp "$DF/apps/lazygit/files/50-lazygit.sh" "$T/50-lazygit.repo"
+echo "# local line" >> "$HOME/.bashrc.d/90-dotfiles.sh"
+rerun yes reset
+[[ $RC -eq 0 ]] || fail "R6: reset failed ($RC): $OUT"
+[[ "$OUT" == *"~/.bashrc.d/50-lazygit.sh"* ]] || fail "R6: the edited tool drop-in is not listed: $OUT"
+cmp -s "$T/50-lazygit.repo" "$HOME/.bashrc.d/50-lazygit.sh" || fail "R6: the tool drop-in is not the repo's"
+grep -rqF "my-lazygit" "$HOME/.bak/lazygit" || fail "R6: no snapshot of the old tool drop-in: $(find "$HOME/.bak" -type f)"
+grep -rqF "# local line" "$HOME/.bak/dotfiles" || fail "R6: no snapshot of the old login drop-in"
+cmp -s "$STATE_DIR/records/lazygit/repo/50-lazygit.sh" "$HOME/.bashrc.d/50-lazygit.sh" || fail "R6: the drop-in's record is not fresh"
+ST=$(status_out)
+grep -qx "unreviewed changes: none" <<< "$ST" || fail "R6: status is not clean: $ST"
+pass "tool and login drop-ins reset, with snapshots"
+
+# Case R7
+info "Case R7: only the committed layers deploy in a reset, with git"
+fresh_host
+GITDF="$T/dotfiles-git"
+rm -rf "$GITDF"
+cp -R "$DF" "$GITDF"
+git -C "$GITDF" init -q -b main
+git -C "$GITDF" add -A
+git -C "$GITDF" commit -q -m committed
+echo "# uncommitted layer change" >> "$GITDF/apps/claude/files/CLAUDE.md"
+echo "my own line" >> "$CL/CLAUDE.md"
+RC=0
+OUT=$(printf '%s\n' "" "" "" "" yes reset | DOTFILES_INIT_ASSUME_TTY=1 PATH="$T/nosudo:$PATH" "$GITDF/dotfiles" init 2>&1) || RC=$?
+[[ $RC -eq 0 ]] || fail "R7: reset failed ($RC): $OUT"
+cmp -s "$T/records-before/claude/repo/CLAUDE.md" "$CL/CLAUDE.md" || fail "R7: CLAUDE.md is not the committed layer: $(cat "$CL/CLAUDE.md")"
+! grep -q "uncommitted layer change" "$CL/CLAUDE.md" || fail "R7: an uncommitted layer change deployed"
+pass "a reset deploys the committed layers"
+
+# Case O1
+info "Case O1: a host with only old records: no question; snapshot, fresh records, local-only keys kept"
+fresh_host
+echo "my own line" >> "$CL/CLAUDE.md"
+jq '.localOnly = {"mine": true}' "$CL/settings.json" > "$T/s.json"
+cp "$T/s.json" "$CL/settings.json"
+cp "$CL/settings.json" "$T/settings.before"
+# The records of an older version: only deployed/*.tsv
+rm -rf "$STATE_DIR/records"
+mkdir -p "$STATE_DIR/deployed"
+printf 'abc\tCLAUDE.md\t%s\n' "$CL/CLAUDE.md" > "$STATE_DIR/deployed/claude.tsv"
+printf 'abc\tsettings.json\t%s\n' "$CL/settings.json" >> "$STATE_DIR/deployed/claude.tsv"
+echo "# login edit" >> "$HOME/.bashrc.d/90-dotfiles.sh"
+echo "mine" > "$HOME/.bashrc.d/00-local.sh"
+RC=0
+OUT=$("$DF/dotfiles" pull 2>&1 </dev/null) || RC=$?
+[[ $RC -eq 1 && "$OUT" == *"Run 'dotfiles init' to start fresh records"* ]] || fail "O1: pull does not point at init: rc=$RC $OUT"
+rerun
+[[ $RC -eq 0 ]] || fail "O1: init failed ($RC): $OUT"
+[[ "$OUT" != *"Reset every"* ]] || fail "O1: asked about a reset: $OUT"
+[[ ! -e "$STATE_DIR/deployed" ]] || fail "O1: old records survived"
+grep -rqF "my own line" "$HOME/.bak/claude" || fail "O1: no snapshot of the edited CLAUDE.md"
+grep -rqF "localOnly" "$HOME/.bak/claude" || fail "O1: no snapshot of the merged file"
+grep -rqF "# login edit" "$HOME/.bak/dotfiles" || fail "O1: no snapshot of the drop-in"
+cmp -s "$T/records-before/claude/repo/CLAUDE.md" "$CL/CLAUDE.md" || fail "O1: a replaced file was not deployed fresh"
+[[ "$(jq -r .localOnly.mine "$CL/settings.json")" == true ]] || fail "O1: a local-only key of a merged file was lost"
+[[ "$(jq -r .profileKey "$CL/settings.json")" == true ]] || fail "O1: the repo's keys are missing from the merged file"
+[[ "$(cat "$HOME/.bashrc.d/00-local.sh")" == mine ]] || fail "O1: 00-local.sh changed"
+cmp -s "$T/records-before/dotfiles/repo/90-dotfiles.sh" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "O1: the drop-in is not fresh"
+for f in CLAUDE.md settings.json; do
+    [[ -s "$STATE_DIR/records/claude/repo/$f" && -s "$STATE_DIR/records/claude/review/$f" ]] || fail "O1: no fresh record of $f"
+done
+ST=$(status_out)
+grep -qx "unreviewed changes: none" <<< "$ST" || fail "O1: status after the move: $ST"
+RC=0
+"$DF/dotfiles" pull >/dev/null 2>&1 </dev/null || RC=$?
+[[ $RC -eq 0 ]] || fail "O1: pull after the move failed"
+# The next re-run is a normal one, with the question
+rerun
+[[ "$OUT" == *"Reset every managed file"* ]] || fail "O1: the next init does not ask about a reset: $OUT"
+pass "old records: snapshot, removed, deployed fresh, local-only keys kept"
+
+# Case O2
+info "Case O2: a failed snapshot in the move changes nothing; once fixed, init moves and the next one asks"
+fresh_host
+echo "my own line" >> "$CL/CLAUDE.md"
+rm -rf "$STATE_DIR/records"
+mkdir -p "$STATE_DIR/deployed"
+printf 'abc\tCLAUDE.md\t%s\n' "$CL/CLAUDE.md" > "$STATE_DIR/deployed/claude.tsv"
+rm -rf "$HOME/.bak/claude"
+: > "$HOME/.bak/claude"
+SUM_BEFORE=$(tree_sum)
+rerun
+[[ $RC -eq 1 ]] || fail "O2: expected exit 1, got $RC: $OUT"
+[[ "$OUT" == *"nothing was changed"* ]] || fail "O2: no explanation: $OUT"
+[[ "$(tree_sum)" == "$SUM_BEFORE" ]] || fail "O2: something changed after a failed snapshot"
+[[ -f "$STATE_DIR/deployed/claude.tsv" ]] || fail "O2: the old records went"
+rm -f "$HOME/.bak/claude"
+rerun
+[[ $RC -eq 0 && ! -e "$STATE_DIR/deployed" ]] || fail "O2: the retry did not move: rc=$RC $OUT"
+grep -rqF "my own line" "$HOME/.bak/claude" || fail "O2: no snapshot after the retry"
+rerun
+[[ "$OUT" == *"Reset every managed file"* ]] || fail "O2: the next init does not ask about a reset: $OUT"
+pass "failed snapshot in the move: nothing changed, then a normal re-run with the question"
+
 echo
 echo -e "${GREEN}All init tests passed${NC}"

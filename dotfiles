@@ -88,6 +88,8 @@ SYNC_RECORD=false
 declare -a PENDING=()
 # Files with a conflict this pull held back: it doesn't count as complete
 declare -a HELD_CONFLICTS=()
+# Set once every app's configs have been deployed
+CONFIGS_DEPLOYED=false
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -338,6 +340,53 @@ unmanaged_dropins_release() {
     done
 }
 
+# The apps this profile manages, as "app NAME" lines: the apps that deploy files and the
+# tools with a drop-in, under the names their records use, and dotfiles' own login drop-in.
+# Needs the package list (load_packages_for_profile).
+profile_app_names() {
+    local idx dir
+    for idx in "${!PKG_NAMES[@]}"; do
+        dir="${PKG_CONFIG_DIR[$idx]}"
+        if [[ -n "$dir" && -f "$APPS_DIR/$dir/config.yaml" ]]; then
+            printf 'app\t%s\n' "$(add_app_name "$dir")"
+        fi
+        if [[ -n "${PKG_CUSTOM_DROPIN[$idx]}" ]]; then
+            printf 'app\t%s\n' "${PKG_NAMES[$idx]}"
+        fi
+    done
+    printf 'app\tdotfiles\n'
+}
+
+# The end of a reset (init's DOTFILES_RESET=1 pull), once every app has been deployed over.
+# What the deploys didn't rewrite goes: the copies set aside for files no app tracks and the
+# notes of what add last saved, which a later add-back could take for a base; and the
+# records and conflict state of apps this profile doesn't manage. Their files stay where
+# they are, and one with edits is named in the summary, so nothing goes unmentioned.
+reset_finish() {
+    is_dry_run && return 0
+    local names app dir src dest strategy items version
+    names=$(profile_app_names)$'\n'
+    rm -rf "${STATE_DIR:?}/records/.released" "${STATE_DIR:?}/records/.add-saved"
+    for dir in "$STATE_DIR"/records/*/; do
+        [[ -d "$dir" ]] || continue
+        app=$(basename "$dir")
+        [[ $'\n'"$names" != *$'\n'"app"$'\t'"$app"$'\n'* ]] || continue
+        while IFS=$'\t' read -r src dest strategy; do
+            [[ -e "$dest" ]] || continue
+            items=$(records_items "$app" "$src" "$dest" "" true 2>/dev/null) || items=edited
+            [[ -z "$items" ]] || SYNC_WARNINGS+=("$dest is not managed by $app in this profile and has local edits; the reset left it in place and stopped tracking it")
+        done < <(records_list "$app")
+        records_remove "$app"
+    done
+    for dir in "$STATE_DIR"/apps/*.yaml; do
+        [[ -f "$dir" ]] || continue
+        app=$(basename "$dir" .yaml)
+        [[ $'\n'"$names" != *$'\n'"app"$'\t'"$app"$'\n'* ]] || continue
+        version=$(state_get_version "$app" 2>/dev/null || true)
+        [[ "$version" != conflict:* ]] || state_set_version "$app" "${version#conflict:}"
+    done
+}
+
 # A drop-in whose tool is out of the profile keeps its records while the file differs from
 # the repo's version, as a config app's do: a one-off --profile run mustn't turn the edit into
 # something a later pull overwrites. Warned about each time. Forgotten once the file is gone
@@ -443,6 +492,7 @@ run_phase_configs() {
             [[ -n "$warning" ]] && SYNC_WARNINGS+=("$warning")
         done < "$DOTFILES_WARNINGS_FILE"
     done
+    CONFIGS_DEPLOYED=true
 }
 
 # An absolute path for --force PATH, spelled the way an app's dest is. The file may be
@@ -1404,6 +1454,10 @@ main() {
     fi
 
     run_all "$PROFILE_ARG"
+    # Only a reset that got as far as deploying the configs has anything to finish
+    if [[ "$COMMAND" == "pull" && "${DOTFILES_RESET:-}" == 1 && "$CONFIGS_DEPLOYED" == true ]]; then
+        reset_finish
+    fi
 
     # Pending packages are only worked out by pull
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
