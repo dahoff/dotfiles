@@ -126,7 +126,7 @@ push_validate_init_flags() {
         case "$1" in
             --hostname)  init_validate_hostname "$2" || ok=1; shift 2 ;;
             --profile)   init_validate_profile_name "$2" || ok=1; shift 2 ;;
-            --auto-sync) init_validate_auto_sync "$2" || ok=1; shift 2 ;;
+            --update-check) init_validate_update_check "$2" || ok=1; shift 2 ;;
             --interval)  init_validate_interval "$2" || ok=1; shift 2 ;;
             *)           shift ;;
         esac

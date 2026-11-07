@@ -55,7 +55,7 @@ info "Case 1: before any sync"
 run status
 [[ $RC -eq 0 ]] || fail "status failed: $OUT"
 has_line "claude    not installed"
-has_line "auto sync:       on, every 4h — never run"
+has_line "update check:    on, every 4h — never run"
 has_line "pending:         none"
 has_line "host:            testhost  (hosts/testhost/host.yaml)   profile: base"
 has_line "config:          $T/config"
@@ -84,8 +84,18 @@ OUT=$(./dotfiles pull --no-backup --skip-git-setup --no-fetch 2>&1) || RC=$?
 run status
 has_line "claude    up to date"
 has_line "scripts   up to date"
-has_line "— last run just now"
-pass "up to date after sync"
+has_line "update check:    on, every 4h — never run"
+touch "$XDG_STATE_HOME/dotfiles/last-check"
+run status
+has_line "update check:    on, every 4h — last run just now"
+touch -d '3 hours ago' "$XDG_STATE_HOME/dotfiles/last-check"
+run status
+has_line "update check:    on, every 4h — last run 3h ago"
+echo "update_check: off" >> "$T/config"
+run status
+has_line "update check:    off"
+sed -i '/^update_check: off$/d' "$T/config"
+pass "up to date after sync; update check shows its own last run"
 
 info "Case 3: host layer edit"
 echo '{"edited": true}' > "$T/hosts-dir/hosts/testhost/apps/claude/files/settings.json"

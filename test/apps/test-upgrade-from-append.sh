@@ -202,18 +202,17 @@ check_clean "4"
 check_settled "4"
 pass "plain install"
 
-info "Case 5: the first sync is a background one"
+info "Case 5: upgrading over a bashrc the user had edited"
 new_machine
 printf '# my own bashrc\nexport MINE=1\n' > "$RCFILE"
 sync_now
 check_old_shape "5" 1
 publish_new_version
-rm -f "$XDG_STATE_HOME/dotfiles/last-sync"
-sync_now --auto
+sync_now
 check_clean "5"
 grep -qxF 'export MINE=1' "$LOCAL" || fail "5: own content lost"
 check_settled "5"
-pass "background upgrade"
+pass "upgrade over an edited bashrc"
 
 echo
 echo "All upgrade tests passed"

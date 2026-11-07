@@ -91,15 +91,15 @@ run_init --yes --no-sync --hosts-dir "$HD" --hostname testhost
 [[ $RC -eq 0 ]] || fail "init failed ($RC): $OUT"
 has "hosts_dir: $HD" || fail "hosts_dir missing: $(cat "$CFG")"
 has "hostname: testhost" || fail "hostname missing"
-has "auto_sync: on" || fail "auto_sync missing"
-has "auto_sync_interval: 4h" || fail "interval missing"
+has "update_check: on" || fail "update_check missing"
+has "update_check_interval: 4h" || fail "interval missing"
 grep -q '^# profile:' "$CFG" || fail "profile line not commented: $(cat "$CFG")"
 ! grep -q '^profile:' "$CFG" || fail "uncommented profile line"
 ! grep -q 'dotfiles_repo' "$CFG" || fail "dotfiles_repo written"
 grep -q "^# Written by dotfiles init on $(date -u +%Y-%m-%d)$" "$CFG" || fail "header missing"
 [[ "$OUT" == *"host.yaml found (profile: base)"* ]] || fail "host.yaml not reported: $OUT"
 [[ "$OUT" == *"Wrote $CFG"* ]] || fail "Wrote line missing: $OUT"
-[[ "$OUT" == *"testhost configured (host.yaml)"* && "$OUT" == *"background sync every 4h"* ]] \
+[[ "$OUT" == *"testhost configured (host.yaml)"* && "$OUT" == *"update check every 4h"* ]] \
     || fail "closing lines missing: $OUT"
 # The written config round-trips through config_load
 (
@@ -107,7 +107,7 @@ grep -q "^# Written by dotfiles init on $(date -u +%Y-%m-%d)$" "$CFG" || fail "h
     source "$ROOT_DIR/lib/config.sh"
     config_load "$CFG"
     [[ "$CFG_HOSTS_DIR" == "$HD" && "$CFG_HOSTNAME" == testhost && -z "$CFG_PROFILE" \
-        && "$CFG_AUTO_SYNC" == on && "$CFG_AUTO_SYNC_INTERVAL" == 4h ]]
+        && "$CFG_UPDATE_CHECK" == on && "$CFG_UPDATE_CHECK_INTERVAL" == 4h ]]
 ) || fail "config does not round-trip through config_load"
 # A relative path is stored absolute
 (cd "$T" && OUT=$("$DF/dotfiles" init --yes --no-sync --hosts-dir hosts-dir --hostname testhost 2>&1 </dev/null)) \
@@ -118,16 +118,16 @@ pass "config written from flags; host.yaml selects the profile"
 # Case 3
 info "Case 3: no hosts repo, explicit values"
 rm -f "$CFG" "$CFG.bak"
-run_init --yes --no-sync --hosts-dir none --hostname testhost --profile minimal --auto-sync off --interval 2h
+run_init --yes --no-sync --hosts-dir none --hostname testhost --profile minimal --update-check off --interval 2h
 [[ $RC -eq 0 ]] || fail "init failed ($RC): $OUT"
 has "# hosts_dir:" || fail "hosts_dir not commented: $(cat "$CFG")"
 has "profile: minimal" || fail "profile missing"
-has "auto_sync: off" || fail "auto_sync off missing"
-has "auto_sync_interval: 2h" || fail "interval 2h missing"
-[[ "$OUT" == *"testhost configured (profile minimal)"* && "$OUT" == *"background sync off"* ]] \
+has "update_check: off" || fail "update_check off missing"
+has "update_check_interval: 2h" || fail "interval 2h missing"
+[[ "$OUT" == *"testhost configured (profile minimal)"* && "$OUT" == *"update check off"* ]] \
     || fail "closing lines wrong: $OUT"
 [[ "$OUT" == *"open a new terminal"* ]] || fail "no new-terminal hint: $OUT"
-pass "none hosts repo and explicit profile/auto sync/interval"
+pass "none hosts repo and explicit profile/update check/interval"
 
 # Case 4
 info "Case 4: re-run keeps the file; a change makes a .bak"
@@ -142,19 +142,21 @@ same_body "$CFG" "$T/first.yaml" || fail "content changed on re-run"
 run_init --yes --no-sync --hosts-dir "$HD" --hostname testhost --interval 1h
 [[ $RC -eq 0 ]] || fail "init --interval 1h failed: $OUT"
 same_body "$CFG.bak" "$T/first.yaml" || fail ".bak does not hold the old content"
-has "auto_sync_interval: 1h" || fail "new interval missing"
+has "update_check_interval: 1h" || fail "new interval missing"
 [[ "$OUT" == *"previous config saved as $CFG.bak"* ]] || fail "backup not reported: $OUT"
 pass ".bak only when content differs"
 
 # Case 5
 info "Case 5: existing config values are the defaults"
 rm -f "$CFG.bak"
-printf 'profile: minimal\nhostname: nohost\nauto_sync_interval: 3h\n' > "$CFG"
+printf 'profile: minimal\nhostname: nohost\nauto_sync: off\nauto_sync_interval: 3h\n' > "$CFG"
 run_init --yes --no-sync --hosts-dir none
 [[ $RC -eq 0 ]] || fail "init failed ($RC): $OUT"
 has "profile: minimal" || fail "profile not kept: $(cat "$CFG")"
 has "hostname: nohost" || fail "hostname not kept"
-has "auto_sync_interval: 3h" || fail "interval not kept"
+has "update_check_interval: 3h" || fail "interval not kept (read from the old auto_sync_interval key)"
+has "update_check: off" || fail "update check not kept (read from the old auto_sync key)"
+! grep -q '^auto_sync' "$CFG" || fail "old key names written back: $(cat "$CFG")"
 # An explicit profile with a host.yaml is kept uncommented (it overrides host.yaml)
 rm -f "$CFG.bak"
 printf 'hosts_dir: %s\nhostname: testhost\nprofile: minimal\n' "$HD" > "$CFG"
@@ -229,7 +231,7 @@ info "Case 8: invalid values exit 1 under --yes"
 for args in "--hosts-dir none --hostname ../x" \
             "--hosts-dir none --hostname a/b" \
             "--hosts-dir none --interval 10x" \
-            "--hosts-dir none --auto-sync maybe" \
+            "--hosts-dir none --update-check maybe" \
             "--hosts-dir none --hostname nohost --profile nope" \
             "--hosts-dir /nonexistent" \
             "--bogus"; do
@@ -238,7 +240,7 @@ for args in "--hosts-dir none --hostname ../x" \
     [[ $RC -eq 1 ]] || fail "'$args' should exit 1, got $RC: $OUT"
     [[ ! -e "$CFG" ]] || fail "'$args' wrote a config"
 done
-pass "invalid hostname, interval, auto sync, profile, hosts dir and flag rejected"
+pass "invalid hostname, interval, update check, profile, hosts dir and flag rejected"
 
 # Case 9
 info "Case 9: init runs the first sync"
@@ -256,7 +258,7 @@ run_interactive "$HD" "testhost" "" ""
 [[ $RC -eq 0 ]] || fail "interactive init failed ($RC): $OUT"
 has "hostname: testhost" || fail "hostname not written: $(cat "$CFG")"
 has "hosts_dir: $HD" || fail "hosts_dir not written"
-has "auto_sync_interval: 4h" || fail "default interval not written"
+has "update_check_interval: 4h" || fail "default interval not written"
 [[ "$OUT" == *"[4h]: "* ]] || fail "interval prompt has no default: $OUT"
 # Re-run accepting every default: each default is the current value, nothing changes
 cp "$CFG" "$T/interactive.yaml"
@@ -275,7 +277,7 @@ has "hostname: testhost" || fail "re-prompted hostname not written"
 rm -f "$CFG"
 run_interactive "/nonexistent" "$HD" "testhost" "maybe" "off" "10x" "2d"
 [[ $RC -eq 0 ]] || fail "re-prompt run failed ($RC): $OUT"
-has "auto_sync: off" && has "auto_sync_interval: 2d" || fail "re-prompted values not written: $(cat "$CFG")"
+has "update_check: off" && has "update_check_interval: 2d" || fail "re-prompted values not written: $(cat "$CFG")"
 # Without a host.yaml the profile names (hosts repo first) are listed before the prompt
 rm -f "$CFG"
 run_interactive "$HD" "nohost" "" "" ""
@@ -383,6 +385,22 @@ run_interactive "ssh://git@git.work.example:2222/me/hosts.git" "" testhost "" ""
 [[ "$OUT" != *"github.com/settings/keys"* ]] || fail "SSH 7: GitHub link for another host: $OUT"
 pass "other git host named"
 unset GIT_SSH_COMMAND GIT_SSH_VARIANT
+
+# Case UC
+info "Case UC: --update-check validates; --auto-sync is gone; the prompt says Update check"
+for args in "--hosts-dir none --update-check maybe" "--hosts-dir none --update-check" "--hosts-dir none --auto-sync on"; do
+    rm -f "$CFG"
+    # shellcheck disable=SC2086
+    run_init --yes --no-sync $args
+    [[ $RC -eq 1 ]] || fail "'$args' should exit 1, got $RC: $OUT"
+    [[ ! -e "$CFG" ]] || fail "'$args' wrote a config"
+done
+[[ "$OUT" == *"Unknown init option: --auto-sync"* ]] || fail "--auto-sync not reported unknown: $OUT"
+rm -f "$CFG"
+run_interactive "$HD" "testhost" "" ""
+[[ "$OUT" == *"Update check (on/off) [on]: "* && "$OUT" == *"Update check interval (<n>m|h|d) [4h]: "* ]] || fail "prompts wrong: $OUT"
+[[ "$OUT" != *"Background sync"* ]] || fail "old prompt text left: $OUT"
+pass "update check flag and prompts"
 
 echo
 echo -e "${GREEN}All init tests passed${NC}"

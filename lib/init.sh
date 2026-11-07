@@ -10,13 +10,13 @@ INIT_HOSTS_DIR=""
 INIT_HOSTNAME=""
 INIT_PROFILE=""
 INIT_PROFILE_COMMENTED=false
-INIT_AUTO_SYNC="on"
+INIT_UPDATE_CHECK="on"
 INIT_INTERVAL="4h"
 
 init_usage() {
     cat >&2 << 'EOF'
 Usage: dotfiles init [--hosts-dir URL|PATH|none] [--hostname NAME] [--profile NAME]
-                     [--auto-sync on|off] [--interval <n>m|h|d] [--yes] [--no-sync]
+                     [--update-check on|off] [--interval <n>m|h|d] [--yes] [--no-sync]
 EOF
 }
 
@@ -218,11 +218,11 @@ init_list_profiles() {
     echo "${list:-none}"
 }
 
-# Check an auto sync value: on or off
-init_validate_auto_sync() {
+# Check an update check value: on or off
+init_validate_update_check() {
     case "$1" in
         on|off) return 0 ;;
-        *) log_error "auto sync must be 'on' or 'off': $1"; return 1 ;;
+        *) log_error "update check must be 'on' or 'off': $1"; return 1 ;;
     esac
 }
 
@@ -286,8 +286,8 @@ init_write_config() {
         else
             echo "profile: $(init_yaml_value "$INIT_PROFILE")"
         fi
-        echo "auto_sync: $INIT_AUTO_SYNC"
-        echo "auto_sync_interval: $INIT_INTERVAL"
+        echo "update_check: $INIT_UPDATE_CHECK"
+        echo "update_check_interval: $INIT_INTERVAL"
     } > "$tmp"
 
     if [[ -f "$file" ]] && ! cmp -s <(grep -v '^# Written by dotfiles init on ' "$file") \
@@ -300,11 +300,11 @@ init_write_config() {
 
 # dotfiles init [flags]: exits with init's exit code
 init_main() {
-    local f_hosts="" f_hostname="" f_profile="" f_auto="" f_interval=""
-    local g_hosts=false g_hostname=false g_profile=false g_auto=false g_interval=false
+    local f_hosts="" f_hostname="" f_profile="" f_update="" f_interval=""
+    local g_hosts=false g_hostname=false g_profile=false g_update=false g_interval=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --hosts-dir|--hostname|--profile|--auto-sync|--interval)
+            --hosts-dir|--hostname|--profile|--update-check|--interval)
                 if [[ $# -lt 2 || "$2" == --* ]]; then
                     echo "Error: $1 requires a value" >&2
                     init_usage
@@ -314,7 +314,7 @@ init_main() {
                     --hosts-dir) f_hosts="$2"; g_hosts=true ;;
                     --hostname) f_hostname="$2"; g_hostname=true ;;
                     --profile) f_profile="$2"; g_profile=true ;;
-                    --auto-sync) f_auto="$2"; g_auto=true ;;
+                    --update-check) f_update="$2"; g_update=true ;;
                     --interval) f_interval="$2"; g_interval=true ;;
                 esac
                 shift 2
@@ -393,11 +393,11 @@ init_main() {
         init_choose INIT_PROFILE "$f_profile" "$g_profile" "Profile" "$d_profile" init_validate_profile
     fi
 
-    # Background sync
-    init_choose INIT_AUTO_SYNC "$f_auto" "$g_auto" "Background sync (on/off)" \
-        "$CFG_AUTO_SYNC" init_validate_auto_sync
-    init_choose INIT_INTERVAL "$f_interval" "$g_interval" "Background sync interval (<n>m|h|d)" \
-        "$CFG_AUTO_SYNC_INTERVAL" init_validate_interval
+    # Update check
+    init_choose INIT_UPDATE_CHECK "$f_update" "$g_update" "Update check (on/off)" \
+        "$CFG_UPDATE_CHECK" init_validate_update_check
+    init_choose INIT_INTERVAL "$f_interval" "$g_interval" "Update check interval (<n>m|h|d)" \
+        "$CFG_UPDATE_CHECK_INTERVAL" init_validate_interval
 
     init_write_config "$config_file"
     echo "Wrote $config_file"
@@ -412,10 +412,10 @@ init_main() {
     local how="profile $INIT_PROFILE"
     [[ -z "$host_yaml" || "$INIT_PROFILE_COMMENTED" != true ]] || how="host.yaml"
     echo "dotfiles: $INIT_HOSTNAME configured ($how)"
-    if [[ "$INIT_AUTO_SYNC" == on ]]; then
-        echo "background sync every $INIT_INTERVAL"
+    if [[ "$INIT_UPDATE_CHECK" == on ]]; then
+        echo "update check every $INIT_INTERVAL"
     else
-        echo "background sync off"
+        echo "update check off"
     fi
     echo "open a new terminal to load the new shell setup"
     exit $rc

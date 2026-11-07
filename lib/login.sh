@@ -1,5 +1,5 @@
-# 90-dotfiles.sh - show the last background sync report and the packages still
-# needing sudo; start a background sync
+# 90-dotfiles.sh - show the update check's report and the packages still needing
+# sudo; start a background update check (it only reports; nothing deploys)
 # Managed by dotfiles; do not edit.
 _dotfiles_login() {
     local state="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles"
@@ -15,14 +15,15 @@ _dotfiles_login() {
         done < "$state/pending"
         [[ -n "$names" ]] && printf "dotfiles: %s not installed (needs sudo) — run 'dotfiles pull'\n" "$names"
     fi
-    [[ -n "${DOTFILES_NO_AUTO_SYNC:-}" ]] && return 0
+    [[ -n "${DOTFILES_NO_UPDATE_CHECK:-}" ]] && return 0
     command -v dotfiles >/dev/null 2>&1 || return 0
     mkdir -p "$state" 2>/dev/null
-    # launch.log is overwritten each time; it shows failures before the sync log exists
+    # Detached and silent, so the terminal opens at once and nothing prompts.
+    # launch.log is overwritten each time and shows why a check failed.
     if command -v setsid >/dev/null 2>&1; then
-        (setsid dotfiles pull --auto </dev/null >"$state/launch.log" 2>&1 &)
+        (setsid dotfiles check-updates </dev/null >"$state/launch.log" 2>&1 &)
     else
-        (dotfiles pull --auto </dev/null >"$state/launch.log" 2>&1 &)
+        (dotfiles check-updates </dev/null >"$state/launch.log" 2>&1 &)
     fi
 }
 [[ $- == *i* ]] && _dotfiles_login

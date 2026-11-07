@@ -6,8 +6,8 @@ CFG_FILE=""
 CFG_HOSTS_DIR=""
 CFG_HOSTNAME=""
 CFG_PROFILE=""
-CFG_AUTO_SYNC="on"
-CFG_AUTO_SYNC_INTERVAL="4h"
+CFG_UPDATE_CHECK="on"
+CFG_UPDATE_CHECK_INTERVAL="4h"
 
 # Print the seconds for "<n>m|h|d"; return 1 for anything else.
 # Usage: config_interval_seconds STR
@@ -23,7 +23,9 @@ config_interval_seconds() {
 }
 
 # Parse FILE into the CFG_* globals (defaults when missing).
-# Returns 1 for an invalid auto_sync, auto_sync_interval or hostname value.
+# Returns 1 for an invalid update_check, update_check_interval or hostname value.
+# auto_sync and auto_sync_interval are the old names of the two update check keys and
+# still load, so an existing config keeps working.
 # Usage: config_load FILE
 config_load() {
     local file="$1"
@@ -31,8 +33,8 @@ config_load() {
     CFG_HOSTS_DIR=""
     CFG_HOSTNAME=""
     CFG_PROFILE=""
-    CFG_AUTO_SYNC="on"
-    CFG_AUTO_SYNC_INTERVAL="4h"
+    CFG_UPDATE_CHECK="on"
+    CFG_UPDATE_CHECK_INTERVAL="4h"
 
     [[ -f "$file" ]] || return 0
 
@@ -95,21 +97,21 @@ config_load() {
                 fi
                 ;;
             profile) CFG_PROFILE="$value" ;;
-            auto_sync)
+            update_check|auto_sync)
                 case "$value" in
-                    on|true|yes) CFG_AUTO_SYNC=on ;;
-                    off|false|no) CFG_AUTO_SYNC=off ;;
+                    on|true|yes) CFG_UPDATE_CHECK=on ;;
+                    off|false|no) CFG_UPDATE_CHECK=off ;;
                     *)
-                        log_error "$file:$n: auto_sync must be on/off (or true/false/yes/no): $value"
+                        log_error "$file:$n: $key must be on/off (or true/false/yes/no): $value"
                         rc=1
                         ;;
                 esac
                 ;;
-            auto_sync_interval)
+            update_check_interval|auto_sync_interval)
                 if config_interval_seconds "$value" >/dev/null; then
-                    CFG_AUTO_SYNC_INTERVAL="$value"
+                    CFG_UPDATE_CHECK_INTERVAL="$value"
                 else
-                    log_error "$file:$n: auto_sync_interval must be <n>m, <n>h or <n>d: $value"
+                    log_error "$file:$n: $key must be <n>m, <n>h or <n>d: $value"
                     rc=1
                 fi
                 ;;

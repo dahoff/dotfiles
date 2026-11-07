@@ -144,14 +144,14 @@ has_line "pinned to v1.0"
 head_is v1.0
 pass "sync warned and did not move"
 
-info "Case 6: background sync stays pinned without warning"
-rm -f "$XDG_STATE_HOME/dotfiles/last-sync"
-run pull --auto
-[[ $RC -eq 0 ]] || fail "auto sync failed: $OUT"
+info "Case 6: the update check leaves a pinned checkout alone and silent"
+rm -f "$XDG_STATE_HOME/dotfiles/last-check" "$XDG_STATE_HOME/dotfiles/report"
+run check-updates
+[[ $RC -eq 0 ]] || fail "update check failed: $OUT"
 head_is v1.0
-if grep -qF "pinned to" "$XDG_STATE_HOME/dotfiles/last-sync.log"; then fail "auto warned"; fi
-[[ ! -s "$XDG_STATE_HOME/dotfiles/report" ]] || ! grep -qF pinned "$XDG_STATE_HOME/dotfiles/report" || fail "report mentions the pin"
-pass "auto stayed quiet"
+[[ -z "$OUT" ]] || fail "update check printed: $OUT"
+[[ ! -e "$XDG_STATE_HOME/dotfiles/report" ]] || fail "update check reported on a pinned checkout: $(cat "$XDG_STATE_HOME/dotfiles/report")"
+pass "update check stayed quiet while pinned"
 
 info "Case 7: refusals leave the checkout where it is"
 run checkout nonexistent

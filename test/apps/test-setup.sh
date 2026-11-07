@@ -60,10 +60,10 @@ else
 fi
 
 # Test 4b: help lists the commands and sync flags
-info "Test 4b: help mentions init, pull, sync, --remote, status, --auto and --no-fetch"
+info "Test 4b: help mentions init, pull, sync, --remote, status, --update-check and --no-fetch"
 output=$(cd "$ROOT_DIR" && ./dotfiles help 2>&1)
 missing=""
-for word in init "init --remote" "pull --remote" --hosts-dir --no-sync pull sync add status uninstall verify -- --auto --no-fetch; do
+for word in init "init --remote" "pull --remote" --hosts-dir --no-sync pull sync add status uninstall verify -- --update-check --no-fetch; do
     [[ "$word" == "--" ]] && continue
     echo "$output" | grep -q -- "$word" || missing+=" $word"
 done

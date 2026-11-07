@@ -47,7 +47,7 @@ load() {
 # Unit 1
 info "Unit 1: missing file gives defaults"
 config_load "$T/nope"
-[[ $? -eq 0 && "$CFG_AUTO_SYNC" == on && "$CFG_AUTO_SYNC_INTERVAL" == 4h \
+[[ $? -eq 0 && "$CFG_UPDATE_CHECK" == on && "$CFG_UPDATE_CHECK_INTERVAL" == 4h \
    && -z "$CFG_HOSTS_DIR$CFG_HOSTNAME$CFG_PROFILE" ]] || fail "defaults wrong"
 pass "defaults"
 
@@ -57,13 +57,13 @@ cat > "$CFG" << 'EOF'
 hosts_dir: ~/x
 hostname: myhost
 profile: minimal
-auto_sync: off
-auto_sync_interval: 30m
+update_check: off
+update_check_interval: 30m
 EOF
 load
 [[ $LOAD_RC -eq 0 && -z "$WARN_OUT" ]] || fail "unexpected rc/output: $LOAD_RC $WARN_OUT"
 [[ "$CFG_HOSTS_DIR" == "$HOME/x" && "$CFG_HOSTNAME" == myhost \
-   && "$CFG_PROFILE" == minimal && "$CFG_AUTO_SYNC" == off && "$CFG_AUTO_SYNC_INTERVAL" == 30m \
+   && "$CFG_PROFILE" == minimal && "$CFG_UPDATE_CHECK" == off && "$CFG_UPDATE_CHECK_INTERVAL" == 30m \
    && "$CFG_FILE" == "$CFG" ]] || fail "values wrong"
 pass "all keys parsed"
 
@@ -94,9 +94,9 @@ load
 printf 'profile: a # b # c\n' > "$CFG"
 load
 [[ "$CFG_PROFILE" == a ]] || fail "comment must start at the first ' #': [$CFG_PROFILE]"
-printf 'auto_sync_interval: 4h  # every 4h # was 1h\n' > "$CFG"
+printf 'update_check_interval: 4h  # every 4h # was 1h\n' > "$CFG"
 load
-[[ $LOAD_RC -eq 0 && "$CFG_AUTO_SYNC_INTERVAL" == 4h ]] || fail "interval with two # comments: rc=$LOAD_RC"
+[[ $LOAD_RC -eq 0 && "$CFG_UPDATE_CHECK_INTERVAL" == 4h ]] || fail "interval with two # comments: rc=$LOAD_RC"
 pass "comments ignored, # in quotes kept"
 
 # Unit 4b
@@ -108,13 +108,28 @@ load
 pass "value with ': '"
 
 # Unit 4c
-info "Unit 4c: auto_sync boolean spellings normalize"
-for pair in on:on off:off true:on false:off yes:on no:off; do
-    printf 'auto_sync: %s\n' "${pair%%:*}" > "$CFG"
-    load
-    [[ $LOAD_RC -eq 0 && "$CFG_AUTO_SYNC" == "${pair##*:}" ]] || fail "auto_sync ${pair%%:*} -> [$CFG_AUTO_SYNC] rc=$LOAD_RC"
+info "Unit 4c: update_check boolean spellings normalize, under both key names"
+for key in update_check auto_sync; do
+    for pair in on:on off:off true:on false:off yes:on no:off; do
+        printf '%s: %s\n' "$key" "${pair%%:*}" > "$CFG"
+        load
+        [[ $LOAD_RC -eq 0 && -z "$WARN_OUT" && "$CFG_UPDATE_CHECK" == "${pair##*:}" ]] \
+            || fail "$key ${pair%%:*} -> [$CFG_UPDATE_CHECK] rc=$LOAD_RC $WARN_OUT"
+    done
 done
-pass "auto_sync normalized"
+printf 'auto_sync_interval: 30m\n' > "$CFG"
+load
+[[ $LOAD_RC -eq 0 && -z "$WARN_OUT" && "$CFG_UPDATE_CHECK_INTERVAL" == 30m ]] || fail "auto_sync_interval alias: [$CFG_UPDATE_CHECK_INTERVAL] $WARN_OUT"
+printf 'update_check_interval: 2d\n' > "$CFG"
+load
+[[ $LOAD_RC -eq 0 && "$CFG_UPDATE_CHECK_INTERVAL" == 2d ]] || fail "update_check_interval: [$CFG_UPDATE_CHECK_INTERVAL]"
+printf 'auto_sync: off\nupdate_check: on\n' > "$CFG"
+load
+[[ "$CFG_UPDATE_CHECK" == on ]] || fail "the later of two names should win: [$CFG_UPDATE_CHECK]"
+printf 'update_check: off\nauto_sync: on\n' > "$CFG"
+load
+[[ "$CFG_UPDATE_CHECK" == on ]] || fail "the later of two names should win: [$CFG_UPDATE_CHECK]"
+pass "update_check normalized; auto_sync keys are aliases"
 
 # Unit 5
 info "Unit 5: unknown keys warn (including the removed dotfiles_repo and hosts_repo)"
@@ -140,13 +155,18 @@ load
 pass "malformed lines warned"
 
 # Unit 7/8
-info "Unit 7/8: invalid auto_sync and interval"
-printf 'auto_sync: maybe\n' > "$CFG"
-load
-[[ $LOAD_RC -eq 1 ]] || fail "auto_sync maybe should return 1"
-printf 'auto_sync_interval: 10x\n' > "$CFG"
-load
-[[ $LOAD_RC -eq 1 ]] || fail "interval 10x should return 1"
+info "Unit 7/8: invalid update_check and interval, under both key names"
+for key in update_check auto_sync; do
+    printf '%s: maybe\n' "$key" > "$CFG"
+    load
+    [[ $LOAD_RC -eq 1 && "$WARN_OUT" == *"$key must be on/off"* ]] || fail "$key maybe: rc=$LOAD_RC [$WARN_OUT]"
+    [[ "$CFG_UPDATE_CHECK" == on ]] || fail "$key maybe changed the value: [$CFG_UPDATE_CHECK]"
+done
+for key in update_check_interval auto_sync_interval; do
+    printf '%s: 10x\n' "$key" > "$CFG"
+    load
+    [[ $LOAD_RC -eq 1 && "$WARN_OUT" == *"$key must be <n>m"* ]] || fail "$key 10x: rc=$LOAD_RC [$WARN_OUT]"
+done
 pass "invalid values rejected"
 
 # Unit 8b

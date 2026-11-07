@@ -53,8 +53,8 @@ PROFILE_ARG=""
 HOSTS_DIR=""
 HOSTNAME_ARG=""
 DOTFILES_REPO=""
-AUTO_SYNC="on"
-AUTO_SYNC_SECONDS=14400
+UPDATE_CHECK="on"
+UPDATE_CHECK_SECONDS=14400
 DEFAULT_HOSTS_DIR="$HOME/.local/share/dotfiles/dotfiles-hosts"
 
 # Resolution results (set by load_packages_for_profile)
@@ -81,12 +81,8 @@ declare -a PUSH_INIT_ARGS=()
 EXIT_CODE=0
 SYNC_NO_FETCH=false
 SYNC_RECORD=false
-CHECK_ONLY=false    # --auto without passwordless sudo: phases 1 and 2 only check, never install
-SYNC_CAN_SUDO=false # --auto: sudo -n works and there is no terminal, so phases 1 and 2 install
-SYNC_SUDO_SHIM=""   # --auto with SYNC_CAN_SUDO: directory of the sudo -n shim
-# Packages still missing (names from the profile); apps whose state version changed
+# Packages still missing (names from the profile)
 declare -a PENDING=()
-declare -a UPDATED_APPS=()
 
 # Cross-module: shell scripts drop-in directory
 SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
@@ -95,45 +91,6 @@ SHELL_SCRIPTS_DIR="$HOME/.bashrc.d"
 # Usage: run_on_target command
 run_on_target() {
     eval "$@" 9>&-
-}
-
-# Run an install command. In --auto it runs only when SYNC_CAN_SUDO (the probe
-# found passwordless sudo and no terminal), with stdin /dev/null and a sudo shim
-# first on PATH that always passes -n, so no install command can prompt.
-# Usage: run_install command [args...]
-run_install() {
-    if [[ "$SYNC_AUTO" == true ]]; then
-        [[ "$SYNC_CAN_SUDO" == true ]] || return 1
-        PATH="$SYNC_SUDO_SHIM:$PATH" "$@" </dev/null
-    else
-        "$@"
-    fi
-}
-
-# --auto: write a sudo shim that runs the real sudo with -n, so sudo inside a
-# custom install script fails instead of prompting. Prints the shim's directory.
-# Usage: sync_make_sudo_shim
-sync_make_sudo_shim() {
-    local real dir
-    real="$(command -v sudo)" || return 1
-    dir="$(sync_state_dir)/sudo-shim"
-    mkdir -p "$dir" || return 1
-    {
-        echo '#!/usr/bin/env bash'
-        echo '# Written by dotfiles pull --auto: sudo never prompts'
-        echo '[[ "${1:-}" == -n ]] && shift'
-        printf 'exec %q -n "$@"\n' "$real"
-    } > "$dir/sudo" || return 1
-    chmod 0755 "$dir/sudo" || return 1
-    echo "$dir"
-}
-
-# Can sudo prompt on a terminal? sudo reads passwords from /dev/tty, not stdin.
-# DOTFILES_TEST_HAS_TTY=1 is a test hook that forces yes (it can only make --auto
-# check-only, never the reverse).
-sync_has_tty() {
-    [[ "${DOTFILES_TEST_HAS_TTY:-}" == 1 ]] && return 0
-    { : </dev/tty; } 2>/dev/null
 }
 
 # Detect package manager
@@ -225,34 +182,21 @@ run_phase_os_packages() {
 
     log_info "[$target] Packages to install: ${missing[*]}"
 
-    # --auto without passwordless sudo never installs OS packages: report them as pending
-    if [[ "$CHECK_ONLY" == true ]]; then
-        log_info "[$target] Check only: ${#missing[@]} package(s) pending: ${missing_names[*]}"
-        PENDING+=("${missing_names[@]}")
-        return 0
-    fi
-
     if [[ "$dry_run" == true ]]; then
         log_info "[$target] [DRY-RUN] Would install ${#missing[@]} package(s) via $pkg_manager"
         RESULTS+=("$target|os-packages|ok")
         return 0
     fi
 
-    # --auto: sudo -n never prompts, and neither does apt's debconf
-    local sudo="sudo" apt_env=""
-    if [[ "$SYNC_AUTO" == true ]]; then
-        sudo="sudo -n"
-        apt_env="DEBIAN_FRONTEND=noninteractive "
-    fi
     case "$pkg_manager" in
         apt)
-            run_install run_on_target "$sudo ${apt_env}apt-get update -qq && $sudo ${apt_env}apt-get install -y -qq ${missing[*]}"
+            run_on_target "sudo apt-get update -qq && sudo apt-get install -y -qq ${missing[*]}"
             ;;
         dnf)
-            run_install run_on_target "$sudo dnf install -y -q ${missing[*]}"
+            run_on_target "sudo dnf install -y -q ${missing[*]}"
             ;;
         brew)
-            run_install run_on_target "brew install ${missing[*]}"
+            run_on_target "brew install ${missing[*]}"
             ;;
     esac
 
@@ -287,15 +231,6 @@ run_phase_custom_installs() {
         # Run install script if tool not already installed 
         if [[ -n "$check" ]] && run_on_target "$check" &>/dev/null; then
             log_info "[$target] $name: already installed"
-        elif [[ "$CHECK_ONLY" == true ]]; then
-            # Check-only --auto never runs install scripts. Without a check we cannot tell
-            # whether the tool is missing, so it is not reported as pending.
-            if [[ -n "$check" ]]; then
-                log_info "[$target] $name: not installed (pending, install skipped)"
-                PENDING+=("$name")
-            else
-                log_info "[$target] $name: no check defined, install skipped"
-            fi
         elif [[ "$dry_run" == true ]]; then
             log_info "[$target] [DRY-RUN] Would run: $APPS_DIR/$script"
         else
@@ -310,7 +245,7 @@ run_phase_custom_installs() {
                 continue
             fi
 
-            if run_install bash "$script_path" 9>&-; then
+            if bash "$script_path" 9>&-; then
                 log_success "[$target] Custom install complete: $name"
                 if [[ -n "$check" ]] && ! run_on_target "$check" &>/dev/null; then
                     PENDING+=("$name")
@@ -407,30 +342,12 @@ run_phase_configs() {
         export DOTFILES_WARNINGS_FILE="$STAGE_ROOT/warnings"
         : > "$DOTFILES_WARNINGS_FILE"
 
-        # State name is app.name from config.yaml (dir name as fallback)
-        local app_name="" ver_before="" ver_after="" installed_ok=false
-        if [[ -f "$APPS_DIR/$dir/config.yaml" ]]; then
-            yaml_load "$APPS_DIR/$dir/config.yaml"
-            app_name=$(yaml_get app.name)
-        fi
-        [[ -n "$app_name" ]] || app_name=$(basename "$dir")
-        ver_before=$(state_get_version "$app_name" 2>/dev/null || true)
-
         if bash "$installer" "${cmd_args[@]}" 9>&-; then
-            installed_ok=true
             RESULTS+=("$target|$name|ok")
         else
             log_error "[$target] $name: $INSTALLER_CMD failed"
             RESULTS+=("$target|$name|FAIL")
             EXIT_CODE=1
-        fi
-
-        # Updated = installer succeeded and the version changed (a new state file
-        # has an empty "before"). A failed run or "incomplete" is not an update.
-        ver_after=$(state_get_version "$app_name" 2>/dev/null || true)
-        if [[ "$installed_ok" == true && "$ver_after" != "incomplete" \
-            && "$ver_after" != "$ver_before" ]]; then
-            UPDATED_APPS+=("$name")
         fi
 
         # Per-file failures reported by the installer
@@ -439,8 +356,7 @@ run_phase_configs() {
             [[ -n "$failed" ]] && RESULTS+=("$target|$failed|FAIL")
         done < "$DOTFILES_FAILURES_FILE"
 
-        # Edits kept although the repo changed the same file: worth a line in the
-        # --auto report, which is the only place a background sync can say so
+        # Edits kept although the repo changed the same file: shown in the summary
         local kept
         while IFS= read -r kept; do
             [[ -n "$kept" ]] && SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add')")
@@ -582,8 +498,8 @@ Init options:
                        ~/.local/share/dotfiles/dotfiles-hosts), a path, or none
   --hostname NAME      Host directory hosts/NAME/ to apply
   --profile NAME       Profile, when no hosts/NAME/host.yaml selects one
-  --auto-sync on|off   Background pull from new terminals (default: on)
-  --interval <n>m|h|d  Background pull interval (default: 4h)
+  --update-check on|off  Check for updates from new terminals (default: on)
+  --interval <n>m|h|d  Update check interval (default: 4h)
   --yes                Accept defaults and flags without prompting
   --no-sync            Write the config only; do not run the first pull
 
@@ -591,12 +507,11 @@ Remote options:
   --remote HOST...     With pull or init: send this machine's committed repos to each
                        HOST (from here to the host), then run pull, or init, there.
                        The host's repos are replaced; it fetches nothing itself.
-                       With init, --yes, --hostname, --profile, --auto-sync and
-                       --interval are forwarded to the remote init (valid only with
+                       With init, --yes, --hostname, --profile, --update-check
+                       and --interval are forwarded to the remote init (valid only with
                        init --remote)
 
 Pull options:
-  --auto               Background mode (used by the login drop-in)
   --no-fetch           Do not git pull the dotfiles and hosts dirs
 
 Sync takes the layer and global options below, and --no-fetch; each is passed on
@@ -646,6 +561,7 @@ validate_command() {
         "versions"
         "checkout"
         "add"
+        "check-updates"
         "help"
         "-h"
         "--help"
@@ -718,7 +634,7 @@ parse_args() {
                     shift
                     continue
                     ;;
-                --hostname|--profile|--auto-sync|--interval)
+                --hostname|--profile|--update-check|--interval)
                     if [[ $# -lt 2 || "$2" == --* ]]; then
                         echo "Error: $1 requires a value" >&2
                         exit 1
@@ -757,16 +673,6 @@ parse_args() {
                 fi
                 HOSTNAME_ARG="$2"
                 shift 2
-                ;;
-            --auto)
-                if [[ "$COMMAND" == "sync" ]]; then
-                    echo "Error: Unknown option: $1" >&2
-                    usage
-                    exit 1
-                fi
-                SYNC_AUTO=true
-                CHECK_ONLY=true
-                shift
                 ;;
             --no-fetch)
                 SYNC_NO_FETCH=true
@@ -821,7 +727,7 @@ parse_args() {
     fi
     if [[ "$COMMAND" == "remote" && "$PUSH_INIT" != true && ${#PUSH_INIT_ARGS[@]} -gt 0 ]]; then
         echo "Error: ${PUSH_INIT_ARGS[0]} is only valid with init --remote" >&2
-        echo "Usage: dotfiles init --remote [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST..." >&2
+        echo "Usage: dotfiles init --remote [--yes] [--hostname NAME] [--profile NAME] [--update-check on|off] [--interval <n>m|h|d] HOST..." >&2
         exit 1
     fi
     # One hostname cannot name several hosts
@@ -830,7 +736,7 @@ parse_args() {
         for a in ${PUSH_INIT_ARGS[@]+"${PUSH_INIT_ARGS[@]}"}; do
             if [[ "$a" == --hostname ]]; then
                 echo "Error: --hostname is only valid with a single HOST" >&2
-                echo "Usage: dotfiles init --remote [--yes] [--hostname NAME] [--profile NAME] [--auto-sync on|off] [--interval <n>m|h|d] HOST..." >&2
+                echo "Usage: dotfiles init --remote [--yes] [--hostname NAME] [--profile NAME] [--update-check on|off] [--interval <n>m|h|d] HOST..." >&2
                 exit 1
             fi
         done
@@ -859,8 +765,8 @@ resolve_settings() {
     [[ -n "$HOSTNAME_ARG" ]] || HOSTNAME_ARG="$CFG_HOSTNAME"
     [[ -n "$PROFILE_ARG" ]] || PROFILE_ARG="$CFG_PROFILE"
 
-    AUTO_SYNC="$CFG_AUTO_SYNC"
-    AUTO_SYNC_SECONDS=$(config_interval_seconds "$CFG_AUTO_SYNC_INTERVAL")
+    UPDATE_CHECK="$CFG_UPDATE_CHECK"
+    UPDATE_CHECK_SECONDS=$(config_interval_seconds "$CFG_UPDATE_CHECK_INTERVAL")
 }
 
 # True if the given flag was passed on to the installers
@@ -879,38 +785,26 @@ is_dry_run() {
 
 # EXIT trap: remove the work dir and run registered cleanup commands
 cleanup() {
-    local status=$?
     local cmd
     for cmd in "${SYNC_CLEANUP[@]}"; do
         eval "$cmd" || true
     done
     [[ -n "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
     if [[ "$SYNC_RECORD" == true ]]; then
-        # An abort outside run_all leaves no FAIL item: add one so --auto does
-        # not fail silently. The pending file is left as it was (not refreshed).
-        if [[ $status -ne 0 ]] && ! printf '%s\n' "${RESULTS[@]}" | grep -q '|FAIL$'; then
-            RESULTS+=("local|setup|FAIL")
-        fi
         sync_record
     fi
     return 0
 }
 
-# End of a real (non-dry-run) sync: record the run, clear a stale report
+# End of a real (non-dry-run) pull: record the run, clear a stale report
 sync_record() {
     sync_touch_last
-    if [[ "$SYNC_AUTO" == true ]]; then
-        sync_write_report "$(sync_state_dir)/last-sync.log" "$(IFS=,; echo "${UPDATED_APPS[*]}")"
-    else
-        sync_clear_report
-    fi
+    sync_clear_report
     return 0
 }
 
-# Point a manual sync at files with local edits. Silent for --auto: new terminals
-# would repeat it every interval.
+# Point a pull at files with local edits
 sync_warn_edits() {
-    [[ "$SYNC_AUTO" != true ]] || return 0
     local n
     n=$(deployed_count_edits)
     [[ "$n" -gt 0 ]] || return 0
@@ -997,18 +891,18 @@ cmd_status() {
     fi
     printf '%-17s%s\n' "host:" "$host  $host_note$profile_note"
 
-    # Auto sync
-    local auto_line="off" last now
-    if [[ "$AUTO_SYNC" != "off" ]]; then
-        auto_line="on, every ${CFG_AUTO_SYNC_INTERVAL:-4h}"
-        if [[ -e "$state_dir/last-sync" ]] && last=$(sync_mtime "$state_dir/last-sync"); then
+    # Update check
+    local check_line="off" last now
+    if [[ "$UPDATE_CHECK" != "off" ]]; then
+        check_line="on, every ${CFG_UPDATE_CHECK_INTERVAL:-4h}"
+        if [[ -e "$state_dir/last-check" ]] && last=$(sync_mtime "$state_dir/last-check"); then
             now=$(date +%s)
-            auto_line+=" — last run $(status_age $(( now > last ? now - last : 0 )))"
+            check_line+=" — last run $(status_age $(( now > last ? now - last : 0 )))"
         else
-            auto_line+=" — never run"
+            check_line+=" — never run"
         fi
     fi
-    printf '%-17s%s\n' "auto sync:" "$auto_line"
+    printf '%-17s%s\n' "update check:" "$check_line"
 
     # Pending packages
     local pending=""
@@ -1172,49 +1066,20 @@ main() {
     [[ "$COMMAND" != "checkout" ]] || cmd_checkout
     [[ "$COMMAND" != "sync" ]] || cmd_sync
 
-    if ! resolve_settings; then
-        if [[ "$COMMAND" == "pull" && "$SYNC_AUTO" == true ]] && ! is_dry_run; then
-            # A config error must not silence the background sync: report it.
-            # The config is unusable, so the default throttle (4h) applies.
-            sync_lock || exit 0
-            AUTO_SYNC=on
-            AUTO_SYNC_SECONDS=14400
-            sync_should_run_auto || exit 0
-            exec >"$(sync_state_dir)/last-sync.log" 2>&1
-            echo "dotfiles pull --auto $(date +%Y-%m-%dT%H:%M:%S%z)"
-            resolve_settings || true
-            RESULTS+=("local|config|FAIL")
-            SYNC_RECORD=true
-        fi
-        exit 1
+    resolve_settings || exit 1
+
+    # The login drop-in's background check: fetch, report, nothing else. A held
+    # lock (a pull running, or another check) means skip quietly.
+    if [[ "$COMMAND" == "check-updates" ]]; then
+        sync_lock || exit 0
+        sync_check_updates
+        exit 0
     fi
 
     if [[ "$COMMAND" == "pull" ]] && ! is_dry_run; then
         if ! sync_lock; then
-            [[ "$SYNC_AUTO" == true ]] && exit 0
             echo "dotfiles: pull already running" >&2
             exit 1
-        fi
-        if [[ "$SYNC_AUTO" == true ]]; then
-            # Throttled or disabled: exit before recording is armed, so
-            # last-sync, the report and the log stay untouched
-            sync_should_run_auto || exit 0
-            local log
-            log="$(sync_state_dir)/last-sync.log"
-            exec >"$log" 2>&1
-            echo "dotfiles pull --auto $(date +%Y-%m-%dT%H:%M:%S%z)"
-            export GIT_SETUP_SKIP=true
-            # Install for real only if sudo works without a password and there is
-            # no terminal sudo could prompt on (without setsid the run keeps the
-            # login terminal). stdin is /dev/null and fd 9 (the lock) closed, so
-            # the probe can never prompt or hang.
-            if command -v sudo >/dev/null 2>&1 && ! sync_has_tty \
-                && sudo -n true </dev/null >/dev/null 2>&1 9>&- \
-                && SYNC_SUDO_SHIM="$(sync_make_sudo_shim)"; then
-                SYNC_CAN_SUDO=true
-                CHECK_ONLY=false
-                log_info "passwordless sudo: installing packages"
-            fi
         fi
         # From here on the EXIT trap records the run, however it ends
         SYNC_RECORD=true

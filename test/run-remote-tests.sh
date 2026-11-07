@@ -201,7 +201,7 @@ push --init --yes --hostname testhost "$TARGET"
 CFG=$(test_ssh 'cat ~/.config/dotfiles/config.yaml') || fail "PI1: no remote config"
 grep -qx 'hostname: testhost' <<< "$CFG" || fail "PI1: config hostname wrong: $CFG"
 grep -qx 'hosts_dir: /home/testuser/.local/share/dotfiles/dotfiles-hosts' <<< "$CFG" || fail "PI1: config hosts_dir wrong: $CFG"
-grep -qx 'auto_sync: on' <<< "$CFG" || fail "PI1: config auto_sync wrong: $CFG"
+grep -qx 'update_check: on' <<< "$CFG" || fail "PI1: config update_check wrong: $CFG"
 [[ "$(test_ssh 'readlink -f ~/.local/bin/dotfiles')" == /home/testuser/.local/share/dotfiles/dotfiles/* ]] \
     || fail "PI1: ~/.local/bin/dotfiles does not link into the pushed checkout"
 [[ "$(test_ssh 'cat ~/.claude/statusline-command.sh')" == "# host statusline" ]] || fail "PI1: sync did not run (host statusline missing)"

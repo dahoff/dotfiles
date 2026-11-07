@@ -80,8 +80,8 @@ EOF
 STATE="$XDG_STATE_HOME/dotfiles"
 OUT=""
 RC=0
-# A sudo that always fails, so no case can reach the real sudo (--auto installs
-# for real when sudo -n succeeds). Cases that need another sudo set SUDOBIN.
+# A sudo that always fails, so no case can reach the real sudo (a custom install
+# script may call it). Cases that need another sudo set SUDOBIN.
 NOSUDO="$T/nosudo"
 mkdir -p "$NOSUDO"
 printf '#!/bin/sh\nexit 1\n' > "$NOSUDO/sudo"
@@ -203,9 +203,9 @@ flock -n "$STATE/lock" true 2>/dev/null && fail "lock holder did not take the lo
 run pull
 [[ $RC -eq 1 ]] || fail "expected exit 1, got $RC: $OUT"
 [[ "$OUT" == *"already running"* ]] || fail "no 'already running': $OUT"
-run pull --auto
-[[ $RC -eq 0 ]] || fail "--auto should exit 0, got $RC: $OUT"
-[[ "$OUT" != *"Phase"* ]] || fail "--auto deployed while locked: $OUT"
+run check-updates
+[[ $RC -eq 0 ]] || fail "check-updates should exit 0 while locked, got $RC: $OUT"
+[[ ! -e "$STATE/last-check" && ! -e "$STATE/report" ]] || fail "check-updates ran while locked"
 kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true; HOLDER=""
 run pull
 [[ $RC -eq 0 ]] || fail "sync after release failed: $OUT"
@@ -258,8 +258,7 @@ EOS
     pass "lock free after sync with a detached child"
 fi
 
-# Helpers for --auto cases
-LOG="$STATE/last-sync.log"
+# Helpers shared by the later cases
 age_last_sync() { mkdir -p "$STATE"; touch -d '5 hours ago' "$STATE/last-sync"; }
 FAKEBIN="$T/fakebin"
 mkdir -p "$FAKEBIN"
@@ -268,171 +267,48 @@ chmod +x "$FAKEBIN/sudo"
 PATH_ORIG="$PATH"
 cp "$T/config" "$T/config.orig"
 
-# Case 11
-info "Case 11: throttle"
-rm -f "$LOG" "$STATE/report"
-touch "$STATE/last-sync"
-BEFORE=$(stat -c %Y "$STATE/last-sync")
-run pull --auto
-[[ $RC -eq 0 ]] || fail "throttled --auto should exit 0: $OUT"
-[[ ! -e "$LOG" ]] || fail "throttled --auto wrote a log"
-[[ ! -e "$STATE/report" ]] || fail "throttled --auto wrote a report"
-[[ "$(stat -c %Y "$STATE/last-sync")" == "$BEFORE" ]] || fail "throttled --auto touched last-sync"
-age_last_sync
-run pull --auto
-[[ $RC -eq 0 ]] || fail "--auto failed: $OUT"
-[[ -f "$LOG" ]] || fail "no log after --auto"
-[[ "$(head -1 "$LOG")" == "dotfiles pull --auto "* ]] || fail "bad log header: $(head -1 "$LOG")"
-[[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched by --auto"
-pass "throttle skips recent, runs old and logs"
-
-# Case 12
-info "Case 12: auto_sync=off"
-echo "auto_sync: off" >> "$T/config"
-age_last_sync
-OLDSUM=$(cksum < "$LOG")
-OLDTIME=$(stat -c %Y "$STATE/last-sync")
-run pull --auto
-[[ $RC -eq 0 ]] || fail "--auto with auto_sync=off should exit 0: $OUT"
-[[ "$(cksum < "$LOG")" == "$OLDSUM" ]] || fail "log changed with auto_sync=off"
-[[ "$(stat -c %Y "$STATE/last-sync")" == "$OLDTIME" ]] || fail "last-sync touched with auto_sync=off"
-cp "$T/config.orig" "$T/config"
-pass "auto_sync=off leaves everything alone"
-
-# Case 13
-info "Case 13: config-only with pending packages"
-sed -i 's/^hostname: .*/hostname: nohost/' "$T/config"
-echo "profile: pendingtest" >> "$T/config"
-rm -rf "$HOME/.bashrc.d/50-testtool.sh" "$HOME/.claude" "$STATE/report" "$T/sudo-called" "$T/sudo-args"
-age_last_sync
-RC=0
-OUT=$(PATH="$FAKEBIN:$PATH_ORIG" "$WORK/dotfiles/dotfiles" pull --auto --no-backup 2>&1) || RC=$?
-[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
-# The only sudo call allowed is the passwordless probe (-n true)
-[[ ! -e "$T/sudo-called" ]] || [[ "$(cat "$T/sudo-args")" == "-n true" ]] || fail "--auto called sudo: $(cat "$T/sudo-args")"
-{ grep -qx nonexistent-pkg "$STATE/pending" && grep -qx faketool "$STATE/pending"; } \
-    || fail "pending missing entries: $(cat "$STATE/pending")"
-[[ -s "$STATE/report" ]] || fail "no report (configs were updated)"
-if grep -q "pending" "$STATE/report"; then fail "report has a pending line: $(cat "$STATE/report")"; fi
-[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in deployed although its check fails"
-grep -q "faketool: drop-in held until the tool is installed" "$LOG" || fail "no held message: $(cat "$LOG")"
-[[ -f "$HOME/.claude/settings.json" ]] || fail "claude configs not deployed"
-pass "config-only, pending recorded, no pending line in report, drop-in held"
-
-# Case 14
-info "Case 14: updated apps in report"
-cp "$T/config.orig" "$T/config"
-echo "profile: base" >> "$T/config"
-OLD_HOME="$HOME"; OLD_STATE_DIR="$STATE_DIR"; OLD_XDG="$XDG_STATE_HOME"; OLD_STATE="$STATE"
-export HOME="$T/home2" STATE_DIR="$T/state2" XDG_STATE_HOME="$T/xdg-state2"
-mkdir -p "$HOME" "$STATE_DIR/apps"
-STATE="$XDG_STATE_HOME/dotfiles"; LOG="$STATE/last-sync.log"
-run pull --auto
-[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
-grep -q '^dotfiles: updated claude, scripts' "$STATE/report" || fail "bad report: $(cat "$STATE/report" 2>&1)"
-age_last_sync
-run pull --auto
-[[ ! -e "$STATE/report" ]] || fail "report written without changes: $(cat "$STATE/report")"
-echo "# changed" >> "$T/hosts-dir/profiles/base/apps/claude/files/tmux-notify.sh"
-age_last_sync
-run pull --auto
-grep -q '^dotfiles: updated claude$' "$STATE/report" || fail "bad report after change: $(cat "$STATE/report" 2>&1)"
-pass "updated apps reported once"
-
-# Case 15
-info "Case 15: pull failure in report"
-age_last_sync
-git -C "$WORK/dotfiles" fetch -q
-git -C "$WORK/dotfiles" reset -q --hard '@{u}'
-echo local2 > "$WORK/dotfiles/LOCAL2"
-git -C "$WORK/dotfiles" add LOCAL2
-git -C "$WORK/dotfiles" commit -q -m "local commit 2"
-author_commit OTHER2 four
-run pull --auto
-[[ $RC -eq 0 ]] || fail "pull failure changed exit code: $OUT"
-grep -q "^dotfiles: $WORK/dotfiles: pull failed (.*) — see " "$STATE/report" \
-    || fail "no pull failure in report: $(cat "$STATE/report" 2>&1)"
-if grep -q "sync failed" "$STATE/report"; then fail "pull failure reported as sync failed"; fi
-git -C "$WORK/dotfiles" fetch -q
-git -C "$WORK/dotfiles" reset -q --hard '@{u}'
-pass "pull failure reported"
-
-# Case 16
-info "Case 16: validation failure in --auto"
-sed -i 's/^hostname: .*/hostname: typo/' "$T/config"
-age_last_sync
-rm -f "$STATE/report"
-run pull --auto
-[[ $RC -ne 0 ]] || fail "expected failure: $OUT"
-grep -q '^dotfiles: sync failed (' "$STATE/report" || fail "no failure report: $(cat "$STATE/report" 2>&1)"
-[[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched after failure"
-export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
-STATE="$OLD_STATE"
-cp "$T/config.orig" "$T/config"
-pass "validation failure reported, last-sync touched"
-
-# Case 16b
-info "Case 16b: failed installer is not reported as updated"
-cp -R "$TEST_DIR/fixtures/hosts-dir" "$T/hosts-bad"
-sed -i "s#^hosts_dir: .*#hosts_dir: $T/hosts-bad#; s/^hostname: .*/hostname: badjson/" "$T/config"
-export HOME="$T/home3" STATE_DIR="$T/state3" XDG_STATE_HOME="$T/xdg-state3"
-mkdir -p "$HOME" "$STATE_DIR/apps"
-STATE="$XDG_STATE_HOME/dotfiles"
-run pull --auto
-grep -q 'sync failed (' "$STATE/report" || fail "no failure report: $(cat "$STATE/report" 2>&1) / $OUT"
-if grep -q 'updated claude' "$STATE/report"; then fail "failed app reported as updated: $(cat "$STATE/report")"; fi
-export HOME="$OLD_HOME" STATE_DIR="$OLD_STATE_DIR" XDG_STATE_HOME="$OLD_XDG"
-STATE="$OLD_STATE"
-cp "$T/config.orig" "$T/config"
-pass "failed installer: failure reported, not updated"
-
-# Case 16c
-info "Case 16c: early abort still reports a failure"
-sed -i "s#^hosts_dir: .*#hosts_dir: /nonexistent#" "$T/config"
-age_last_sync
-rm -f "$STATE/report"
-run pull --auto
-[[ $RC -ne 0 ]] || fail "expected failure: $OUT"
-grep -q 'sync failed (setup)' "$STATE/report" || fail "no setup failure report: $(cat "$STATE/report" 2>&1)"
-[[ "$STATE/last-sync" -nt "$T/config" ]] || fail "last-sync not touched"
-cp "$T/config.orig" "$T/config"
-pass "early abort reported as setup failure"
-
-# Case 16d
-info "Case 16d: last-sync in the future does not throttle"
-LOG="$STATE/last-sync.log"
-touch -d '+2 days' "$STATE/last-sync"
-rm -f "$LOG"
-run pull --auto
-[[ -f "$LOG" ]] || fail "future last-sync throttled the run"
-pass "clock skew runs the sync"
-
 # Case 17
 info "Case 17: login drop-in"
 mkdir -p "$WORK/bin" "$STATE"
-printf '#!/bin/sh\necho "$@" >> "%s/calls"\n' "$WORK" > "$WORK/bin/dotfiles"
+# A stand-in command that logs its arguments, makes noise and is slow: the drop-in
+# must start it detached and silent, so the shell never waits for it
+cat > "$WORK/bin/dotfiles" <<EOS
+#!/bin/sh
+echo "\$@" >> "$WORK/calls"
+echo NOISE-OUT
+echo NOISE-ERR >&2
+sleep 3
+EOS
 chmod +x "$WORK/bin/dotfiles"
 rm -f "$WORK/calls"
 DROPIN="$HOME/.bashrc.d/90-dotfiles.sh"
 [[ -f "$DROPIN" ]] || fail "drop-in not installed at $DROPIN"
 echo "dotfiles: hello" > "$STATE/report"
-LOGIN_OUT=$(PATH="$WORK/bin:$PATH_ORIG" bash --norc --noprofile -i -c "source '$DROPIN'" 2>/dev/null)
-[[ "$LOGIN_OUT" == *"dotfiles: hello"* ]] || fail "report not shown: $LOGIN_OUT"
+START=$(date +%s%N)
+LOGIN_OUT=$(PATH="$WORK/bin:$PATH_ORIG" bash --norc --noprofile -i -c "source '$DROPIN'" 2>"$T/login.err")
+ELAPSED=$(( ($(date +%s%N) - START) / 1000000 ))
+[[ "$LOGIN_OUT" == "dotfiles: hello" ]] || fail "login output should be just the report: $LOGIN_OUT"
+if grep -q NOISE "$T/login.err"; then fail "the check's stderr reached the terminal: $(cat "$T/login.err")"; fi
+[[ $ELAPSED -lt 2000 ]] || fail "login waited for the check (${ELAPSED}ms)"
 [[ ! -e "$STATE/report" ]] || fail "report not deleted"
-for _ in $(seq 1 20); do grep -q 'pull --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
-grep -q 'pull --auto' "$WORK/calls" || fail "background sync not started"
+for _ in $(seq 1 20); do [[ -s "$WORK/calls" ]] && break; sleep 0.1; done
+[[ "$(cat "$WORK/calls")" == "check-updates" ]] || fail "drop-in should run exactly 'dotfiles check-updates': $(cat "$WORK/calls" 2>&1)"
 rm -f "$WORK/calls"
-PATH="$WORK/bin:$PATH_ORIG" DOTFILES_NO_AUTO_SYNC=1 bash --norc --noprofile -i -c "source '$DROPIN'" >/dev/null 2>&1
+PATH="$WORK/bin:$PATH_ORIG" DOTFILES_NO_UPDATE_CHECK=1 bash --norc --noprofile -i -c "source '$DROPIN'" >/dev/null 2>&1
 sleep 0.5
-[[ ! -e "$WORK/calls" ]] || fail "DOTFILES_NO_AUTO_SYNC ignored"
+[[ ! -e "$WORK/calls" ]] || fail "DOTFILES_NO_UPDATE_CHECK ignored"
+PATH="$WORK/bin:$PATH_ORIG" DOTFILES_NO_AUTO_SYNC=1 bash --norc --noprofile -i -c "source '$DROPIN'" >/dev/null 2>&1
+for _ in $(seq 1 20); do [[ -s "$WORK/calls" ]] && break; sleep 0.1; done
+[[ -s "$WORK/calls" ]] || fail "the old DOTFILES_NO_AUTO_SYNC should no longer be an opt-out"
+rm -f "$WORK/calls"
 echo "dotfiles: hello" > "$STATE/report"
 LOGIN_OUT=$(PATH="$WORK/bin:$PATH_ORIG" bash --norc -c "source '$DROPIN'" 2>&1)
 sleep 0.5
 [[ -z "$LOGIN_OUT" ]] || fail "non-interactive shell printed: $LOGIN_OUT"
-[[ ! -e "$WORK/calls" ]] || fail "non-interactive shell started a sync"
+[[ ! -e "$WORK/calls" ]] || fail "non-interactive shell started a check"
 [[ -e "$STATE/report" ]] || fail "non-interactive shell consumed the report"
 rm -f "$STATE/report"
-pass "login drop-in: report, auto sync, opt-out, non-interactive"
+pass "login drop-in: report, detached quiet check, opt-out, non-interactive"
 
 # Case 18
 info "Case 18: command works through symlinks (absolute, relative, PATH)"
@@ -482,31 +358,17 @@ STATE="$OLD_STATE"
 pass "link created only if missing or dangling; valid link or file left with a warning"
 
 # Case 20
-info "Case 20: --auto with a bad config reports it, throttled by the default interval"
-cp "$T/config.orig" "$T/config"
-echo "auto_sync: maybe" >> "$T/config"
-rm -f "$STATE/report" "$STATE/last-sync"
-run pull --auto
-[[ $RC -ne 0 ]] || fail "bad config --auto should fail: $OUT"
-grep -q 'sync failed (config)' "$STATE/report" || fail "no config report: $(cat "$STATE/report" 2>&1)"
-grep -q 'auto_sync must be' "$STATE/last-sync.log" || fail "error text not in log: $(cat "$STATE/last-sync.log")"
-[[ -e "$STATE/last-sync" ]] || fail "last-sync not touched"
-rm -f "$STATE/report"
-run pull --auto
-[[ $RC -eq 0 ]] || fail "second --auto should be throttled (exit 0): $OUT"
-[[ ! -e "$STATE/report" ]] || fail "throttled run wrote a report"
-cp "$T/config.orig" "$T/config"
-echo "hostname: a/b" >> "$T/config"
-age_last_sync
-run pull --auto
-grep -q 'sync failed (config)' "$STATE/report" || fail "bad hostname not reported: $(cat "$STATE/report" 2>&1)"
-rm -f "$STATE/report"
+info "Case 20: a bad config errors, under its old key name too"
 cp "$T/config.orig" "$T/config"
 echo "auto_sync: maybe" >> "$T/config"
 run pull
-[[ $RC -eq 1 && "$OUT" == *"auto_sync must be"* ]] || fail "interactive bad config: rc=$RC $OUT"
+[[ $RC -eq 1 && "$OUT" == *"auto_sync must be"* ]] || fail "old key, bad value: rc=$RC $OUT"
 cp "$T/config.orig" "$T/config"
-pass "config error reported once per default interval; interactive still errors"
+echo "update_check: maybe" >> "$T/config"
+run pull
+[[ $RC -eq 1 && "$OUT" == *"update_check must be"* ]] || fail "bad update_check: rc=$RC $OUT"
+cp "$T/config.orig" "$T/config"
+pass "bad update_check and auto_sync values are errors"
 
 # Case 21
 info "Case 21: pull helper: toplevel check and stall bounds"
@@ -525,7 +387,7 @@ if grep -q ' pull ' "$T/gitcalls"; then fail "pull attempted in a non-root direc
 rm -f "$T/gitcalls"
 PATH="$T/gitbin:$PATH_ORIG" bash -c "
     source '$ROOT_DIR/lib/logging.sh'; source '$ROOT_DIR/lib/sync.sh'
-    SYNC_AUTO=true; sync_pull_repo '$T/outer' >/dev/null 2>&1"
+    SYNC_BATCH=true; sync_pull_repo '$T/outer' >/dev/null 2>&1"
 CALL=$(grep ' pull ' "$T/gitcalls") || fail "no pull recorded"
 for want in 'http.lowSpeedLimit=1000' 'http.lowSpeedTime=30' 'ConnectTimeout=10' 'ServerAliveInterval=15' 'ServerAliveCountMax=2' 'BatchMode=yes'; do
     [[ "$CALL" == *"$want"* ]] || fail "pull lacks $want: $CALL"
@@ -533,7 +395,7 @@ done
 rm -f "$T/gitcalls"
 PATH="$T/gitbin:$PATH_ORIG" bash -c "
     source '$ROOT_DIR/lib/logging.sh'; source '$ROOT_DIR/lib/sync.sh'
-    SYNC_AUTO=false; sync_pull_repo '$T/outer' >/dev/null 2>&1"
+    SYNC_BATCH=false; sync_pull_repo '$T/outer' >/dev/null 2>&1"
 CALL=$(grep ' pull ' "$T/gitcalls") || fail "no pull recorded"
 [[ "$CALL" == *ConnectTimeout=10* && "$CALL" != *BatchMode* ]] || fail "interactive ssh options wrong: $CALL"
 pass "non-root dirs skipped; pull is bounded"
@@ -547,9 +409,9 @@ cp "$WORK/bin/dotfiles" "$NOSETSID/dotfiles"
 rm -f "$WORK/calls" "$STATE/launch.log"
 echo "dotfiles: hello" > "$STATE/report"
 LOGIN_OUT=$(PATH="$NOSETSID" bash --norc --noprofile -i -c "source '$DROPIN'" 2>/dev/null)
-[[ "$LOGIN_OUT" == *"dotfiles: hello"* ]] || fail "report not shown: $LOGIN_OUT"
-for _ in $(seq 1 20); do grep -q 'pull --auto' "$WORK/calls" 2>/dev/null && break; sleep 0.1; done
-grep -q 'pull --auto' "$WORK/calls" || fail "background sync not started without setsid"
+[[ "$LOGIN_OUT" == "dotfiles: hello" ]] || fail "login output should be just the report: $LOGIN_OUT"
+for _ in $(seq 1 20); do [[ -s "$WORK/calls" ]] && break; sleep 0.1; done
+[[ "$(cat "$WORK/calls")" == "check-updates" ]] || fail "check not started without setsid: $(cat "$WORK/calls" 2>&1)"
 [[ -e "$STATE/launch.log" ]] || fail "launch.log not written"
 pass "drop-in falls back when setsid is missing"
 
@@ -559,7 +421,6 @@ fresh_env() {
     export HOME="$T/home$1" STATE_DIR="$T/state$1" XDG_STATE_HOME="$T/xdg-state$1"
     mkdir -p "$HOME" "$STATE_DIR/apps"
     STATE="$XDG_STATE_HOME/dotfiles"
-    LOG="$STATE/last-sync.log"
 }
 # A config using the pendingtest profile (no host.yaml for "nohost")
 cat > "$T/config-pt" <<EOF
@@ -567,35 +428,13 @@ hosts_dir: $T/hosts-dir
 hostname: nohost
 profile: pendingtest
 EOF
-# Run --auto with a stdin that is open but never delivers data, so anything
-# reading it would block; timeout 20 turns a hang into RC=124.
-# setsid drops any controlling terminal (as the login drop-in does), so a test run
-# from a terminal still reaches the no-terminal path of the sudo probe.
-STDIN_FIFO="$T/stdin.fifo"
-mkfifo "$STDIN_FIFO"
-DETACH=()
-command -v setsid >/dev/null 2>&1 && DETACH=(setsid -w)
-NO_TTY_POSSIBLE=true
-if [[ ${#DETACH[@]} -eq 0 ]] && { : </dev/tty; } 2>/dev/null; then NO_TTY_POSSIBLE=false; fi
-auto_blocking_stdin() {
-    local writer
-    sleep 60 > "$STDIN_FIFO" &
-    writer=$!
-    RC=0
-    OUT=$(PATH="$SUDOBIN:$PATH_ORIG" timeout 20 ${DETACH[@]+"${DETACH[@]}"} "$WORK/dotfiles/dotfiles" \
-        pull --auto --no-backup < "$STDIN_FIFO" 2>&1) || RC=$?
-    kill "$writer" 2>/dev/null || true
-    wait "$writer" 2>/dev/null || true
-}
-HAVE_SUDO_PM=false
-command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 && HAVE_SUDO_PM=true
 
 # Case 23
 info "Case 23: pending reminder at every terminal, report only once"
 LOGIN_SRC="$WORK/dotfiles/lib/login.sh"
 REMINDER="dotfiles: lazygit, htop not installed (needs sudo) — run 'dotfiles pull'"
 login_run() {
-    LOGIN_OUT=$(DOTFILES_NO_AUTO_SYNC=1 PATH="$PATH_ORIG" bash --norc --noprofile -i -c "source '$LOGIN_SRC'" 2>/dev/null)
+    LOGIN_OUT=$(DOTFILES_NO_UPDATE_CHECK=1 PATH="$PATH_ORIG" bash --norc --noprofile -i -c "source '$LOGIN_SRC'" 2>/dev/null)
 }
 mkdir -p "$STATE"
 printf 'lazygit\nhtop\n' > "$STATE/pending"
@@ -617,85 +456,6 @@ login_run
 [[ -z "$LOGIN_OUT" ]] || fail "output without pending file: $LOGIN_OUT"
 pass "reminder at every shell while pending; report once; silent when nothing pending"
 
-# Case 24
-info "Case 24: a sudo that would prompt does not hang or install"
-fresh_env 5
-SUDOBIN="$T/promptsudo"
-mkdir -p "$SUDOBIN"
-cat > "$SUDOBIN/sudo" <<EOS
-#!/bin/sh
-# -n branch blocks on stdin unless it is /dev/null
-if [ "\$1" = "-n" ]; then read -r _; exit 1; fi
-echo "\$*" >> "$T/sudo-installs"
-exit 0
-EOS
-chmod +x "$SUDOBIN/sudo"
-rm -f "$T/sudo-installs"
-DOTFILES_CONFIG="$T/config-pt" auto_blocking_stdin
-[[ $RC -ne 124 ]] || fail "--auto hung on the sudo probe"
-[[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
-[[ ! -e "$T/sudo-installs" ]] || fail "install ran without passwordless sudo: $(cat "$T/sudo-installs")"
-if grep -q "passwordless sudo" "$LOG"; then fail "probe treated a failing sudo as passwordless"; fi
-grep -qx nonexistent-pkg "$STATE/pending" || fail "pending lacks nonexistent-pkg: $(cat "$STATE/pending")"
-pass "prompting sudo: no hang, check-only"
-
-# Case 25
-info "Case 25: passwordless sudo installs in the background"
-fresh_env 6
-SUDOBIN="$T/pwlsudo"
-mkdir -p "$SUDOBIN"
-cat > "$SUDOBIN/sudo" <<EOS
-#!/bin/sh
-if [ "\$1" = "-n" ] && [ "\$2" = "true" ]; then exit 0; fi
-echo "\$*" >> "$T/sudo-installs"
-# Blocks unless stdin is /dev/null
-cat >/dev/null
-exit 0
-EOS
-chmod +x "$SUDOBIN/sudo"
-rm -f "$T/sudo-installs" "$T/marker"
-if [[ "$NO_TTY_POSSIBLE" == true ]]; then
-    DOTFILES_TEST_SUDO=1 DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-pt" auto_blocking_stdin
-    [[ $RC -ne 124 ]] || fail "--auto hung during installs"
-    [[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
-    grep -q "passwordless sudo: installing packages" "$LOG" || fail "log lacks the passwordless note: $(cat "$LOG")"
-    if [[ "$HAVE_SUDO_PM" == true ]]; then
-        grep -q "^-n .*install.*dotfiles-nonexistent-pkg" "$T/sudo-installs" 2>/dev/null \
-            || fail "no sudo -n OS package install recorded: $(cat "$T/sudo-installs" 2>&1)"
-        if command -v apt-get >/dev/null 2>&1; then
-            grep -q "^-n DEBIAN_FRONTEND=noninteractive apt-get install" "$T/sudo-installs" \
-                || fail "apt install not noninteractive: $(cat "$T/sudo-installs")"
-        fi
-    else
-        info "no apt-get/dnf: OS package install check skipped"
-    fi
-    [[ -e "$T/marker" ]] || fail "custom install script did not run"
-    grep -qx -- "-n testtool-install" "$T/sudo-installs" \
-        || fail "custom installer's sudo did not get -n: $(cat "$T/sudo-installs" 2>&1)"
-    if grep -v '^-n ' "$T/sudo-installs"; then fail "a sudo call under --auto lacked -n"; fi
-    [[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in deployed although check still fails"
-    grep -qx faketool "$STATE/pending" || fail "faketool should stay pending (check fails): $(cat "$STATE/pending")"
-    pass "passwordless sudo: OS packages and custom scripts installed with sudo -n, stdin closed"
-else
-    info "Case 25 skipped: no setsid and a terminal is attached"
-fi
-
-# Case 25b
-info "Case 25b: passwordless sudo but a terminal attached stays check-only"
-fresh_env 8
-SUDOBIN="$T/pwlsudo"
-rm -f "$T/sudo-installs" "$T/marker"
-DOTFILES_TEST_HAS_TTY=1 DOTFILES_TEST_SUDO=1 DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-pt" \
-    auto_blocking_stdin
-[[ $RC -ne 124 ]] || fail "--auto hung with a terminal attached"
-[[ $RC -eq 0 ]] || fail "--auto failed ($RC): $OUT / $(cat "$LOG" 2>&1)"
-if grep -q "passwordless sudo" "$LOG"; then fail "installed although a terminal is attached: $(cat "$LOG")"; fi
-[[ ! -e "$T/sudo-installs" ]] || fail "sudo install ran with a terminal attached: $(cat "$T/sudo-installs")"
-[[ ! -e "$T/marker" ]] || fail "custom install script ran with a terminal attached"
-grep -qx nonexistent-pkg "$STATE/pending" || fail "pending lacks nonexistent-pkg: $(cat "$STATE/pending")"
-grep -qx faketool "$STATE/pending" || fail "pending lacks faketool: $(cat "$STATE/pending")"
-pass "terminal attached: --auto stays check-only even with passwordless sudo"
-
 # Case 26
 info "Case 26: a custom drop-in is held until its check passes"
 fresh_env 7
@@ -707,11 +467,6 @@ DOTFILES_TEST_MARKER="$T/marker" DOTFILES_CONFIG="$T/config-dt" run pull --no-fe
 [[ -e "$T/marker" ]] || fail "interactive sync did not run the install script: $OUT"
 [[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "interactive: drop-in deployed although check fails"
 [[ "$OUT" == *"faketool: drop-in held until the tool is installed"* ]] || fail "interactive: no held message: $OUT"
-age_last_sync
-DOTFILES_CONFIG="$T/config-dt" run pull --auto --no-fetch
-[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
-[[ ! -e "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "--auto: drop-in deployed although check fails"
-grep -q "faketool: drop-in held until the tool is installed" "$LOG" || fail "--auto: no held message: $(cat "$LOG")"
 sed -i 's/^      check: false$/      check: true/' "$T/hosts-dt/profiles/pendingtest.yaml"
 DOTFILES_CONFIG="$T/config-dt" run pull --no-fetch
 [[ -f "$HOME/.bashrc.d/50-testtool.sh" ]] || fail "drop-in not deployed once check passes: $OUT"
@@ -727,7 +482,7 @@ echo "dotfiles: stale" > "$STATE/pending"
 DOTFILES_CONFIG="$T/config-dt" run pull --no-fetch --profile onlytool
 [[ $RC -eq 0 ]] || fail "onlytool sync failed: $OUT"
 [[ -e "$STATE/pending" && ! -s "$STATE/pending" ]] || fail "pending not emptied: $(cat "$STATE/pending" 2>&1)"
-pass "drop-in held while check fails (interactive and --auto), deployed once it passes"
+pass "drop-in held while check fails, deployed once it passes"
 
 # Skipping a sync when nothing changed. ~/.vimrc is the probe: a full sync puts
 # a deleted copy back, a skipped sync leaves it missing.
@@ -933,23 +688,6 @@ fp_run uninstall --dry-run
 expect_skip pull
 pass "uninstall clears the record, its dry run does not"
 
-# Case 37
-info "Case 37: --auto skips when it can, but never records a sync as complete"
-age_last_sync
-rm -f "$VIMRC"
-DOTFILES_CONFIG="$T/config-fp" run pull --auto
-[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
-[[ ! -f "$VIMRC" ]] || fail "--auto ran in full on an unchanged system: $(cat "$LOG")"
-[[ -n "$(find "$STATE/last-sync" -mmin -1)" ]] || fail "skipped --auto did not update last-sync"
-fresh_env 10
-VIMRC="$HOME/.vimrc"
-DOTFILES_CONFIG="$T/config-fp" run pull --auto
-[[ $RC -eq 0 ]] || fail "--auto failed: $OUT / $(cat "$LOG")"
-[[ -f "$VIMRC" ]] || fail "first --auto did not deploy: $(cat "$LOG")"
-expect_full pull
-expect_skip pull
-pass "--auto can skip, and a sync after --auto still does the full work"
-
 # Case 38
 info "Case 38: a repo without git history is never skipped"
 fresh_env 11
@@ -1045,7 +783,11 @@ fp_run sync --dry-run </dev/null
 pass "sync --dry-run: pull --dry-run, add skipped"
 
 # Case 45
-info "Case 45: sync takes no --auto; push is gone; --no-pull is unknown"
+info "Case 45: pull takes no --auto; push is gone; --no-pull is unknown"
+rm -f "$VIMRC"
+fp_run pull --auto </dev/null
+[[ $RC -eq 1 && "$OUT" == *"Unknown option: --auto"* ]] || fail "pull --auto: rc=$RC: $OUT"
+[[ ! -f "$VIMRC" && ! -e "$STATE/last-check" ]] || fail "pull --auto deployed or checked: $OUT"
 fp_run sync --auto </dev/null
 [[ $RC -eq 1 && "$OUT" == *"Unknown option: --auto"* ]] || fail "sync --auto: rc=$RC: $OUT"
 fp_run push x
@@ -1054,7 +796,248 @@ fp_run pull --no-pull
 [[ $RC -eq 1 && "$OUT" == *"Unknown option: --no-pull"* ]] || fail "pull --no-pull: rc=$RC: $OUT"
 fp_run sync --no-pull </dev/null
 [[ $RC -eq 1 && "$OUT" == *"Unknown option: --no-pull"* ]] || fail "sync --no-pull: rc=$RC: $OUT"
-pass "--auto only on pull, push replaced, --no-pull rejected"
+pass "--auto rejected everywhere, push replaced, --no-pull rejected"
+
+# The update check: fetch, count, report. It never deploys or installs.
+fresh_env 20
+CU_BIN="$T/cubin"
+mkdir -p "$CU_BIN"
+for tool in apt-get apt dnf yum brew pacman sudo; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/pkgcalls"\nexit 1\n' "$tool" "$T" > "$CU_BIN/$tool"
+    chmod +x "$CU_BIN/$tool"
+done
+cat > "$T/config-cu" <<EOF
+hosts_dir: $HOSTS_FP
+hostname: nohost
+profile: fptest
+EOF
+cu_run() {
+    RC=0
+    OUT=$(DOTFILES_CONFIG="${CU_CFG:-$T/config-cu}" PATH="$CU_BIN:$PATH" "${CU_CMD:-$WORK/dotfiles/dotfiles}" check-updates </dev/null 2>&1) || RC=$?
+}
+age_check() { touch -d '5 hours ago' "$STATE/last-check"; }
+cu_head() { git -C "$WORK/dotfiles" rev-parse HEAD; }
+cu_tracking() { git -C "$WORK/dotfiles" rev-parse '@{u}'; }
+CU_BRANCH=$(git -C "$WORK/dotfiles" symbolic-ref --short HEAD)
+git -C "$WORK/dotfiles" reset -q --hard
+git -C "$WORK/dotfiles" clean -fdq
+git -C "$WORK/dotfiles" fetch -q
+git -C "$WORK/dotfiles" reset -q --hard '@{u}'
+
+# Case 46
+info "Case 46: an upstream commit ahead is reported, and nothing else happens"
+author_commit CUNEW one
+HEAD_BEFORE=$(cu_head)
+rm -f "$T/pkgcalls"
+cu_run
+[[ $RC -eq 0 ]] || fail "check-updates failed: $OUT"
+[[ -z "$OUT" ]] || fail "check-updates should be silent: $OUT"
+[[ -s "$STATE/report" ]] || fail "no report"
+grep -q 'updates available' "$STATE/report" || fail "report lacks 'updates available': $(cat "$STATE/report")"
+grep -q "dotfiles pull" "$STATE/report" || fail "report lacks 'dotfiles pull': $(cat "$STATE/report")"
+[[ "$(wc -l < "$STATE/report")" -eq 1 ]] || fail "report should be one line: $(cat "$STATE/report")"
+[[ "$(cu_head)" == "$HEAD_BEFORE" ]] || fail "HEAD moved"
+[[ ! -e "$WORK/dotfiles/CUNEW" ]] || fail "the new commit reached the working tree"
+[[ "$(git -C "$WORK/dotfiles" rev-list --count 'HEAD..@{u}')" == 1 ]] || fail "the upstream commit was not fetched"
+[[ -z "$(git -C "$WORK/dotfiles" status --porcelain)" ]] || fail "working tree changed"
+[[ -z "$(find "$HOME" -mindepth 1 2>/dev/null)" ]] || fail "files appeared under HOME: $(find "$HOME" -mindepth 1)"
+[[ ! -e "$T/pkgcalls" ]] || fail "a package command ran: $(cat "$T/pkgcalls")"
+[[ -e "$STATE/last-check" ]] || fail "no last-check"
+[[ ! -e "$STATE/last-sync" && ! -e "$STATE/pending" ]] || fail "check-updates touched pull's state"
+[[ ! -d "$STATE/lock.d" ]] || fail "lock left behind"
+if [[ "$HAVE_FLOCK" == true ]]; then flock -n "$STATE/lock" true || fail "lock still held"; fi
+pass "report written; HEAD, tree, HOME and packages untouched"
+
+# Case 47
+info "Case 47: a second run inside the interval does nothing"
+rm -f "$STATE/report"
+author_commit CUNEW2 two
+TRACK_BEFORE=$(cu_tracking)
+CHECK_MTIME=$(stat -c %Y "$STATE/last-check")
+cu_run
+[[ $RC -eq 0 && -z "$OUT" ]] || fail "throttled run: rc=$RC: $OUT"
+[[ ! -e "$STATE/report" ]] || fail "throttled run wrote a report"
+[[ "$(cu_tracking)" == "$TRACK_BEFORE" ]] || fail "throttled run fetched"
+[[ "$(stat -c %Y "$STATE/last-check")" == "$CHECK_MTIME" ]] || fail "throttled run touched last-check"
+age_check
+cu_run
+[[ -s "$STATE/report" ]] || fail "no report once the interval passed"
+[[ "$(cu_tracking)" != "$TRACK_BEFORE" ]] || fail "no fetch once the interval passed"
+[[ -n "$(find "$STATE/last-check" -mmin -1)" ]] || fail "last-check not touched"
+pass "throttled by last-check, runs again when it is old"
+
+# Case 48
+info "Case 48: update_check_interval is the boundary; the default is 4h"
+cp "$T/config-cu" "$T/config-cu30"
+echo "update_check_interval: 30m" >> "$T/config-cu30"
+rm -f "$STATE/report"
+touch -d '29 minutes ago' "$STATE/last-check"
+CU_CFG="$T/config-cu30" cu_run
+[[ ! -e "$STATE/report" ]] || fail "ran 29m after the last check with a 30m interval"
+touch -d '31 minutes ago' "$STATE/last-check"
+CU_CFG="$T/config-cu30" cu_run
+[[ -s "$STATE/report" ]] || fail "did not run 31m after the last check with a 30m interval"
+rm -f "$STATE/report"
+touch -d '3 hours ago' "$STATE/last-check"
+author_commit CUNEW3 three
+cu_run
+[[ ! -e "$STATE/report" ]] || fail "default interval is shorter than 4h"
+touch -d '+2 days' "$STATE/last-check"
+cu_run
+[[ -s "$STATE/report" ]] || fail "a last-check in the future (clock skew) blocked the check"
+rm -f "$STATE/last-check"
+rm -f "$STATE/report"
+cu_run
+[[ -s "$STATE/report" ]] || fail "first run (no last-check) did not check"
+pass "interval boundary, default, clock skew and first run"
+
+# Case 49
+info "Case 49: update_check off does nothing, under both key names"
+for key in update_check auto_sync; do
+    cp "$T/config-cu" "$T/config-cu-off"
+    echo "$key: off" >> "$T/config-cu-off"
+    rm -f "$STATE/report"
+    age_check
+    author_commit "CUOFF-$key" off
+    TRACK_BEFORE=$(cu_tracking)
+    CHECK_MTIME=$(stat -c %Y "$STATE/last-check")
+    CU_CFG="$T/config-cu-off" cu_run
+    [[ $RC -eq 0 && -z "$OUT" ]] || fail "$key off: rc=$RC: $OUT"
+    [[ ! -e "$STATE/report" ]] || fail "$key off wrote a report"
+    [[ "$(cu_tracking)" == "$TRACK_BEFORE" ]] || fail "$key off fetched"
+    [[ "$(stat -c %Y "$STATE/last-check")" == "$CHECK_MTIME" ]] || fail "$key off touched last-check"
+done
+cp "$T/config-cu" "$T/config-cu-alias"
+echo "auto_sync_interval: 10m" >> "$T/config-cu-alias"
+touch -d '11 minutes ago' "$STATE/last-check"
+CU_CFG="$T/config-cu-alias" cu_run
+[[ -s "$STATE/report" ]] || fail "auto_sync_interval alias ignored"
+pass "off respected; old key names still work"
+
+# Case 50
+info "Case 50: a bad config writes no report and exits 1"
+rm -f "$STATE/report"
+age_check
+cp "$T/config-cu" "$T/config-cu-bad"
+echo "update_check: maybe" >> "$T/config-cu-bad"
+CU_CFG="$T/config-cu-bad" cu_run
+[[ $RC -eq 1 && "$OUT" == *"update_check must be"* ]] || fail "bad config: rc=$RC: $OUT"
+[[ ! -e "$STATE/report" ]] || fail "bad config wrote a report"
+pass "bad config is an error, not a report"
+
+# Case 51
+info "Case 51: nothing to report when up to date; an old report is left alone"
+git -C "$WORK/dotfiles" pull -q --ff-only
+age_check
+echo "dotfiles: older report" > "$STATE/report"
+cu_run
+[[ $RC -eq 0 && -z "$OUT" ]] || fail "up to date: rc=$RC: $OUT"
+[[ "$(cat "$STATE/report")" == "dotfiles: older report" ]] || fail "report changed when up to date: $(cat "$STATE/report")"
+rm -f "$STATE/report"
+age_check
+cu_run
+[[ ! -e "$STATE/report" ]] || fail "report written when up to date"
+pass "up to date: no report"
+
+# Case 52
+info "Case 52: a pinned repo is not checked"
+author_commit CUPIN one
+git -C "$WORK/dotfiles" checkout -q --detach
+TRACK_BEFORE=$(git -C "$WORK/dotfiles" rev-parse origin/"$CU_BRANCH")
+age_check
+rm -f "$STATE/report"
+cu_run
+[[ $RC -eq 0 && -z "$OUT" ]] || fail "pinned: rc=$RC: $OUT"
+[[ ! -e "$STATE/report" ]] || fail "pinned repo reported: $(cat "$STATE/report")"
+[[ "$(git -C "$WORK/dotfiles" rev-parse origin/"$CU_BRANCH")" == "$TRACK_BEFORE" ]] || fail "pinned repo was fetched"
+git -C "$WORK/dotfiles" checkout -q "$CU_BRANCH"
+git -C "$WORK/dotfiles" pull -q --ff-only
+pass "pinned: no fetch, no report"
+
+# Case 53
+info "Case 53: no git, or no upstream, writes no report"
+copy_tree "$WORK/dotfiles" "$T/cu-nogit"
+copy_tree "$HOSTS_FP" "$T/cu-hosts-nogit"
+sed "s#^hosts_dir: .*#hosts_dir: $T/cu-hosts-nogit#" "$T/config-cu" > "$T/config-cu-nogit"
+rm -f "$STATE/report" "$STATE/last-check"
+CU_CMD="$T/cu-nogit/dotfiles" CU_CFG="$T/config-cu-nogit" cu_run
+[[ $RC -eq 0 && -z "$OUT" ]] || fail "no git: rc=$RC: $OUT"
+[[ ! -e "$STATE/report" ]] || fail "no git: report written"
+# A repo without an upstream (own history, no remote), with a hosts repo without one too
+copy_tree "$WORK/dotfiles" "$T/cu-noup"
+git -C "$T/cu-noup" init -q
+git -C "$T/cu-noup" add -A
+git -C "$T/cu-noup" -c user.name=tester -c user.email=tester@example.com commit -q -m init
+rm -f "$STATE/report" "$STATE/last-check"
+CU_CMD="$T/cu-noup/dotfiles" cu_run
+[[ $RC -eq 0 && -z "$OUT" ]] || fail "no upstream: rc=$RC: $OUT"
+[[ ! -e "$STATE/report" ]] || fail "no upstream: report written"
+# A copy inside another repo's tree is not a checkout of its own
+mkdir -p "$WORK/dotfiles/cu-sub"
+copy_tree "$T/cu-nogit" "$WORK/dotfiles/cu-sub"
+rm -f "$STATE/last-check"
+CU_CMD="$WORK/dotfiles/cu-sub/dotfiles" cu_run
+[[ $RC -eq 0 && ! -e "$STATE/report" ]] || fail "nested copy: rc=$RC report=$(cat "$STATE/report" 2>&1)"
+rm -rf "$WORK/dotfiles/cu-sub"
+pass "no git / no upstream / nested copy: silent, no report"
+
+# Case 54
+info "Case 54: a failed fetch writes no report"
+author_commit CUFAIL one
+REAL_URL=$(git -C "$WORK/dotfiles" remote get-url origin)
+git -C "$WORK/dotfiles" remote set-url origin "$T/does-not-exist.git"
+age_check
+rm -f "$STATE/report"
+HEAD_BEFORE=$(cu_head)
+cu_run
+[[ $RC -eq 0 && -z "$OUT" ]] || fail "failed fetch: rc=$RC: $OUT"
+[[ ! -e "$STATE/report" ]] || fail "failed fetch wrote a report"
+[[ -n "$(find "$STATE/last-check" -mmin -1)" ]] || fail "a failed attempt should still count against the interval"
+[[ "$(cu_head)" == "$HEAD_BEFORE" ]] || fail "HEAD moved"
+git -C "$WORK/dotfiles" remote set-url origin "$REAL_URL"
+pass "failed fetch: silent, no report"
+
+# Case 55
+info "Case 55: the hosts repo is checked too, and named in the report"
+git clone -q --bare "$HOSTS_FP" "$T/hosts-origin.git"
+git clone -q "$T/hosts-origin.git" "$T/hosts-up"
+git clone -q "$T/hosts-origin.git" "$T/hosts-author"
+git -C "$WORK/dotfiles" pull -q --ff-only
+cat > "$T/config-cu-up" <<EOF
+hosts_dir: $T/hosts-up
+hostname: nohost
+profile: fptest
+EOF
+echo hosts-new > "$T/hosts-author/NEWFILE"
+git -C "$T/hosts-author" add NEWFILE
+git -C "$T/hosts-author" -c user.name=tester -c user.email=tester@example.com commit -q -m "hosts news"
+git -C "$T/hosts-author" push -q origin HEAD
+HOSTS_HEAD=$(git -C "$T/hosts-up" rev-parse HEAD)
+age_check
+rm -f "$STATE/report"
+CU_CFG="$T/config-cu-up" cu_run
+[[ $RC -eq 0 && -s "$STATE/report" ]] || fail "hosts update not reported: rc=$RC: $OUT"
+grep -q 'updates available' "$STATE/report" && grep -q 'hosts' "$STATE/report" && grep -q 'dotfiles pull' "$STATE/report" \
+    || fail "report does not name the hosts repo: $(cat "$STATE/report")"
+if grep -q 'updates available (dotfiles' "$STATE/report"; then fail "dotfiles repo named although it is up to date: $(cat "$STATE/report")"; fi
+[[ "$(git -C "$T/hosts-up" rev-parse HEAD)" == "$HOSTS_HEAD" ]] || fail "hosts HEAD moved"
+[[ ! -e "$T/hosts-up/NEWFILE" ]] || fail "hosts working tree changed"
+# Both repos ahead: both named
+author_commit CUBOTH one
+age_check
+rm -f "$STATE/report"
+CU_CFG="$T/config-cu-up" cu_run
+grep -q 'dotfiles' "$STATE/report" && grep -q 'hosts' "$STATE/report" || fail "both repos not named: $(cat "$STATE/report")"
+pass "hosts repo reported; both named when both are ahead"
+
+# Case 56
+info "Case 56: a missing hosts dir does not stop the dotfiles repo being checked"
+sed "s#^hosts_dir: .*#hosts_dir: $T/no-such-hosts#" "$T/config-cu" > "$T/config-cu-nohosts"
+age_check
+rm -f "$STATE/report"
+CU_CFG="$T/config-cu-nohosts" cu_run
+[[ $RC -eq 0 && -s "$STATE/report" ]] || fail "missing hosts dir: rc=$RC: $OUT report=$(cat "$STATE/report" 2>&1)"
+pass "missing hosts dir is skipped"
 
 echo
 echo "All sync tests passed"

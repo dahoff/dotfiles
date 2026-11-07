@@ -49,7 +49,7 @@ printf '%s\n' "$OUT" | grep -qF "Usage: dotfiles pull --remote" || fail "no usag
 pass "pull --remote without HOST: usage error"
 
 info "Case 1b: init flags without init --remote are a usage error"
-for args in "--hostname x" "--profile p" "--yes" "--auto-sync on" "--interval 4h"; do
+for args in "--hostname x" "--profile p" "--yes" "--update-check on" "--interval 4h"; do
     # shellcheck disable=SC2086
     run pull --remote $args testuser@localhost
     [[ $RC -eq 1 ]] || fail "pull --remote $args: expected exit 1, got $RC: $OUT"
@@ -84,12 +84,13 @@ while IFS='|' read -r flag value want; do
     [[ ! -e "$T/ssh-called" ]] || fail "$flag '$value': the host was contacted: $OUT"
 done <<'CASES'
 --interval|10x|interval must be <n>m, <n>h or <n>d: 10x
---auto-sync|maybe|auto sync must be 'on' or 'off': maybe
+--update-check|maybe|update check must be 'on' or 'off': maybe
 --hostname|a/b|invalid hostname 'a/b'
 --profile|a/b|invalid profile name 'a/b'
+--auto-sync|on|Unknown option: --auto-sync
 CASES
 # Control: well-formed values do go on to the host
-push_fake_ssh --interval 4h --auto-sync on --hostname h1 --profile whatever
+push_fake_ssh --interval 4h --update-check on --hostname h1 --profile whatever
 [[ -e "$T/ssh-called" ]] || fail "valid flags should reach the host: $OUT"
 pass "invalid init flags refused locally"
 
@@ -145,6 +146,8 @@ fake_run pull testuser@h1 --remote --force
 fake_run init --remote --yes --hostname h1 testuser@h1
 [[ $RC -eq 0 ]] || fail "init --remote: exit $RC: $OUT"
 [[ "$(last_ssh)" == *"'/r/dotfiles/dotfiles' init '--yes' '--hostname' 'h1'" ]] || fail "wrong remote init command: $(last_ssh)"
+fake_run init --remote --yes --update-check off --interval 2h testuser@h1
+[[ $RC -eq 0 && "$(last_ssh)" == *"init '--yes' '--update-check' 'off' '--interval' '2h'" ]] || fail "update check not forwarded: rc=$RC $(last_ssh)"
 fake_run init --remote --force testuser@h1
 [[ $RC -eq 0 && "$(last_ssh)" != *--force* ]] || fail "init --remote --force: rc=$RC, remote command: $(last_ssh)"
 pass "remote pull and init command lines, --force forwarded to pull"

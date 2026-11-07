@@ -4,9 +4,10 @@
 
 # Commands run by the single EXIT trap in dotfiles (e.g. removing the mkdir lock)
 declare -a SYNC_CLEANUP=()
-# Warnings recorded during sync, for the --auto report
+# Warnings recorded during a pull, listed in its summary
 declare -a SYNC_WARNINGS=()
-SYNC_AUTO="${SYNC_AUTO:-false}"
+# BatchMode for ssh: the background update check must never prompt
+SYNC_BATCH="${SYNC_BATCH:-false}"
 
 # Print the state directory, creating it
 sync_state_dir() {
@@ -53,7 +54,7 @@ sync_git_bounded() {
     local -a envs=(GIT_TERMINAL_PROMPT=0)
     if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
         local ssh_cmd="ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
-        [[ "$SYNC_AUTO" == true ]] && ssh_cmd+=" -o BatchMode=yes"
+        [[ "$SYNC_BATCH" == true ]] && ssh_cmd+=" -o BatchMode=yes"
         envs+=("GIT_SSH_COMMAND=$ssh_cmd")
     fi
     local -a wrap=()
@@ -189,12 +190,11 @@ sync_is_complete() {
 }
 
 # Record a finished sync, if the next one may be skipped: nothing failed or is
-# pending, and no custom script without a check (those run on every sync). An
-# --auto run does not count: it skips git-setup and may skip installs.
-# Reads globals EXIT_CODE, PENDING, SYNC_AUTO, PKG_NAMES and PKG_CUSTOM_*.
+# pending, and no custom script without a check (those run on every sync).
+# Reads globals EXIT_CODE, PENDING, PKG_NAMES and PKG_CUSTOM_*.
 sync_record_complete() {
     local fingerprint="$1" idx
-    [[ -n "$fingerprint" && "$EXIT_CODE" -eq 0 && ${#PENDING[@]} -eq 0 && "$SYNC_AUTO" != true ]] || return 0
+    [[ -n "$fingerprint" && "$EXIT_CODE" -eq 0 && ${#PENDING[@]} -eq 0 ]] || return 0
     for idx in "${!PKG_NAMES[@]}"; do
         [[ -n "${PKG_CUSTOM_SCRIPT[$idx]}" && -z "${PKG_CUSTOM_CHECK[$idx]}" ]] && return 0
     done
@@ -206,18 +206,18 @@ sync_mtime() {
     stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
-# For --auto: succeed if a sync should run now.
-# Fails when auto_sync is off, or last-sync is younger than AUTO_SYNC_SECONDS.
-# Reads globals AUTO_SYNC and AUTO_SYNC_SECONDS.
-sync_should_run_auto() {
-    [[ "${AUTO_SYNC:-on}" == "off" ]] && return 1
+# Succeed if an update check should run now.
+# Fails when update_check is off, or last-check is younger than UPDATE_CHECK_SECONDS.
+# Reads globals UPDATE_CHECK and UPDATE_CHECK_SECONDS.
+sync_check_due() {
+    [[ "${UPDATE_CHECK:-on}" == "off" ]] && return 1
     local dir last now
     dir=$(sync_state_dir)
-    [[ -e "$dir/last-sync" ]] || return 0
-    last=$(sync_mtime "$dir/last-sync") || return 0
+    [[ -e "$dir/last-check" ]] || return 0
+    last=$(sync_mtime "$dir/last-check") || return 0
     now=$(date +%s)
-    # A negative age (mtime in the future, clock skew) runs the sync
-    (( now >= last && now - last < AUTO_SYNC_SECONDS )) && return 1
+    # A negative age (mtime in the future, clock skew) runs the check
+    (( now >= last && now - last < UPDATE_CHECK_SECONDS )) && return 1
     return 0
 }
 
@@ -230,44 +230,43 @@ sync_join() {
     printf '%s' "$out"
 }
 
-# Write <state>/report for --auto, or remove it when there is nothing to say.
-# Usage: sync_write_report LOG UPDATED_CSV
-#   LOG          path shown in "see <log>" suffixes
-#   UPDATED_CSV  comma-separated names of updated apps ("" if none)
-# Warnings come from the global SYNC_WARNINGS, failures from FAIL entries in
-# the global RESULTS ("target|item|FAIL"). Lines, in order: updated, pull
-# warnings, failed. Pending packages are not reported here: the login drop-in
-# reminds about them at every terminal. Written to report.tmp, then moved into place.
-sync_write_report() {
-    local log="$1" updated_csv="${2:-}"
-    local dir report tmp
+# Fetch one repo and print how many commits its upstream has that HEAD lacks.
+# Fails, printing nothing, for anything that cannot be told: not a checkout of its
+# own (no git, or a copy inside another repo), pinned, no upstream, or a failed fetch.
+# Usage: sync_updates_behind PATH
+sync_updates_behind() {
+    local path="$1"
+    versions_is_checkout "$path" || return 1
+    ! versions_is_pinned "$path" || return 1
+    git -C "$path" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || return 1
+    sync_git_bounded "$path" fetch --quiet </dev/null 9>&- >/dev/null 2>&1 || return 1
+    git -C "$path" rev-list --count 'HEAD..@{u}' 2>/dev/null
+}
+
+# The background update check: fetch the dotfiles and hosts repos and, when either has
+# new commits upstream, write <state>/report. Never changes HEAD, the working tree,
+# the live files or any package; the login drop-in shows the report once.
+# Throttled on <state>/last-check, which is touched by every attempt, a failed fetch
+# included, so an offline machine does not retry at every terminal. An existing
+# report is left alone when there is nothing new to say.
+# Reads globals DOTFILES_REPO and HOSTS_DIR, and those of sync_check_due.
+sync_check_updates() {
+    sync_check_due || return 0
+    local dir
     dir=$(sync_state_dir)
-    report="$dir/report"
-    tmp="$dir/report.tmp"
-    : > "$tmp"
+    touch "$dir/last-check"
 
-    local -a items=()
-    if [[ -n "$updated_csv" ]]; then
-        IFS=',' read -r -a items <<< "$updated_csv"
-        printf 'dotfiles: updated %s\n' "$(sync_join "${items[@]}")" >> "$tmp"
+    local -a ahead=()
+    local count
+    SYNC_BATCH=true
+    count=$(sync_updates_behind "$DOTFILES_REPO") || count=0
+    [[ "$count" -gt 0 ]] && ahead+=("dotfiles")
+    if [[ -n "$HOSTS_DIR" && -d "$HOSTS_DIR" ]]; then
+        count=$(sync_updates_behind "$HOSTS_DIR") || count=0
+        [[ "$count" -gt 0 ]] && ahead+=("hosts")
     fi
-    local w
-    for w in "${SYNC_WARNINGS[@]}"; do
-        printf 'dotfiles: %s — see %s\n' "$w" "$log" >> "$tmp"
-    done
-    local -a failed=()
-    local result target item status
-    for result in "${RESULTS[@]}"; do
-        IFS='|' read -r target item status <<< "$result"
-        [[ "$status" == "FAIL" ]] && failed+=("$item")
-    done
-    if [[ ${#failed[@]} -gt 0 ]]; then
-        printf 'dotfiles: sync failed (%s) — see %s\n' "$(sync_join "${failed[@]}")" "$log" >> "$tmp"
-    fi
+    [[ ${#ahead[@]} -gt 0 ]] || return 0
 
-    if [[ -s "$tmp" ]]; then
-        mv "$tmp" "$report"
-    else
-        rm -f "$tmp" "$report"
-    fi
+    printf "dotfiles: updates available (%s) — run 'dotfiles pull'\n" "$(sync_join "${ahead[@]}")" > "$dir/report.tmp"
+    mv "$dir/report.tmp" "$dir/report"
 }

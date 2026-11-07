@@ -122,15 +122,13 @@ has_line "~/.local/bin/extract"
 no_line "the repo changed it too"
 pass "edit kept"
 
-info "Case 4: both changed: the edit is kept, flagged, and reaches the auto report"
+info "Case 4: both changed: the edit is kept and flagged in the pull summary"
 echo '# repo update 3' >> "$REPO_EXTRACT"
 commit_repo "update extract"
-rm -f "$XDG_STATE_HOME/dotfiles/last-sync"
-RC=0
-"$R/dotfiles" pull --auto --no-fetch --no-backup >/dev/null 2>&1 </dev/null || RC=$?
-[[ $RC -eq 0 ]] || fail "auto sync failed"
-[[ "$(cat "$EXTRACT")" == "$EDITED" ]] || fail "edit overwritten by auto"
-grep -qF "kept your edit to $EXTRACT" "$XDG_STATE_HOME/dotfiles/report" || fail "not in report"
+run pull --no-fetch
+[[ $RC -eq 0 ]] || fail "pull failed: $OUT"
+[[ "$(cat "$EXTRACT")" == "$EDITED" ]] || fail "edit overwritten by pull"
+has_line "kept your edit to $EXTRACT"
 run status
 has_line "~/.local/bin/extract  (the repo changed it too)"
 pass "conflict kept"

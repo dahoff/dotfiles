@@ -40,11 +40,9 @@ versions_label() {
         || git -C "$1" rev-parse --short HEAD 2>/dev/null
 }
 
-# Warn that sync will not move this machine. Silent for --auto, so new terminals
-# don't repeat it every interval; status still shows the pin.
+# Warn that pull will not move this machine; status shows the pin too.
 # Usage: versions_warn_pinned PATH
 versions_warn_pinned() {
-    [[ "${SYNC_AUTO:-false}" != true ]] || return 0
     versions_is_pinned "$1" || return 0
     log_warn "pinned to $(versions_label "$1"): dotfiles itself will not update (run 'dotfiles checkout $(versions_default_branch "$1")' to follow it)"
 }
