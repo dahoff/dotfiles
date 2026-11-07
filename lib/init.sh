@@ -77,7 +77,7 @@ init_ssh_url_host() {
 }
 
 # Print the path of the public key to use, creating ~/.ssh/id_ed25519 if the
-# user has no key. It has no passphrase: background sync pulls with
+# user has no key. It has no passphrase: the background update check fetches with
 # BatchMode=yes and could not answer one. An existing key is never replaced.
 init_ssh_public_key() {
     local key="$HOME/.ssh/id_ed25519" t

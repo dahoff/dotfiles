@@ -366,7 +366,7 @@ Each managed file, or each key of a merged JSON file, has two saved copies in `<
 - A save to a layer file with uncommitted changes is allowed only if `add` made them; otherwise that target is skipped.
 - Saving a replaced file to a layer that has no copy of it creates one, which masks lower layers from then on. Saving below a layer that already has the file or key is allowed, with a message that the higher layer still wins.
 - A conflict in a replaced file shows your change and the repo's separately; saving the whole file would undo the repo's change, so `add` warns and asks you to confirm. A key you deleted can be dismissed but not saved. An array save hides later repo changes to the list.
-- `add` needs a terminal and has no dry run: answer `n` to look without saving.
+- `add` needs a terminal and has no dry run: answer `k` (or press Enter) to look without saving. The options are `s` save, `d` dismiss, `k` skip (the default) and `q` quit.
 - To resolve a conflict without `add`, take the repo's version with `pull --force PATH`.
 
 ### `~/.bashrc`

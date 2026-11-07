@@ -288,7 +288,7 @@ installer_report_deploy() {
     esac
 }
 
-# Warn, and carry the message to the sync summary and the --auto report
+# Warn, and carry the message to the pull summary
 # Usage: installer_report_warning MESSAGE
 installer_report_warning() {
     log_warn "$1"

@@ -53,6 +53,7 @@ For a host that can't reach the repos. This machine sends its committed repos ov
 
 | Command | What it does |
 |---|---|
+| [`dotfiles status`](#status) | Shows updates available, your edits, conflicts and uncommitted repo files. Changes nothing. |
 | [`dotfiles verify`](#verify-and-help) | Checks that every deployed file exists. |
 | [`dotfiles help`](#verify-and-help) | Lists every command and flag. |
 
@@ -168,7 +169,7 @@ When the review ends, `add` lists what it staged in each repo. Commit and push t
 - Arrays are saved as one value, so a save hides later repo changes to that list.
 - A host with no git (a [remote host](#remote-hosts)) can only dismiss, because the next `pull --remote` would wipe a save.
 - Your own `~/.bashrc.d/*.sh` and `~/.gitconfig.local` are never offered.
-- `add` has no dry run: answer `n` to look without saving.
+- `add` has no dry run: answer `k` (or press Enter) to skip each edit and look without saving. The prompt's options are `s` save, `d` dismiss, `k` skip (the default) and `q` quit.
 
 ### Resolving conflicts
 
@@ -207,7 +208,7 @@ dotfiles pull --remote user@host      # update; --force is passed through
 
 ### uninstall
 
-Removes deployed config and restores your original files. It lists your local changes first and always takes a snapshot, even with `--no-backup`; if that fails, nothing is restored. Installed tools, the `dotfiles` command and drop-ins stay.
+Removes deployed config and restores your original files. It lists your local changes first and always takes a snapshot, even with `--no-backup`; if that fails, nothing is restored. Installed tools and the `dotfiles` command stay. So do `~/.bashrc.d/90-dotfiles.sh` and the drop-ins placed by `install.dropin`; drop-ins listed under an app's `files:` (such as `50-tmux.sh`) are removed or restored like any other file.
 
 ### verify and help
 
@@ -225,6 +226,8 @@ Removes deployed config and restores your original files. It lists your local ch
 | `--hosts-dir PATH` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this hosts repo for this run only. |
 | `--hostname NAME` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this host directory for this run only. |
 | `--yes` | `init`, `init --remote` | Accepts the defaults without prompting. Never resets. |
+
+`dotfiles help` lists the flags this table leaves out (`--verbose`, `--quiet`, `--log`, `--shell-scripts-dir` and others).
 
 To change a profile, hosts repo or hostname permanently, use `dotfiles init`. The update check reads the saved config and doesn't know about flags from an earlier run.
 
