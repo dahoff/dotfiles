@@ -84,7 +84,7 @@ chmod +x "$A/nocheck/install.sh"
 mkdir -p "$A/flagapp"
 cat > "$A/flagapp/config.yaml" <<'EOF'
 install:
-  configure_flags: --append
+  configure_flags: --some-flag
 EOF
 printf '#!/bin/sh\necho "$@" > "$HOME/flagapp-args"\n' > "$A/flagapp/configure.sh"
 chmod +x "$A/flagapp/configure.sh"
@@ -334,7 +334,7 @@ OUT=$("$DF/dotfiles" pull --no-fetch --no-backup --hosts-dir "$HD" --hostname no
 [[ -e "$HOME/toolonly-installed" ]] || fail "13: install.sh not run: $OUT"
 [[ -f "$HOME/.bashrc.d/50-toolonly.sh" ]] || fail "13: drop-in not deployed: $OUT"
 grep -q 'toolonly: ' <<< "$(grep -E 'toolonly: (deploy|upgrade|install)' <<< "$OUT")" && fail "13: config phase ran for toolonly: $OUT"
-grep -qF -- "--append" "$HOME/flagapp-args" || fail "13: flags not passed: $(cat "$HOME/flagapp-args")"
+grep -qF -- "--some-flag" "$HOME/flagapp-args" || fail "13: flags not passed: $(cat "$HOME/flagapp-args")"
 [[ "$(cat "$HOME/.deploy-one")" == one && "$(cat "$HOME/.deploy-two")" == two ]] || fail "13: files not all deployed: $OUT"
 [[ -f "$STATE_DIR/apps/deployed-name.yaml" ]] || fail "13: app.name lost: $(ls "$STATE_DIR/apps")"
 pass "phases follow what the folder holds"

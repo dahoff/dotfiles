@@ -38,7 +38,7 @@ The first sync may ask for your sudo password to install packages, and for your 
 Your existing settings are kept:
 
 - `~/.gitconfig` moves to `~/.gitconfig.local`, which the managed config includes.
-- Custom content in `~/.bashrc` moves to `~/.bashrc.d/00-local.sh`.
+- A custom `~/.bashrc` is replaced, and a warning says where the original is: its content is no longer loaded. An existing `~/.bashrc.d/00-local.sh` still loads and is left alone.
 - Every file that gets replaced is first copied to `~/.bak/<app>/original/`.
 
 Answers are saved in `~/.config/dotfiles/config.yaml`. Run `dotfiles init` again at any time to change them.

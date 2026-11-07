@@ -9,19 +9,10 @@ source "$APP_DIR/../../lib/installer.sh"
 
 # Bash-specific flags
 SUPPLEMENT_FILES=()
-
-BASHRC_HEADER="# ~/.bashrc - Managed by dotfiles installer"
-# What older versions wrapped around each copy they appended to ~/.bashrc
-BASHRC_BEGIN="# --- BEGIN managed bashrc (appended by dotfiles installer) ---"
-BASHRC_END="# --- END managed bashrc ---"
+BASHRC_REPLACED=""
 
 app_parse_arg() {
     case $1 in
-        --append)
-            # Removed. Still accepted: during the sync that pulls this change, the
-            # dotfiles script already in memory may pass it from the old config.yaml.
-            APP_ARG_SHIFT=1
-            ;;
         --supplement)
             if [[ $# -lt 2 || "$2" == --* ]]; then
                 echo "Error: --supplement requires a file argument" >&2
@@ -63,82 +54,6 @@ app_after_load_config() {
     fi
 }
 
-# True if the live file still has blocks appended by an older version
-# Usage: bashrc_has_blocks FILE
-bashrc_has_blocks() {
-    [[ -f "$1" ]] && grep -qxF -- "$BASHRC_BEGIN" "$1"
-}
-
-# Keep what isn't ours before an existing .bashrc is replaced.
-#  - Your own content moves to the drop-in 00-local.sh. It keeps working, but now loads
-#    after the managed file instead of before it, so its settings win.
-#  - A distro's stock file isn't moved: loading it last would override the managed
-#    prompt and aliases. The original backup still has it.
-#  - A managed copy is dropped. If it differs from the repo it may hold hand edits, which
-#    can't be told apart from an older version, so the whole file is saved first.
-# Usage: bashrc_preserve SRC DEST
-bashrc_preserve() {
-    local src="$1" dest="$2" repo tmp part head="" outside="" kept="" differs=false
-    local skel="${DOTFILES_SKEL_BASHRC:-/etc/skel/.bashrc}"
-    repo=$(cat "$src")
-    tmp=$(mktemp -d) || return 1
-    BASHRC_BEGIN="$BASHRC_BEGIN" BASHRC_END="$BASHRC_END" awk -v dir="$tmp" '
-        $0 == ENVIRON["BASHRC_BEGIN"] { inside = 1; seen = 1; n++; file = dir "/block." n; printf "" > file; next }
-        inside && $0 == ENVIRON["BASHRC_END"] { inside = 0; close(file); next }
-        inside { print > file; next }
-        seen { print > (dir "/outside"); next }
-        { print > (dir "/head") }
-    ' "$dest" || { rm -rf "$tmp"; return 1; }
-
-    [[ ! -f "$tmp/head" ]] || head=$(cat "$tmp/head")
-    [[ ! -f "$tmp/outside" ]] || outside=$(cat "$tmp/outside")
-    if [[ "${head%%$'\n'*}" == "$BASHRC_HEADER" ]]; then
-        [[ "$head" == "$repo" ]] || differs=true
-    elif [[ -n "${head//[[:space:]]/}" ]] && ! { [[ -f "$skel" ]] && [[ "$head" == "$(cat "$skel")" ]]; }; then
-        kept="$head"
-    fi
-    for part in "$tmp"/block.*; do
-        [[ -f "$part" ]] || continue
-        [[ "$(cat "$part")" == "$repo" ]] || differs=true
-    done
-    if [[ -n "${outside//[[:space:]]/}" ]]; then
-        kept="${kept:+$kept$'\n'}$outside"
-    fi
-    rm -rf "$tmp"
-
-    local local_file="$SHELL_SCRIPTS_DIR/00-local.sh" saved
-    if is_dry_run; then
-        [[ -z "$kept" ]] || log_info "[DRY-RUN] Would move your .bashrc content to $local_file"
-        [[ "$differs" != true ]] || log_info "[DRY-RUN] Would save a copy of $dest first: its managed part differs from the repo"
-        return 0
-    fi
-    if [[ "$differs" == true ]]; then
-        saved="$BACKUP_DIR/bashrc.before-cleanup.$(timestamp)"
-        ensure_dir "$BACKUP_DIR" || return 1
-        cp -p "$dest" "$saved" || return 1
-        installer_report_warning "$dest differed from the repo, so hand edits may be gone from it; the old file is at $saved"
-    fi
-    if [[ -n "$kept" ]] && ! { [[ -f "$local_file" ]] && [[ "$(cat "$local_file")" == *"$kept"* ]]; }; then
-        (
-            umask 077
-            {
-                echo "# Moved here from ~/.bashrc by dotfiles. This file is yours; dotfiles won't change it."
-                printf '%s\n' "$kept"
-            } >> "$local_file"
-        ) || return 1
-        installer_report_warning "moved your own .bashrc content to $local_file; it now loads after the managed file"
-    fi
-}
-
-# Replace .bashrc like any other file, keeping what isn't ours the first time
-deploy_bashrc() {
-    local dest="$2" verb="${5:-install}"
-    if [[ -f "$dest" ]] && { [[ "$verb" == install ]] || bashrc_has_blocks "$dest"; }; then
-        bashrc_preserve "$1" "$dest" || return 1
-    fi
-    deploy_file_default "$@"
-}
-
 # Install supplement files to shell scripts directory
 install_supplements() {
     if [[ -z "${SUPPLEMENT_FILES[*]+x}" ]]; then
@@ -177,18 +92,26 @@ install_supplements() {
 }
 
 
-# Route .bashrc through the step that keeps existing content
-deploy_file() {
-    if [[ "$(basename "$1")" == ".bashrc" ]]; then
-        deploy_bashrc "$@"
-    else
-        deploy_file_default "$@"
-    fi
+# Note a custom .bashrc before the first install replaces it. A distro's stock file
+# and an empty one aren't worth a warning.
+app_pre_deploy() {
+    BASHRC_REPLACED=""
+    [[ "${1:-}" == install ]] || return 0
+    local dest skel="${DOTFILES_SKEL_BASHRC:-/etc/skel/.bashrc}"
+    for dest in "${CONFIG_DESTS[@]}"; do
+        [[ "$(basename "$dest")" == ".bashrc" && -f "$dest" ]] || continue
+        [[ -n "$(tr -d '[:space:]' < "$dest")" ]] || continue
+        ! { [[ -f "$skel" ]] && cmp -s "$dest" "$skel"; } || continue
+        BASHRC_REPLACED="$dest"
+    done
 }
 
 # Supplements install before state is written, so a failure leaves no state behind
 app_post_deploy() {
-    install_supplements
+    install_supplements || return 1
+    if [[ -n "$BASHRC_REPLACED" ]] && ! is_dry_run; then
+        installer_report_warning "$BASHRC_REPLACED was replaced; the old content is no longer loaded. The original is at $BACKUP_DIR/original/$(basename "$BASHRC_REPLACED")"
+    fi
 }
 
 installer_main "$@"

@@ -325,9 +325,9 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 `~/.bashrc` is an ordinary managed file: edit protection and `add` apply to it. A host-specific change can be saved as a host copy with `add`, which then shadows later changes to the public `.bashrc` on that host.
 
-On first install, what is already in `~/.bashrc` moves to `<shell scripts dir>/00-local.sh`, which dotfiles doesn't manage. It loads after the managed file, so its settings win. A distro's unchanged `/etc/skel/.bashrc` isn't moved, because loading it last would override the managed prompt and aliases; the backup still has it.
+On first install, a custom `~/.bashrc` is replaced like any other file. The original is kept in the app's `original/` backup, and a warning gives its path and says the old content is no longer loaded. A distro's unchanged `/etc/skel/.bashrc` gets no warning.
 
-Versions that appended to `~/.bashrc` are cleaned up the same way on the first deploy: the appended blocks go, and content outside them moves to `00-local.sh`. If a managed part differs from the repo, it may hold hand edits, so the old file is saved as `bashrc.before-cleanup.<timestamp>` in the app's backup directory, even with `--no-backup`, and sync warns.
+`~/.bashrc` still loads everything in `~/.bashrc.d/`, so an existing `00-local.sh` keeps working. Dotfiles leaves it alone and creates nothing there.
 
 ### Self-install
 

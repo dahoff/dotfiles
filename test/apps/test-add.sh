@@ -397,15 +397,16 @@ run pull --force --no-backup
 [[ $RC -eq 0 ]] || fail "force sync failed: $OUT"
 pass "backed-out edit kept"
 
-info "Case 25: .bashrc: existing content is kept, then edits are found and can be saved"
+info "Case 25: .bashrc: the original is kept, then edits are found and can be saved"
 echo '# my own bashrc' > "$HOME/.bashrc"
 sed -i 's/^packages:/packages:\n  - bash/' "$H/profiles/base.yaml"
 git -C "$H" add -A
 git -C "$H" commit -q -m "add bash"
 do_pull
-has_line "00-local.sh"
+has_line "no longer loaded"
 cmp -s "$R/apps/bash/files/.bashrc" "$HOME/.bashrc" || fail ".bashrc is not the repo's file"
-grep -qF '# my own bashrc' "$HOME/.bashrc.d/00-local.sh" || fail "own content lost"
+[[ ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "00-local.sh was created"
+grep -qF "# my own bashrc" "$HOME/.bak/bash/original/.bashrc" || fail "original lost"
 cut -f3 "$STATE_DIR/deployed/bash.tsv" | grep -qxF "$HOME/.bashrc" || fail ".bashrc not recorded"
 run status
 has_line "local edits:     none"
