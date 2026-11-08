@@ -321,16 +321,6 @@ records_merge3() {
         -f "$RECORDS_LIB_DIR/merge3.jq"
 }
 
-# True if a record of APP points at DEST
-# Usage: records_has_dest APP DEST
-records_has_dest() {
-    local src dest strategy
-    while IFS=$'\t' read -r src dest strategy; do
-        [[ "$dest" != "$2" ]] || return 0
-    done < <(records_list "$1")
-    return 1
-}
-
 # True if dotfiles has written DEST: any app records it, or did until it was dropped
 # Usage: records_knows_dest DEST
 records_knows_dest() {
@@ -344,14 +334,14 @@ records_knows_dest() {
     [[ -f "$(records__released_dir "$1")/meta" ]]
 }
 
-# Take over the record of DEST when SRC has none of its own: the source was renamed, or the
-# file moved from another app, so what's live is still judged against what was accepted.
-# Needs the same strategy; a switch starts over. Looks in this app, then the others, then
-# the copies of a dropped file.
-# Usage: records__adopt APP SRC DEST STRATEGY
-records__adopt() {
-    local app="$1" src="$2" dest="$3" strategy="$4" file owner o_src o_dest o_strategy dir meta
-    records_is_fresh "$app" "$src" "$dest" "$strategy" || return 0
+# The record SRC can take over for DEST when it has none of its own: the source was renamed,
+# or the file moved from another app, so what's live is still judged against what was
+# accepted. Needs the same strategy; a switch starts over. Looks in this app, then the others,
+# then the copies of a dropped file.
+# Usage: records__adopt_source APP SRC DEST STRATEGY
+# Prints: OWNER<TAB>OWNER_SRC, or .released<TAB> for a dropped file's copies; nothing if none
+records__adopt_source() {
+    local app="$1" src="$2" dest="$3" strategy="$4" file owner o_src o_dest o_strategy dir
     for file in "$(records__manifest "$app")" "$STATE_DIR"/records/*/manifest.tsv; do
         [[ -f "$file" ]] || continue
         owner=$(basename "$(dirname "$file")")
@@ -359,20 +349,34 @@ records__adopt() {
             [[ "$o_dest" == "$dest" && "$o_strategy" == "$strategy" ]] || continue
             [[ "$owner" != "$app" || "$o_src" != "$src" ]] || continue
             [[ -r "$STATE_DIR/records/$owner/repo/$o_src" && -r "$STATE_DIR/records/$owner/review/$o_src" ]] || continue
-            records_put "$app" "$src" "$dest" "$strategy" \
-                "$STATE_DIR/records/$owner/repo/$o_src" "$STATE_DIR/records/$owner/review/$o_src" || return 1
-            records__forget "$owner" "$o_src" || return 1
-            rm -rf "$(records__released_dir "$dest")"
+            printf '%s\t%s\n' "$owner" "$o_src"
             return 0
         done < "$file"
     done
     dir=$(records__released_dir "$dest")
     [[ -f "$dir/meta" ]] || return 0
-    meta=$(cat "$dir/meta")
-    if [[ "$meta" == "$dest"$'\t'"$strategy" ]]; then
-        records_put "$app" "$src" "$dest" "$strategy" "$dir/repo" "$dir/review" || return 1
-        rm -rf "$dir"
+    if [[ "$(cat "$dir/meta")" == "$dest"$'\t'"$strategy" ]]; then
+        printf '.released\t\n'
     fi
+}
+
+# Take over a record when SRC has none of its own (see records__adopt_source)
+# Usage: records__adopt APP SRC DEST STRATEGY
+records__adopt() {
+    local app="$1" src="$2" dest="$3" strategy="$4" found owner o_src dir
+    records_is_fresh "$app" "$src" "$dest" "$strategy" || return 0
+    found=$(records__adopt_source "$app" "$src" "$dest" "$strategy")
+    [[ -n "$found" ]] || return 0
+    IFS=$'\t' read -r owner o_src <<< "$found"
+    dir=$(records__released_dir "$dest")
+    if [[ "$owner" == .released ]]; then
+        records_put "$app" "$src" "$dest" "$strategy" "$dir/repo" "$dir/review" || return 1
+    else
+        records_put "$app" "$src" "$dest" "$strategy" \
+            "$STATE_DIR/records/$owner/repo/$o_src" "$STATE_DIR/records/$owner/review/$o_src" || return 1
+        records__forget "$owner" "$o_src" || return 1
+    fi
+    rm -rf "$dir"
 }
 
 # True if deploying SRC starts over rather than comparing against its record: no record,
@@ -630,6 +634,68 @@ records_deploy() {
             return 1
             ;;
     esac
+}
+
+# What records_deploy would do with one file, changing nothing: sets RECORDS_DEPLOY_RESULT
+# and RECORDS_DEPLOY_CONFLICTS the same way, and fails where it would, so a dry run says what
+# the real pull would. Reads RECORDS_FORCE.
+# Usage: records_preview APP SRC SRC_PATH DEST STRATEGY
+records_preview() {
+    local app="$1" src="$2" new="$3" dest="$4" strategy="$5" repo review found owner o_src dir out
+    RECORDS_DEPLOY_RESULT=""
+    RECORDS_DEPLOY_CONFLICTS="[]"
+    records__check_app "$app" && records__check_src "$src" || return 1
+    [[ -r "$new" ]] || { records__error "cannot read $new"; return 1; }
+    if [[ -e "$dest" && ! -f "$dest" ]]; then
+        records__error "$dest is not a regular file"
+        return 1
+    fi
+    if [[ "$strategy" == merge ]]; then
+        command -v jq >/dev/null 2>&1 || { records__error "jq is required to merge JSON files (strategy: merge); install jq"; return 1; }
+        records__is_object "$new" || { records__error "not a valid JSON object: $new"; return 1; }
+    fi
+    RECORDS_DEPLOY_RESULT=fresh
+    [[ "$RECORDS_FORCE" != reset ]] || return 0
+    if [[ "$strategy" == merge && -s "$dest" ]] && ! records__is_object "$dest"; then
+        RECORDS_DEPLOY_RESULT=""
+        records__error "not a valid JSON object: $dest"
+        return 1
+    fi
+    repo=$(records_repo_path "$app" "$src") || return 1
+    review=$(records_review_path "$app" "$src") || return 1
+    if records_is_fresh "$app" "$src" "$dest" "$strategy"; then
+        found=$(records__adopt_source "$app" "$src" "$dest" "$strategy")
+        [[ -n "$found" ]] || return 0
+        IFS=$'\t' read -r owner o_src <<< "$found"
+        if [[ "$owner" == .released ]]; then
+            dir=$(records__released_dir "$dest")
+            repo="$dir/repo"
+            review="$dir/review"
+        else
+            repo="$STATE_DIR/records/$owner/repo/$o_src"
+            review="$STATE_DIR/records/$owner/review/$o_src"
+        fi
+    fi
+    if [[ "$strategy" == merge ]]; then
+        [[ -s "$dest" ]] || return 0
+        RECORDS_DEPLOY_RESULT=apply
+        [[ "$RECORDS_FORCE" != force ]] || return 0
+        if ! out=$(records_merge3 "$repo" "$new" "$dest" "$review" 2>/dev/null); then
+            RECORDS_DEPLOY_RESULT=""
+            records__error "could not compare $dest with its records"
+            return 1
+        fi
+        RECORDS_DEPLOY_CONFLICTS=$(jq -c .conflicts <<< "$out") || return 1
+        if [[ "$RECORDS_DEPLOY_CONFLICTS" != "[]" ]]; then
+            RECORDS_DEPLOY_RESULT=conflict
+        elif jq -ne --slurpfile a "$dest" --argjson b "$(jq -c .live <<< "$out")" '$a[0] == $b' >/dev/null 2>&1; then
+            RECORDS_DEPLOY_RESULT=none
+        fi
+    elif [[ "$RECORDS_FORCE" == force ]]; then
+        RECORDS_DEPLOY_RESULT=apply
+    else
+        RECORDS_DEPLOY_RESULT=$(records_decide_file "$dest" "$repo" "$new") || { RECORDS_DEPLOY_RESULT=""; return 1; }
+    fi
 }
 
 # What add should ask about for one file, conflicts first. An item is an edit since the

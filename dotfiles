@@ -239,13 +239,18 @@ run_phase_custom_installs() {
         if [[ -n "$check" ]] && run_on_target "$check" &>/dev/null; then
             log_info "[$target] $name: already installed"
         elif [[ "$dry_run" == true ]]; then
-            log_info "[$target] [DRY-RUN] Would run: $APPS_DIR/$script"
+            log_info "[$target] [DRY-RUN] Would run: apps/$script"
         else
             log_info "[$target] Running custom install: $name"
 
             local script_path="$APPS_DIR/$script"
+            # What runs is the committed file, so a chmod alone changes nothing
             if [[ ! -x "$script_path" ]]; then
-                log_error "Custom install script not found or not executable: $script_path"
+                if sync_is_rooted_repo "$DOTFILES_REPO"; then
+                    log_error "Custom install script not found or not executable: apps/$script (run chmod +x apps/$script in $DOTFILES_REPO and commit it: only committed files deploy)"
+                else
+                    log_error "Custom install script not found or not executable: apps/$script (run chmod +x apps/$script in $DOTFILES_REPO)"
+                fi
                 PENDING+=("$name")
                 RESULTS+=("$target|$name|FAIL")
                 EXIT_CODE=1
@@ -300,21 +305,50 @@ deploy_tool_dropin() {
     tree=$(repo_committed_tree "$DOTFILES_REPO") || { EXIT_CODE=1; return 0; }
     dropin_src="$tree/apps/$dropin"
     [[ -f "$dropin_src" ]] || return 0
-    if is_dry_run; then
-        log_info "[$target] [DRY-RUN] Would install dropin: $dropin_dest"
-    elif ! sync_deploy_dropin "$name" "$(basename "$dropin")" "$dropin_src" "$dropin_dest"; then
+    if ! sync_deploy_dropin "$name" "$(basename "$dropin")" "$dropin_src" "$dropin_dest"; then
         RESULTS+=("$target|$name drop-in|FAIL")
         EXIT_CODE=1
         [[ "${DOTFILES_RESET:-}" != 1 ]] || RESET_FAILED=true
     fi
 }
 
-# Record a conflict this pull held back: it doesn't count as complete, and the summary says so
-# Usage: note_kept_edit PATH
+# True if every conflict held in a file is already saved in a layer, waiting for a commit.
+# DIR is the app's directory; without it, the file is a drop-in, or nothing to look up.
+# Usage: kept_edit_is_saved PATH [DIR]
+kept_edit_is_saved() {
+    local kept="$1" dir="${2:-}" app="" src="" stage_file="" u_app u_dir u_src u_dest u_stage reason items
+    if [[ -n "$dir" ]]; then
+        app=$(add_app_name "$dir")
+        add_build_layers "$dir"
+        src=$(records_list "$app" | RECORDS_DEST="$kept" awk -F'\t' '($2 "") == (ENVIRON["RECORDS_DEST"] "") { print $1; exit }')
+        stage_file="$STAGE_ROOT/apps/$dir/files/$src"
+    else
+        while IFS=$'\t' read -r u_app u_dir u_src u_dest u_stage reason; do
+            [[ "$u_dest" == "$kept" && "$reason" == "-" && "$u_stage" != "-" ]] || continue
+            app="$u_app"
+            dir="$u_dir"
+            src="$u_src"
+            stage_file="$u_stage"
+        done < <(add_dropin_units)
+        [[ -n "$dir" ]] || return 1
+        add_build_dropin_layers "$dir"
+    fi
+    [[ -n "$src" ]] || return 1
+    items=$(add_classify_file "$app" "$dir" "$src" "$kept" "$stage_file" false) || return 1
+    [[ $'\n'"$items" == *$'\n'saved$'\t'* && $'\n'"$items" != *$'\n'conflict$'\t'* ]]
+}
+
+# Record a conflict this pull held back: it doesn't count as complete, and the summary says
+# what to do next. DIR as for kept_edit_is_saved.
+# Usage: note_kept_edit PATH [DIR]
 note_kept_edit() {
-    local kept="$1"
+    local kept="$1" dir="${2:-}"
     HELD_CONFLICTS+=("$kept")
-    SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add', or 'dotfiles pull --force $kept' to take the repo's)")
+    if kept_edit_is_saved "$kept" "$dir"; then
+        SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too; it's saved in a layer, so commit it there and run 'dotfiles pull' (or 'dotfiles pull --force $kept' to take the repo's)")
+    else
+        SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add', or 'dotfiles pull --force $kept' to take the repo's)")
+    fi
 }
 
 # Tools whose drop-in dotfiles no longer manages: dropped from the profile, or no longer
@@ -486,10 +520,7 @@ run_phase_configs() {
         # Edits kept although the repo changed the same file or key: shown in the summary
         local kept
         while IFS= read -r kept; do
-            if [[ -n "$kept" ]]; then
-                HELD_CONFLICTS+=("$kept")
-                SYNC_WARNINGS+=("kept your edit to $kept, the repo changed it too (run 'dotfiles add', or 'dotfiles pull --force $kept' to take the repo's)")
-            fi
+            [[ -z "$kept" ]] || note_kept_edit "$kept" "$dir"
         done < "$DOTFILES_KEPT_FILE"
         local warning
         while IFS= read -r warning; do
@@ -660,17 +691,19 @@ Usage: dotfiles <command> [options]
 
 Commands:
   init                 Guided per-host setup: write the config file, then pull
-  pull                 Fetch, then install if new, upgrade if exists; stops early if nothing changed
+  pull                 Update the repos, install packages and deploy; keeps your local edits
+                       and holds back conflicts; stops early if nothing changed
   sync                 Update the repos, run 'add' to review local edits, then 'pull';
                        needs a terminal
   pull --remote HOST...  Send this machine's committed repos to HOST over ssh and pull there
   init --remote HOST...  Send them, then run 'dotfiles init' there instead of pull (first-time setup)
-  uninstall            Uninstall all configs
-  status               Show repos, version, host, last sync, pending packages, app state
-                       and local edits (read-only)
+  uninstall            Remove deployed configs and restore your originals; lists your local
+                       changes and always takes a snapshot first
+  status               Show repos, version, host, update check, pending packages, app state,
+                       updates available, local edits and uncommitted files (read-only)
   versions             List tagged versions
-  checkout REF         Switch to a tag or commit and deploy it; this machine stays there
-                       until you run 'dotfiles checkout main'
+  checkout REF         Switch to a tag, commit or branch and deploy it; a tag or commit pins
+                       this machine until you run 'dotfiles checkout main'
   add                  Review local edits and conflicts one by one: save one to a repo layer
                        (staged; never commits or pushes), dismiss it or skip it
   add --all            Also ask again about anything you dismissed
@@ -712,12 +745,12 @@ to 'add' and 'pull'.
 
 Options (passed through to each app's installer):
   --dry-run            Show what would be done without making changes
-  --no-backup          Skip creating backups
+  --no-backup          Skip creating backups (uninstall and pull --force still take their snapshot)
   --verbose            Verbose output
   --quiet              Minimal output
   --force [PATH]       With pull: take the repo's version of every file, or of just PATH,
                        keeping local-only keys in merged files; always takes a snapshot.
-                       With other commands: force the operation without prompts
+                       With pull --remote: --force without a PATH, for every file on the host
   --skip-git-setup     Skip interactive git identity setup (for unattended runs)
   --shell-scripts-dir PATH  Set drop-in directory (default: ~/.bashrc.d)
   --log FILE           Log to file
@@ -735,7 +768,7 @@ Examples:
   dotfiles checkout v1.2             # Pin this machine to v1.2 (a tag or commit)
   dotfiles checkout main             # Follow main again
   dotfiles add                       # Save, dismiss or skip local edits; you commit what's saved
-  dotfiles uninstall --no-backup     # Remove all configs
+  dotfiles uninstall                 # Remove all configs and restore your originals
 
 EOF
 }
@@ -883,6 +916,11 @@ parse_args() {
                 shift
                 ;;
             --force)
+                # It would override the edits the user just skipped in add
+                if [[ "$COMMAND" == "sync" ]]; then
+                    echo "Error: sync doesn't take --force: run 'dotfiles add', then 'dotfiles pull --force' for what you want to take from the repo" >&2
+                    exit 1
+                fi
                 # Only pull takes a path: with --remote the next word is a host
                 if [[ "$COMMAND" == "pull" && $# -ge 2 && "$2" != -* ]]; then
                     DOTFILES_FORCE_PATH=$(force_path_resolve "$2")
@@ -939,6 +977,18 @@ parse_args() {
     if [[ "$COMMAND" == "checkout" && -z "$CHECKOUT_REF" ]]; then
         echo "Usage: dotfiles checkout <tag|commit|branch> [options]" >&2
         exit 1
+    fi
+    # A path taken for a host would leave the real host with every file forced. Before any
+    # host is touched.
+    if [[ "$COMMAND" == "remote" ]]; then
+        local word
+        for word in ${PUSH_HOSTS[@]+"${PUSH_HOSTS[@]}"}; do
+            if [[ "$word" == */* || "$word" == \~* ]]; then
+                echo "Error: '$word' is not a host. --remote takes hosts only, and --force with it takes no PATH: it forces every file." >&2
+                echo "To take one file on a host, run 'dotfiles pull --force PATH' there over ssh." >&2
+                exit 1
+            fi
+        done
     fi
     if [[ "$COMMAND" == "remote" && "$PUSH_INIT" != true && ${#PUSH_INIT_ARGS[@]} -gt 0 ]]; then
         echo "Error: ${PUSH_INIT_ARGS[0]} is only valid with init --remote" >&2
@@ -1097,8 +1147,8 @@ status_age() {
     fi
 }
 
-# Sort one file's items into the status lists (ST_UNREVIEWED, ST_CONFLICTS, ST_DISMISSED
-# and ST_SAVED), each entry DEST<TAB>PATH_JSON. A file that can't be read counts as edited.
+# Sort one file's items into the status lists (ST_UNREVIEWED, ST_CONFLICTS, ST_DISMISSED,
+# ST_SAVED and ST_LOWER), each entry DEST<TAB>PATH_JSON. A file that can't be read counts as edited.
 # The layers must be built (add_build_layers).
 # Usage: status_collect APP DIR SRC DEST STAGE_FILE
 status_collect() {
@@ -1111,8 +1161,26 @@ status_collect() {
             conflict)  ST_CONFLICTS+=("$4"$'\t'"$path") ;;
             dismissed) ST_DISMISSED+=("$4"$'\t'"$path") ;;
             saved)     ST_SAVED+=("$4"$'\t'"$path") ;;
+            held)      ST_LOWER+=("$4"$'\t'"$path") ;;
         esac
     done <<< "$items"
+}
+
+# A repo's commits fetched but not merged, for status's list of updates, as what the login
+# message counts. Nothing for no git, a pinned checkout, no upstream or none behind. Uses
+# only what was last fetched: status never touches the network.
+# Usage: status_upstream_note LABEL PATH
+status_upstream_note() {
+    local label="$1" path="$2" count
+    versions_is_checkout "$path" || return 0
+    ! versions_is_pinned "$path" || return 0
+    count=$(git --no-optional-locks -C "$path" rev-list --count 'HEAD..@{u}' 2>/dev/null) || return 0
+    [[ "$count" -gt 0 ]] || return 0
+    if [[ "$count" -eq 1 ]]; then
+        printf '%s repo (1 commit)' "$label"
+    else
+        printf '%s repo (%d commits)' "$label" "$count"
+    fi
 }
 
 # Print one labelled list of status entries (DEST<TAB>PATH_JSON), or "label: none"
@@ -1206,7 +1274,7 @@ cmd_status() {
             ok=false
         fi
     fi
-    local -a status_updates=() ST_UNREVIEWED=() ST_CONFLICTS=() ST_DISMISSED=() ST_SAVED=()
+    local -a status_updates=() ST_UNREVIEWED=() ST_CONFLICTS=() ST_DISMISSED=() ST_SAVED=() ST_LOWER=()
     if [[ "$ok" == true ]]; then
         echo "apps:"
         local idx dir name app_name stage ver_fresh ver_state state_file state stage_file
@@ -1262,6 +1330,14 @@ cmd_status() {
             [[ -f "$repo_copy" ]] && ! cmp -s "$stage_file" "$repo_copy" || continue
             status_updates+=("$app_name drop-in")
         done < <(add_dropin_units)
+        # Commits fetched but not merged: what the login message means
+        local behind
+        behind=$(status_upstream_note dotfiles "$DOTFILES_REPO")
+        [[ -z "$behind" ]] || status_updates+=("$behind")
+        if [[ -n "$HOSTS_DIR" ]]; then
+            behind=$(status_upstream_note hosts "$HOSTS_DIR")
+            [[ -z "$behind" ]] || status_updates+=("$behind")
+        fi
 
         if [[ ${#status_updates[@]} -eq 0 ]]; then
             echo "updates available: none"
@@ -1276,6 +1352,7 @@ cmd_status() {
         status_section "conflicts" "you and the repo both changed them; yours is kept" ${ST_CONFLICTS[@]+"${ST_CONFLICTS[@]}"}
         status_section "dismissed" "kept local on purpose; 'dotfiles add --all' asks again" ${ST_DISMISSED[@]+"${ST_DISMISSED[@]}"}
         status_section "saved, not committed" "commit what 'dotfiles add' staged, then 'dotfiles pull'" ${ST_SAVED[@]+"${ST_SAVED[@]}"}
+        status_section "held in a lower layer" "committed there, but a higher layer wins, so it stays local here; 'dotfiles add --all' asks about them" ${ST_LOWER[@]+"${ST_LOWER[@]}"}
     fi
     # Not deployed: only committed content is
     local -a status_dirty=()
@@ -1430,8 +1507,8 @@ main() {
             sync_pull_one "$DOTFILES_REPO"
             [[ -z "$HOSTS_DIR" ]] || sync_pull_one "$HOSTS_DIR"
         fi
-        if ! is_dry_run && { [[ -z "${DOTFILES_FORCE_PATH:-}" ]] \
-            || [[ "$DOTFILES_FORCE_PATH" == "$(abs_path "$SHELL_SCRIPTS_DIR/90-dotfiles.sh")" ]]; }; then
+        if [[ -z "${DOTFILES_FORCE_PATH:-}" ]] \
+            || [[ "$DOTFILES_FORCE_PATH" == "$(abs_path "$SHELL_SCRIPTS_DIR/90-dotfiles.sh")" ]]; then
             sync_self_install "$DOTFILES_REPO" "$SHELL_SCRIPTS_DIR"
         fi
         versions_warn_pinned "$DOTFILES_REPO"

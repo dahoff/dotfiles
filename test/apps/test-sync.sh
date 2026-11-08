@@ -1010,7 +1010,7 @@ pass "pull deploys, --no-fetch skips the fetch"
 # Case 41
 info "Case 41: sync needs a terminal"
 rm -f "$VIMRC"
-fp_run sync --force </dev/null
+fp_run sync </dev/null
 [[ $RC -eq 1 ]] || fail "sync without a terminal should exit 1, got $RC: $OUT"
 [[ "$OUT" == *"needs a terminal"* ]] || fail "no 'needs a terminal': $OUT"
 [[ ! -f "$VIMRC" ]] || fail "sync without a terminal still deployed: $OUT"
@@ -1019,14 +1019,16 @@ pass "sync without a terminal: exit 1, nothing deployed"
 # Case 42
 info "Case 42: sync runs add, then pull, with its flags"
 rm -f "$VIMRC"
-DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --force </dev/null
+# sync rejects --force; a forgotten last-complete makes the pull redeploy instead
+rm -f "$XDG_STATE_HOME/dotfiles/last-complete"
+DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --no-backup </dev/null
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
-[[ -f "$VIMRC" ]] || fail "sync did not pull (--force not passed on): $OUT"
+[[ -f "$VIMRC" ]] || fail "sync did not pull: $OUT"
 ADD_LINE=$(grep -n "No local edits" <<< "$OUT" | head -1 | cut -d: -f1)
 PULL_LINE=$(grep -n "Phase 1" <<< "$OUT" | head -1 | cut -d: -f1)
 [[ -n "$ADD_LINE" && -n "$PULL_LINE" && "$ADD_LINE" -lt "$PULL_LINE" ]] \
     || fail "add did not run before pull (add line '$ADD_LINE', pull line '$PULL_LINE'): $OUT"
-# Without --force nothing changed, so pull stops early, after add has run
+# Nothing changed since, so pull stops early, after add has run
 rm -f "$VIMRC"
 DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --no-fetch </dev/null
 [[ $RC -eq 0 && "$OUT" == *"No local edits"* && "$OUT" == *"Already up to date"* ]] \
@@ -1036,7 +1038,7 @@ pass "sync: add first, then pull with every flag"
 # Case 43
 info "Case 43: sync stops when add fails"
 rm -f "$VIMRC"
-DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --force --profile no-such-profile </dev/null
+DOTFILES_ADD_ASSUME_TTY=1 fp_run sync --profile no-such-profile </dev/null
 [[ $RC -ne 0 ]] || fail "sync should fail when add fails: $OUT"
 [[ "$OUT" != *"Phase 1"* && ! -f "$VIMRC" ]] || fail "pull ran after add failed: $OUT"
 pass "a failed add stops sync before pull"

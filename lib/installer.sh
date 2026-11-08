@@ -243,18 +243,35 @@ installer_force_mode() {
 deploy_file_default() {
     local src="$1" dest="$2" mode="$3" strategy="${4:-replace}" verb="${5:-install}" name="${6:-$(basename "$1")}"
 
+    RECORDS_FORCE=$(installer_force_mode "$dest")
     if is_dry_run; then
-        if [[ "$strategy" == merge ]]; then
-            log_info "[DRY-RUN] Would merge: $src -> $dest (mode: $mode)"
-        elif [[ "$verb" == upgrade ]]; then
-            log_info "[DRY-RUN] Would update: $src -> $dest"
-        else
-            log_info "[DRY-RUN] Would install: $src -> $dest (mode: $mode)"
-        fi
+        records_preview "$APP_NAME" "$name" "$src" "$dest" "$strategy" || return 1
+        installer_report_preview "$src" "$dest" "$mode" "$strategy" "$verb"
         return 0
     fi
-    RECORDS_FORCE=$(installer_force_mode "$dest")
     records_deploy "$APP_NAME" "$name" "$src" "$dest" "$mode" "$strategy"
+}
+
+# Say what a dry run found. A held conflict and a kept edit stay in RECORDS_DEPLOY_RESULT, for
+# installer_report_deploy to word as a real pull does and to carry to the summary.
+# Usage: installer_report_preview src dest mode strategy install|upgrade
+installer_report_preview() {
+    local src="$1" dest="$2" mode="$3" strategy="$4" verb="$5"
+    case "$RECORDS_DEPLOY_RESULT" in
+        keep | conflict) return 0 ;;
+        none) log_info "[DRY-RUN] No change: $dest" ;;
+        same) log_info "[DRY-RUN] Would update the records of: $dest" ;;
+        *)
+            if [[ "$strategy" == merge ]]; then
+                log_info "[DRY-RUN] Would merge: $src -> $dest (mode: $mode)"
+            elif [[ "$verb" == upgrade ]]; then
+                log_info "[DRY-RUN] Would update: $src -> $dest"
+            else
+                log_info "[DRY-RUN] Would install: $src -> $dest (mode: $mode)"
+            fi
+            ;;
+    esac
+    RECORDS_DEPLOY_RESULT=""
 }
 
 # Report what records_deploy did with one file
@@ -1009,6 +1026,16 @@ parse_args() {
     done
 }
 
+# An old host's background sync runs git pull, then this code. With no records to compare
+# against, every file would count as fresh and an edit nobody reviewed would be overwritten.
+# init's move clears the old records first. Uninstall doesn't deploy, and still works.
+installer_refuse_old_records() {
+    compgen -G "$STATE_DIR/deployed/*.tsv" >/dev/null || return 0
+    log_error "This host still has records from an older version, in $STATE_DIR/deployed; nothing was deployed"
+    echo "Run 'dotfiles init' to start fresh records (or 'dotfiles init --remote' from another machine)." >&2
+    exit 1
+}
+
 # Main
 installer_main() {
     # Parse arguments
@@ -1016,6 +1043,10 @@ installer_main() {
 
     # Initialize logging
     log_init "$@"
+
+    if list_contains "$COMMAND" deploy install upgrade; then
+        installer_refuse_old_records
+    fi
 
     # Compose files to deploy
     if command_needs_stage; then

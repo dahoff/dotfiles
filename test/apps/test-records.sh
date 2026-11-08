@@ -240,10 +240,10 @@ m3 "dropped and edited: kept, and held as a conflict" \
     '{"k":9,"z":0}' '{"k":1,"z":0}' '{"k":1,"z":0}' '[["k"]]' '[]'
 m3 "dropped, its parent becomes empty in the repo: live keeps an empty parent" \
     '{"a":{"k":1}}' '{"a":{}}' '{"a":{"k":1}}' '{"a":{"k":1}}'    '{"a":{}}' '{"a":{}}' '{"a":{}}' '[]' '[["a","k"]]'
-m3 "dropped along with its parent: live keeps an empty parent" \
-    '{"a":{"k":1}}' '{}' '{"a":{"k":1}}' '{"a":{"k":1}}'    '{"a":{}}' '{}' '{"a":{}}' '[]' '[["a","k"]]'
+m3 "dropped along with its parent: the parent it empties goes too" \
+    '{"a":{"k":1}}' '{}' '{"a":{"k":1}}' '{"a":{"k":1}}'    '{}' '{}' '{}' '[]' '[["a","k"]]'
 m3 "dropped with its parent, a local sibling stays" \
-    '{"a":{"k":1}}' '{}' '{"a":{"k":1,"mine":2}}' '{"a":{"k":1}}'    '{"a":{"mine":2}}' '{}' '{"a":{}}' '[]' '[["a","k"]]'
+    '{"a":{"k":1}}' '{}' '{"a":{"k":1,"mine":2}}' '{"a":{"k":1}}'    '{"a":{"mine":2}}' '{}' '{}' '[]' '[["a","k"]]'
 m3 "dropped with its parent while edited: the base value comes back to repo" \
     '{"a":{"k":1}}' '{}' '{"a":{"k":9}}' '{"a":{"k":1}}'    '{"a":{"k":9}}' '{"a":{"k":1}}' '{"a":{"k":1}}' '[["a","k"]]' '[]'
 m3 "repo's whole file emptied: everything unchanged is removed, edits kept" \

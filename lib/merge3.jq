@@ -60,6 +60,18 @@ def delete_at($p):
 def put_at($p; $w):
   if ($w | length) == 1 then set_at($p; $w[0]) else delete_at($p) end;
 
+# Apply a repo change to an untouched key. A removal also takes the parents it empties, or
+# they'd stay as an empty object the repo doesn't have, and be listed as a local difference.
+# A parent with anything else in it stays, and so does one the repo still has.
+def apply_at($p; $w; $new):
+  put_at($p; $w)
+  | if ($w | length) == 1 then .
+    else
+      reduce range(($p | length) - 1; 0; -1) as $i (.;
+        if at($p[:$i]) == [{}] and ($new | at($p[:$i])) == []
+        then delpaths([$p[:$i]]) else . end)
+    end;
+
 def check_object($name):
   if length != 1 or (.[0] | type) != "object" then
     error("\($name) is not a single JSON object")
@@ -92,8 +104,8 @@ def check_object($name):
      ($base | at($p)) as $b | ($new | at($p)) as $n | (.live | at($p)) as $l
      | if $n == $b then .
        elif $l == $b then
-         .live |= put_at($p; $n)
-         | .review |= put_at($p; $n)
+         .live |= apply_at($p; $n; $new)
+         | .review |= apply_at($p; $n; $new)
          | .applied += [$p]
        elif $l == $n then
          .review |= put_at($p; $n)

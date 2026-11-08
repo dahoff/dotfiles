@@ -189,17 +189,30 @@ add__layer_holds() {
     fi
 }
 
-# Succeed if any layer's working copy already holds the live value, committed or not: a
-# saved item isn't asked about again, and discarding the save brings it back. A deleted key
-# holds nothing. Reads ADD_ROOTS: call add_build_layers first.
-# Usage: add_saved_elsewhere APP_DIR SRC PATH_JSON DEST
-add_saved_elsewhere() {
-    local dir="$1" src="$2" path="$3" dest="$4" root
-    [[ -e "$dest" ]] || return 1
+# True if git has something uncommitted for an existing layer file: staged, unstaged or new
+# Usage: add__layer_dirty LAYER_FILE
+add__layer_dirty() {
+    [[ -n "$(git --no-optional-locks --literal-pathspecs -C "$(dirname "$1")" status --porcelain -- "$(basename "$1")" 2>/dev/null)" ]]
+}
+
+# Whether a layer's working copy holds the live value. Prints saved when one with uncommitted
+# changes does, which a commit will settle (discarding it brings the item back); held when
+# only committed ones do, which on this host stays local, or nothing. A deleted key holds
+# nothing. Reads ADD_ROOTS: call add_build_layers first.
+# Usage: add_layer_hold APP_DIR SRC PATH_JSON DEST
+add_layer_hold() {
+    local dir="$1" src="$2" path="$3" dest="$4" root file found=""
+    [[ -e "$dest" ]] || return 0
     for root in ${ADD_ROOTS[@]+"${ADD_ROOTS[@]}"}; do
-        add__layer_holds "$root/apps/$dir/files/$src" "$path" "$dest" && return 0
+        file="$root/apps/$dir/files/$src"
+        add__layer_holds "$file" "$path" "$dest" || continue
+        if add__layer_dirty "$file"; then
+            echo saved
+            return 0
+        fi
+        found=held
     done
-    return 1
+    [[ -z "$found" ]] || echo "$found"
 }
 
 # True if a layer's file exists and, for a key, has that key
@@ -225,17 +238,17 @@ add_current_layer() {
     echo -1
 }
 
-# Succeed if the winning layer's working copy holds the live value, so that it takes effect
-# once committed and a conflict there is answered. Looks at every layer that takes effect,
-# offered or not: a layer that can't take a save can still be the one that wins.
-# Usage: add__winner_holds DIR SRC PATH_JSON DEST
-add__winner_holds() {
+# Succeed if the winning layer's working copy holds the live value uncommitted, so that it
+# takes effect once committed and a conflict there is answered. Looks at every layer that
+# takes effect, offered or not: a layer that can't take a save can still be the one that wins.
+# Usage: add__winner_saved DIR SRC PATH_JSON DEST
+add__winner_saved() {
     local dir="$1" src="$2" path="$3" dest="$4" root file
     [[ -e "$dest" ]] || return 1
     for root in "${ADD_EFFECTIVE_ROOTS[@]}"; do
         file="$root/apps/$dir/files/$src"
         if add__layer_has "$file" "$path"; then
-            add__layer_holds "$file" "$path" "$dest"
+            add__layer_holds "$file" "$path" "$dest" && add__layer_dirty "$file"
             return
         fi
     done
@@ -410,6 +423,7 @@ add__show_item() {
     case "$kind" in
         conflict) echo "You and the repo both changed this." ;;
         dismissed) echo "You dismissed this earlier; it stays local unless you save it." ;;
+        held) echo "A lower layer holds this value, committed, but a higher one wins, so it stays local on this host. Dismiss stops listing it that way." ;;
     esac
     if [[ "$path" == "[]" ]]; then
         [[ "$kind" != conflict ]] || echo "Your change:"
@@ -463,6 +477,10 @@ add__save_item() {
     fi
     i=$((10#$answer - 1))
     target="${ADD_ROOTS[$i]}/apps/$dir/files/$src"
+    if add__layer_holds "$target" "$path" "$dest" && ! add__layer_dirty "$target"; then
+        log_info "${ADD_LABELS[$i]} already holds this value, committed; nothing to save"
+        return 0
+    fi
 
     if [[ "$path" != "[]" ]]; then
         value=$(mktemp "$WORK_DIR/add-value.XXXXXX") || return 0
@@ -555,31 +573,36 @@ add_review_item() {
 }
 
 # Every item of one file that differs from the repo, sorted: what records_items says, with
-# the kind changed to saved for what a layer's working copy already holds, which waits for a
-# commit. A conflict needs the winning layer to hold it: anywhere lower, pull would go on
+# the kind changed to saved for what a layer holds uncommitted, which waits for a commit, and
+# to held for an edit only committed layers hold, which a commit can't change: a higher layer
+# wins over them. A dismissed item stays dismissed there, so that dismissing a held one clears
+# the label. A conflict needs the winning layer to hold it: anywhere lower, pull would go on
 # warning about it, so it stays a conflict. Reads ADD_ROOTS: call add_build_layers first.
-# Prints KIND<TAB>PATH_JSON; KIND is edited, conflict, dismissed (with ALL) or saved.
+# Prints KIND<TAB>PATH_JSON; KIND is edited, conflict, dismissed (with ALL), saved or held.
 # Usage: add_classify_file APP DIR SRC DEST STAGE_FILE ALL
 add_classify_file() {
-    local app="$1" dir="$2" src="$3" dest="$4" stage_file="$5" all="$6" items kind path
+    local app="$1" dir="$2" src="$3" dest="$4" stage_file="$5" all="$6" items kind path hold
     items=$(records_items "$app" "$src" "$dest" "$stage_file" "$all" 2>/dev/null) || return 1
     [[ -n "$items" ]] || return 0
     while IFS=$'\t' read -r kind path; do
         if [[ "$kind" == conflict ]]; then
-            if add__winner_holds "$dir" "$src" "$path" "$dest"; then kind=saved; fi
-        elif add_saved_elsewhere "$dir" "$src" "$path" "$dest"; then
-            kind=saved
+            if add__winner_saved "$dir" "$src" "$path" "$dest"; then kind=saved; fi
+        else
+            hold=$(add_layer_hold "$dir" "$src" "$path" "$dest")
+            if [[ "$hold" == saved || ( "$hold" == held && "$kind" == edited ) ]]; then
+                kind="$hold"
+            fi
         fi
         printf '%s\t%s\n' "$kind" "$path"
     done <<< "$items"
 }
 
-# The items of one file that add asks about: all but the saved ones.
+# The items of one file that a plain add asks about: not the saved or held ones.
 # Usage: add_file_items APP DIR SRC DEST STAGE_FILE ALL
 add_file_items() {
     local items
     items=$(add_classify_file "$@") || return 1
-    [[ -z "$items" ]] || printf '%s\n' "$items" | awk -F'\t' '$1 != "saved"'
+    [[ -z "$items" ]] || printf '%s\n' "$items" | awk -F'\t' '$1 != "saved" && $1 != "held"'
     return 0
 }
 
@@ -675,6 +698,28 @@ add_closing_message() {
 
 # True once add had something to show or say
 ADD_FOUND=false
+# What add doesn't ask about but says at the end, as DEST<TAB>PATH_JSON: items saved and
+# waiting for a commit, and, without --all, items held in a lower layer
+declare -a ADD_WAITING=()
+declare -a ADD_LOWER=()
+
+# Print one list of items at the end of a review, if there's anything in it
+# Usage: add__say_items MESSAGE ENTRY...
+add__say_items() {
+    local message="$1" entry dest path
+    shift
+    [[ $# -gt 0 ]] || return 0
+    echo
+    echo "$message"
+    for entry in "$@"; do
+        IFS=$'\t' read -r dest path <<< "$entry"
+        if [[ "$path" == "[]" ]]; then
+            printf '  %s\n' "$(add_tilde "$dest")"
+        else
+            printf '  %s  key %s\n' "$(add_tilde "$dest")" "$path"
+        fi
+    done
+}
 
 # Review the records of one app, with the layers already built. A drop-in names its one
 # source and the committed file to compare with; an app's files are in its stage.
@@ -693,16 +738,23 @@ add__review_app() {
         else
             stage_file="$stage/files/$src"
         fi
-        if ! items=$(add_file_items "$app" "$dir" "$src" "$dest" "$stage_file" "$ADD_ALL"); then
+        if ! items=$(add_classify_file "$app" "$dir" "$src" "$dest" "$stage_file" "$ADD_ALL"); then
             ADD_FOUND=true
             log_warn "Could not compare $(add_tilde "$dest") with its records, so it isn't offered (is it valid JSON?)"
             continue
         fi
         [[ -n "$items" ]] || continue
-        ADD_FOUND=true
         mapfile -t item_lines <<< "$items"
         for line in "${item_lines[@]}"; do
             IFS=$'\t' read -r kind path <<< "$line"
+            if [[ "$kind" == saved ]]; then
+                ADD_WAITING+=("$dest"$'\t'"$path")
+                continue
+            elif [[ "$kind" == held && "$ADD_ALL" != true ]]; then
+                ADD_LOWER+=("$dest"$'\t'"$path")
+                continue
+            fi
+            ADD_FOUND=true
             rc=0
             add_review_item "$app" "$dir" "$src" "$dest" "$stage_file" "$kind" "$path" || rc=$?
             if [[ $rc -eq 2 ]]; then
@@ -764,7 +816,11 @@ cmd_add() {
         add__review_app "$app" "$dir" "" "$src" "$stage"
     done
 
-    if [[ "$ADD_FOUND" != true ]]; then
+    add__say_items "Saved items waiting for a commit (commit what's staged, then run 'dotfiles pull'):" \
+        ${ADD_WAITING[@]+"${ADD_WAITING[@]}"}
+    add__say_items "Items held in a lower layer, which stay local on this host ('dotfiles add --all' asks about them):" \
+        ${ADD_LOWER[@]+"${ADD_LOWER[@]}"}
+    if [[ "$ADD_FOUND" != true && ${#ADD_WAITING[@]} -eq 0 && ${#ADD_LOWER[@]} -eq 0 ]]; then
         log_success "No local edits"
     fi
     exit 0

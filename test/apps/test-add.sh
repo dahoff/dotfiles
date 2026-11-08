@@ -191,6 +191,11 @@ has_line() {
 no_line() {
     if printf '%s\n' "$OUT" | grep -qF -- "$1"; then fail "unexpected '$1' in: $OUT"; fi
 }
+# add had nothing to ask, and said what's saved and waiting for a commit
+waiting() {
+    has_line "Saved items waiting for a commit"
+    no_line "No local edits"
+}
 # Sync redeploys only when the repo moved, as it does after a pull
 commit_repo() {
     git -C "$R" add -A
@@ -685,13 +690,16 @@ has_line "host: addhost (hosts repo) still wins, so on this host the change stay
 cmp -s "$A" "$PROF_A" || fail "not saved to the profile"
 [[ "$(jq -r .model "$LP/settings.json")" == mine ]] || fail "key not saved to the profile"
 add
-has_line "No local edits"
+has_line "Saved items waiting for a commit"
+no_line "No local edits"
 git -C "$H" commit -q -m "saved low"
 do_pull
 grep -qx mine "$A" || fail "the live value moved"
 [[ "$(jq -r .model "$S")" == mine ]] || fail "the live key moved"
 add
-has_line "No local edits"
+has_line "held in a lower layer"
+no_line "No local edits"
+no_line "waiting for a commit"
 pass "higher layer wins"
 
 info "Review: the default layer is the one that has it, unless that's the public repo"
@@ -757,9 +765,9 @@ echo mine >> "$A"
 edit_s '.model = "mine"'
 add s 1 s 1
 add
-has_line "No local edits"
+waiting
 add_all
-has_line "No local edits"
+waiting
 run pull --no-backup --no-fetch
 no_line "local edits"
 grep -qx mine "$A" || fail "a staged save changed live"
@@ -895,7 +903,7 @@ mkdir -p "$LH"
 printf '{"objs":[{"a":1,"b":9}]}\n' > "$LH/settings.json"
 git -C "$H" add -A
 add
-has_line "No local edits"
+waiting
 pass "arrays"
 
 info "Review: a replaced-file conflict shows both changes and needs confirmation to save"
@@ -916,9 +924,9 @@ add s
 add s y 1
 cmp -s "$A" "$HOST_A" || fail "not saved after confirmation"
 add
-has_line "No local edits"
+waiting
 add_all
-has_line "No local edits"
+waiting
 git -C "$H" commit -q -m "yours"
 do_pull
 no_line "kept your edit"
@@ -1012,7 +1020,7 @@ has_line "=== ~/ad/a.conf ==="
 # An uncommitted host.yaml is enough: the same copy now counts
 printf 'profile: adp\n' > "$NEWH/host.yaml"
 add
-has_line "No local edits"
+waiting
 rm -rf "$NEWH/apps"
 add s 1
 ADD_ARGS=()
@@ -1127,7 +1135,7 @@ git -C "$H" commit -q -am "host v2"
 edit_s '.model = "mine"'
 add s 1
 add
-has_line "No local edits"
+waiting
 git -C "$H" reset -q --hard
 add k
 has_line "You and the repo both changed this"
@@ -1288,7 +1296,7 @@ has_line 'key ["it'"'"'s \"q\""]'
 [[ "$(jq -S -c . "$LH/settings.json")" == '{"a":{"b":"nested2"},"a.b":"dotted2","it'"'"'s \"q\"":"quoted2"}' ]] \
     || fail "layer: $(jq -S -c . "$LH/settings.json")"
 add
-has_line "No local edits"
+waiting
 git -C "$H" commit -q -m "keys"
 do_pull
 no_line "local edits"
@@ -1421,6 +1429,8 @@ if command -v script >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
     has_line "s(ave)"
     cmp -s "$REC/review/a.conf" "$A" || fail "the answer didn't arrive: $OUT"
     pass "terminal"
+else
+    info "Skipping the terminal case: it needs both script and timeout"
 fi
 
 info "Fixes: a read-only layer file fails plainly, with no false alarm"

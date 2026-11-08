@@ -189,19 +189,21 @@ sync_self_install() {
     local repo="$1" scripts_dir="$2"
     local link="$HOME/.local/bin/dotfiles"
 
-    mkdir -p "$HOME/.local/bin"
-    if [[ -L "$link" && -e "$link" ]]; then
-        local current wanted
-        current=$(readlink -f "$link")
-        wanted=$(readlink -f "$repo/dotfiles")
-        if [[ "$current" != "$wanted" ]]; then
-            log_warn "~/.local/bin/dotfiles points at $current; leaving it (remove the link to switch to $repo)"
+    if ! is_dry_run; then
+        mkdir -p "$HOME/.local/bin"
+        if [[ -L "$link" && -e "$link" ]]; then
+            local current wanted
+            current=$(readlink -f "$link")
+            wanted=$(readlink -f "$repo/dotfiles")
+            if [[ "$current" != "$wanted" ]]; then
+                log_warn "~/.local/bin/dotfiles points at $current; leaving it (remove the link to switch to $repo)"
+            fi
+        elif [[ -e "$link" ]]; then
+            log_warn "~/.local/bin/dotfiles is not a symlink; leaving it (remove it to link $repo/dotfiles)"
+        else
+            ln -sfn "$repo/dotfiles" "$link"
+            log_debug "Linked $link -> $repo/dotfiles"
         fi
-    elif [[ -e "$link" ]]; then
-        log_warn "~/.local/bin/dotfiles is not a symlink; leaving it (remove it to link $repo/dotfiles)"
-    else
-        ln -sfn "$repo/dotfiles" "$link"
-        log_debug "Linked $link -> $repo/dotfiles"
     fi
     local src
     src=$(sync_login_source "$repo") || return 0
@@ -218,7 +220,8 @@ sync_self_install() {
 
 # Deploy one drop-in through the records, like any managed file: an edit to it is kept and
 # reviewed, and a conflict is held. A file that is there but wasn't put there by dotfiles
-# is snapshotted before it's replaced, to ~/.bak/APP.
+# is snapshotted before it's replaced, to ~/.bak/APP. A dry run says what would happen, and
+# the same as a real run for an edit it would keep or hold.
 # Reads globals DOTFILES_RESET, DOTFILES_FORCE_PATH, HELD_CONFLICTS and SYNC_WARNINGS.
 # Usage: sync_deploy_dropin APP NAME SRC_PATH DEST
 sync_deploy_dropin() {
@@ -231,6 +234,20 @@ sync_deploy_dropin() {
         force=force
     elif has_global_flag --force; then
         force=force
+    fi
+    if is_dry_run; then
+        RECORDS_FORCE="$force"
+        if ! records_preview "$app" "$name" "$src" "$dest" replace; then
+            RECORDS_FORCE=""
+            return 1
+        fi
+        RECORDS_FORCE=""
+        case "$RECORDS_DEPLOY_RESULT" in
+            fresh | apply) log_info "[DRY-RUN] Would install dropin: $dest" ;;
+            keep) log_info "Keeping local edit: $dest" ;;
+            conflict) note_kept_edit "$dest" ;;
+        esac
+        return 0
     fi
     # init's snapshot of a reset already holds the old file
     if [[ ! ( "$force" == reset && "${DOTFILES_RESET_SNAPSHOTTED:-}" == 1 ) && -f "$dest" ]] && ! cmp -s "$src" "$dest" \

@@ -223,7 +223,7 @@ The run aborts before any change if the hosts repo is missing, `host.yaml` lacks
 
 ### Removing managed keys
 
-`merge` never deletes keys from the live file. To remove a key, delete it from the repo layer and from the live file by hand.
+When a key leaves the repo layers, a pull deletes it from the live file if its value still matches the repo copy, along with any parents that leaves empty and the repo doesn't have. A key you changed stays, and so does a parent with anything else in it.
 
 ---
 
@@ -274,7 +274,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 | `checkout REF` | Switches to a tag or commit, deploys it and stays there. See Versions. |
 | `add` | Reviews local edits and conflicts one by one and stages the accepted ones in a repo layer. See Local edits. |
 | `add --all` | The same, and asks again about dismissed edits. |
-| `uninstall` | Removes the deployed configs and restores the originals (unless `--no-backup`). Lists your local changes first and always takes a snapshot; if that fails, nothing is restored. Installs nothing and leaves tools in place. |
+| `uninstall` | Removes the deployed configs and restores the originals. Lists your local changes first and always takes a snapshot; if that fails, nothing is restored. Installs nothing and leaves tools in place. |
 | `verify` | Checks every installation. Installs nothing. |
 | `help` | Prints the usage text. |
 
@@ -305,7 +305,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 - Sends `git archive HEAD` of the dotfiles repo (and the hosts repo, if one is in use), so only committed state is shipped; uncommitted changes are not. If the source is not a git work tree, the plain directory is sent. Each snapshot gets a `PUSHED` file recording the source host, commit and time. `pull --remote` warns when a repo here is behind its upstream, because the host gets what is committed here.
 - The remote dotfiles path is where the remote `~/.local/bin/dotfiles` link points: the link is followed to its final target, and if that is a file named `dotfiles` in a directory containing `lib/`, the directory is used; otherwise (no link, a dangling link, some other target) the default `~/.local/share/dotfiles/dotfiles`. The remote hosts dir is `hosts_dir` from the remote `config.yaml` (`${DOTFILES_CONFIG:-~/.config/dotfiles/config.yaml}`), parsed the same way as `config_load`, else the default `~/.local/share/dotfiles/dotfiles-hosts`. A relative `hosts_dir` there is ignored with a warning.
 - A remote target that is a git checkout is refused (run `dotfiles pull` there instead). An existing target is replaced only if it holds a `PUSHED` marker or is an empty directory; anything else is refused with `<host>:<path> exists and is not a pushed dotfiles copy; refusing to replace it`, so a wrong remote config line cannot delete user data. An existing pushed copy is replaced by swapping the directory, and the old copy is restored if the swap fails.
-- It then runs `<remote dotfiles repo>/dotfiles pull --no-fetch` (or `init`) with `ssh -t`, so prompts such as sudo work, and conflicts show in your terminal. The remote exit status is the result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed. `--force` is passed through to the remote pull.
+- It then runs `<remote dotfiles repo>/dotfiles pull --no-fetch` (or `init`) with `ssh -t`, so prompts such as sudo work, and conflicts show in your terminal. The remote exit status is the result. With several hosts, a failure on one is reported and the rest still run; the exit code is non-zero if any failed. `--force` is passed through to the remote pull. It takes no `PATH` here: a host word containing `/` or starting with `~` is refused before any host is touched.
 - `--dry-run` reports what would be sent and, if the remote already has dotfiles, runs a remote `pull --no-fetch --dry-run`. Nothing is copied.
 - A host with no git can't keep a save made by `add`: the next send replaces the directory. `add` there offers dismiss only. Copy an edit back by hand.
 - `init --remote` sets up a host that has no dotfiles yet. See Setting up a new machine.
@@ -322,7 +322,7 @@ Precedence: command-line flag > env `DOTFILES_HOSTS_DIR` (hosts dir only) > conf
 
 ### Local edits
 
-Each managed file, or each key of a merged JSON file, has two saved copies in `<state dir>/records/<app>/`, mode `0600` in directories of mode `0700`:
+Each managed file, or each key of a merged JSON file, has two saved copies in `$STATE_DIR/records/<app>/` (`STATE_DIR` defaults to `~/.config/dotfiles`), mode `0600` in directories of mode `0700`:
 
 | Copy | Path | Holds | Used by |
 |---|---|---|---|
@@ -347,18 +347,22 @@ Each managed file, or each key of a merged JSON file, has two saved copies in `<
 - Switching a file between replace and merge takes a snapshot and is treated as a fresh deploy.
 - Invalid JSON fails only that file, which is left untouched and retried on the next pull.
 - Records are written per item after the write, so an interrupted run recomputes safely.
-- A host with records in the old layout (`<state dir>/deployed/*.tsv`) refuses `pull` and `add` until `dotfiles init` has run. Review pending edits with the old `add` before updating. `init` snapshots every managed file, drops the old records and starts fresh ones.
+- A host with records in the old layout (`$STATE_DIR/deployed/*.tsv`) refuses `pull`, `add` and an app's `configure.sh deploy`, `install` or `upgrade` until `dotfiles init` (`init --remote` from another machine) has run; `uninstall` still works. Review pending edits with the old `add` before updating. `init` snapshots every managed file, drops the old records and starts fresh ones.
 - `--force` takes the repo's version; the snapshot keeps yours.
 
-`status` shows these lists, each under its own label: `updates available:`, `unreviewed changes:`, `conflicts:`, `dismissed:`, `saved, not committed:` and `uncommitted files:`. Before the first `pull` with these records, `unreviewed changes:` says `not tracked yet`.
+`status` shows these lists, each under its own label: `updates available:`, `unreviewed changes:`, `conflicts:`, `dismissed:`, `saved, not committed:`, `held in a lower layer:` and `uncommitted files:`. Before the first `pull` with these records, `unreviewed changes:` says `not tracked yet`.
+
+- `updates available:` names the apps whose files changed, and each repo's commits fetched but not merged (`HEAD..@{u}`). No git, no upstream and a pinned checkout add nothing.
+- `saved, not committed:` is for a value a layer file holds while that file is dirty in git. A commit settles it, and a discard brings the item back.
+- `held in a lower layer:` is for a value only committed layer files hold, below a layer that wins, so it stays local on this host. Plain `add` leaves it out. `add --all` offers it; dismissing moves it to `dismissed:`.
 
 `dotfiles add` shows each unreviewed edit and each conflict and asks for one of three answers:
 
-- **Save** asks which layer to use (this host, any profile or the public default), copies the change there and stages it. It never commits or pushes. Merged files save only that key; other files save the whole file. A saved edit isn't asked about again while that layer holds the value, and discarding the staged change brings it back.
+- **Save** asks which layer to use (this host, any profile or the public default), copies the change there and stages it. It never commits or pushes. Merged files save only that key; other files save the whole file. A saved edit isn't asked about again while that layer holds the value: at the end `add` lists what's waiting for a commit, and discarding the staged change brings it back.
 - **Dismiss** keeps the change local; `add` asks again only if the value changes. On a conflict it also accepts the repo's current version as the new starting point.
 - **Skip** asks again next time. Quitting partway does the same for anything unanswered.
 
-`add --all` also asks again about dismissed edits. When the review ends, `add` lists the staged files in each repo and tells you to commit and push them.
+`add --all` also asks again about dismissed edits and those held in a lower layer. When the review ends, `add` lists the staged files in each repo and tells you to commit and push them.
 
 - It only offers files dotfiles manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in. A tool's drop-in is offered the public default only, and `90-dotfiles.sh` only dismiss and skip.
 - Layers offered: the host layer only when the host directory in the hosts repo has a `host.yaml` in its working copy; each profile in the chain; the public default. A repo with no git, a detached hosts repo and a pinned public repo offer no layers, and `add` says why.
@@ -476,13 +480,14 @@ A manual `pull` removes a stale report. `status` shows `updates available:` itse
 | File | Content |
 |---|---|
 | `lock` | Lock held while a pull or an update check runs (a `lock.d/` directory where `flock` is unavailable). |
-| `records/` | The saved copies behind local-edit detection. See Local edits. |
 | `last-check` | Empty file; its modification time is the last update check and drives the throttle. |
 | `last-sync` | Empty file; touched by each `pull`. |
 | `last-complete` | The fingerprint of the last complete pull, for the early stop. |
 | `launch.log` | Output of the login drop-in's launch of `dotfiles check-updates`; overwritten each time. |
 | `report` | Message shown at the next terminal, removed once shown. |
 | `pending` | Packages still to install, one per line. Shown by `dotfiles status` and by the reminder at every terminal. Refreshed by each real pull; empty when nothing is missing. |
+
+The saved copies behind local-edit detection are not here: they are in `$STATE_DIR/records/`, with each app's state in `$STATE_DIR/apps/`. See Local edits.
 
 ### Turning it off
 

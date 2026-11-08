@@ -139,11 +139,12 @@ Read-only. It shows the repos, version, host, profile, last check, missing packa
 
 | Label | Meaning |
 |---|---|
-| `updates available:` | The repo has changes `pull` would bring in. |
+| `updates available:` | Changes `pull` would bring in: apps whose files changed, and commits already fetched but not merged in either repo. |
 | `unreviewed changes:` | Local edits `add` hasn't asked about yet. |
 | `conflicts:` | You and the repo both changed them; yours is kept. |
 | `dismissed:` | Edits you kept local on purpose. `add --all` asks again. |
-| `saved, not committed:` | Edits `add` staged in a repo that you haven't committed. |
+| `saved, not committed:` | Edits a repo layer holds with uncommitted changes. Commit them, then run `pull`. |
+| `held in a lower layer:` | Edits a committed layer holds, below a layer that wins, so they stay local on this host. `add` leaves them out; `add --all` offers them, and dismissing one moves it to `dismissed:`. |
 | `uncommitted files:` | Repo files that aren't committed, so aren't deployed. |
 
 ### versions and checkout
@@ -210,6 +211,8 @@ dotfiles pull --remote user@host      # update; --force is passed through
 
 Removes deployed config and restores your original files. It lists your local changes first and always takes a snapshot, even with `--no-backup`; if that fails, nothing is restored. Installed tools and the `dotfiles` command stay. So do `~/.bashrc.d/90-dotfiles.sh` and the drop-ins placed by `install.dropin`; drop-ins listed under an app's `files:` (such as `50-tmux.sh`) are removed or restored like any other file.
 
+`uninstall` removes `~/.gitconfig` and leaves `~/.gitconfig.local`, which holds the settings the first install moved out of your old `~/.gitconfig`; rename it back if you want them.
+
 ### verify and help
 
 `dotfiles verify` checks that every deployed file exists. `dotfiles help` lists every command and flag.
@@ -220,7 +223,8 @@ Removes deployed config and restores your original files. It lists your local ch
 |---|---|---|
 | `--dry-run` | `pull`, `sync`, `checkout`, `uninstall`, `pull --remote`, `init --remote` | Shows what would happen without changing anything. |
 | `--no-fetch` | `pull`, `sync` | Doesn't fetch. Uses what's checked out. |
-| `--force [PATH]` | `pull`, `pull --remote` | Takes the repo's version of every file, or of `PATH` only. **This overwrites local edits**, though the snapshot it takes keeps them. |
+| `--force [PATH]` | `pull` | Takes the repo's version of every file, or of `PATH` only. **This overwrites local edits**, though the snapshot it takes keeps them. |
+| `--force` | `pull --remote` | The same on the host, for every file. It takes no `PATH`, and a word with a `/` or starting with `~` is refused as a host. For one file, run `dotfiles pull --force PATH` there over ssh. |
 | `--no-backup` | `pull`, `uninstall` | Skips creating backups. `uninstall` and `pull --force` still take their snapshot. |
 | `--profile NAME` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this profile for this run only. |
 | `--hosts-dir PATH` | `pull`, `sync`, `status`, `add`, `uninstall`, `verify` | Uses this hosts repo for this run only. |
@@ -403,6 +407,8 @@ install:
 chmod +x apps/lazygit/install.sh   # required, or the pull fails
 ```
 
+Only committed files deploy, so `chmod` the script and commit it.
+
 `install.dropin` only works with an `install.sh`. For a tool installed by package manager, put its drop-in under `files:` as in the ripgrep example.
 
 ### Removing an app
@@ -517,7 +523,7 @@ The overlay then only needs what differs, as in this `hosts/my-laptop/apps/claud
 
 Merging needs `jq`. Objects merge recursively, while arrays and single values are replaced.
 
-A merge never deletes a key. To remove one, delete it from the repo layer **and** from the live file. To force a setting off on a machine where it might already be on, set it explicitly in that machine's layer.
+When the repo removes a key, a pull deletes it from the live file if you haven't changed its value, along with any parents that leaves empty. If you have changed it, it stays. To force a setting off on a machine where it might already be on, set it explicitly in that machine's layer.
 
 ### Checking the result
 
@@ -537,7 +543,7 @@ dotfiles pull --dry-run    # shows what would change
 | `pull failed` | The remote can't be reached. Pull carries on with what's checked out. |
 | `pull blocked` | The repo has diverged, or local changes are in the way. Nothing was deployed. Run the git commands it prints, then `dotfiles pull`. |
 | `This host still has records from an older version` | Run `dotfiles init`: it snapshots every managed file and starts fresh records. |
-| `Custom install script not found or not executable` | `chmod +x apps/<app>/install.sh` |
+| `Custom install script not found or not executable` | Run `chmod +x apps/<app>/install.sh` and commit it. The check reads the committed file, so an uncommitted `chmod` changes nothing. |
 | A pull warns that this machine is pinned | You ran `dotfiles checkout` on a tag or commit. `dotfiles checkout main` follows `main` again. |
 | An `updates available` message at a new terminal | The background check found new commits and deployed nothing. Run `dotfiles pull`. |
 

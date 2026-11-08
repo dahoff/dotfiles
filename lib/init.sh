@@ -555,7 +555,7 @@ init_reset_summary() {
 }
 
 # What status says about local changes, in INIT_LOST_REPORT: the unreviewed, conflicting,
-# dismissed and saved-not-committed lists, without status' notes. Returns 1 when status
+# dismissed, saved-not-committed and held-lower lists, without status' notes. Returns 1 when status
 # can't tell (it prints no such section when the profile or overlays don't load).
 INIT_LOST_REPORT=""
 init_status_report() {
@@ -565,7 +565,7 @@ init_status_report() {
     grep -q '^unreviewed changes:' <<< "$out" || return 1
     INIT_LOST_REPORT=$(awk '
         /^[^ ]/ {
-            show = ($0 ~ /^(unreviewed changes|conflicts|dismissed|saved, not committed):  \(/)
+            show = ($0 ~ /^(unreviewed changes|conflicts|dismissed|saved, not committed|held in a lower layer):  \(/)
             if (show) sub(/:  \(.*$/, ":")
         }
         show { print }' <<< "$out")
@@ -587,7 +587,7 @@ init_update_repos() {
         reason=$(sync_pull_repo "$repo") || rc=$?
         [[ $rc -ne 0 ]] || continue
         if [[ $rc -eq 2 ]]; then
-            log_error "$repo: pull blocked ($reason); nothing was changed"
+            log_error "$repo: pull blocked ($reason); nothing was deployed, but the settings are saved"
             echo "Commit or set aside your changes there, then bring it up to date:" >&2
             echo "  cd $repo && git pull --rebase" >&2
             echo "Push if the repo has commits of its own, then run: dotfiles init" >&2

@@ -276,7 +276,8 @@ section_has "uncommitted files, not deployed" "apps/lazygit/files/50-lazygit.sh"
 run2 pull --no-backup --no-fetch
 no_line "have local edits"
 add2 k
-has_line "No local edits"
+has_line "waiting for a commit"
+no_line "No local edits"
 pass "saved"
 
 info "Case 14: committing the save settles it"
