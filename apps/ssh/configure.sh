@@ -97,7 +97,7 @@ _merge_prior_ssh_config() {
     fi
     if [[ -n "$entries" ]]; then
         {
-            printf '\n# From the ~/.ssh/config this machine had before dotfiles (original: %s/original/).\n' "${BACKUP_DIR/#$HOME/~}"
+            printf '\n# From the ~/.ssh/config this machine had before dotfiles (original: %s/original/).\n' "${BACKUP_DIR/#"$HOME"/\~}"
             printf "# 'dotfiles add' saves them to a repo; move ones for this machine only to ~/.ssh/config.local.\n"
             printf '%s\n' "$entries"
         } >> "$dest"
