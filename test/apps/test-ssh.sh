@@ -80,42 +80,75 @@ else
     fail "Config not removed on uninstall"
 fi
 
-# Test 5: An existing config is kept as config.local
-info "Test 5: Existing ~/.ssh/config becomes config.local"
+# Stage the app the way dotfiles does, with a layer (a hosts-repo profile) that adds koi
+stage_with_repo_host() {
+    mkdir -p "$TEST_HOME/layer/apps/ssh/files"
+    { cat files/config; printf '\nHost koi\n    HostName 192.168.1.156\n'; } > "$TEST_HOME/layer/apps/ssh/files/config"
+    (
+        source "$ROOT_DIR/lib/logging.sh"
+        source "$ROOT_DIR/lib/utils.sh"
+        source "$ROOT_DIR/lib/overlay.sh"
+        overlay_stage_app "$ROOT_DIR/apps/ssh" "$TEST_HOME/stage" /dev/null "$TEST_HOME/layer"
+    ) || fail "could not stage"
+}
+
+# Test 5: An existing config is merged in, minus hosts the repo has
+info "Test 5: Existing ~/.ssh/config is merged into the managed one"
 reset_env
 mkdir -m 700 "$HOME/.ssh"
-printf 'Host oldbox\n    HostName 10.9.9.9\n' > "$HOME/.ssh/config"
+cat > "$HOME/.ssh/config" <<'CFG'
+# my old config
+ServerAliveInterval 30
+Include config.local
+
+Host oldbox    #Added by lazyssh
+    HostName 10.9.9.9
+    User bob
+Host KOI
+    HostName 10.0.0.99
+Host koi spare
+    HostName 10.0.0.98
+Match host *.lab
+    User labuser
+CFG
 chmod 644 "$HOME/.ssh/config"
 ./configure.sh install --no-backup &>/dev/null
-if grep -q "Host oldbox" "$HOME/.ssh/config.local" \
-    && [[ "$(mode_of "$HOME/.ssh/config.local")" == 600 ]] \
-    && diff -q "$HOME/.ssh/config" files/config &>/dev/null; then
-    pass "Old hosts kept in config.local (0600); managed config deployed"
-else
-    fail "Existing config not preserved"
-fi
+LIVE="$HOME/.ssh/config"
+# The repo copy comes first, unchanged
+head -n "$(wc -l < files/config)" "$LIVE" | diff -q - files/config &>/dev/null || fail "repo copy not first in $LIVE"
+grep -q "Host oldbox" "$LIVE" || fail "oldbox not merged"
+grep -q "Match host \*.lab" "$LIVE" || fail "Match block not merged"
+[[ "$(grep -c 'Include config.local' "$LIVE")" == 1 ]] || fail "Include config.local duplicated"
+# Options from above the first Host stay global
+awk '/^Host \*$/{f=1} f && /ServerAliveInterval 30/{ok=1} END{exit !ok}' "$LIVE" || fail "global option not under Host *"
+[[ "$(mode_of "$LIVE")" == 600 && ! -e "$HOME/.ssh/config.local" ]] || fail "mode or config.local wrong"
+pass "Old entries appended after the repo copy; globals under Host *; no config.local"
 
-# Test 6: A second install (after uninstall) doesn't clobber config.local
-info "Test 6: Existing config.local is never overwritten"
-./configure.sh uninstall &>/dev/null
-printf 'Host other\n    HostName 10.8.8.8\n' > "$HOME/.ssh/config"
-./configure.sh install --no-backup &>/dev/null
-if grep -q "Host oldbox" "$HOME/.ssh/config.local" && ! grep -q "Host other" "$HOME/.ssh/config.local"; then
-    pass "config.local left alone"
-else
-    fail "config.local was changed"
-fi
+# Test 6: Hosts the repo already has are dropped; a block with any new alias stays
+info "Test 6: Hosts already in the repo aren't merged"
+reset_env
+stage_with_repo_host
+mkdir -m 700 "$HOME/.ssh"
+printf 'Host koi\n    HostName 10.0.0.99\nHost Koi\n    HostName 10.0.0.97\nHost koi spare\n    HostName 10.0.0.98\nHost newone\n    HostName 10.0.0.5\n' > "$HOME/.ssh/config"
+./configure.sh install --no-backup --stage "$TEST_HOME/stage" &>/dev/null
+LIVE="$HOME/.ssh/config"
+grep -q "10.0.0.99" "$LIVE" && fail "duplicate koi merged"
+grep -q "10.0.0.97" "$LIVE" && fail "duplicate Koi (case) merged"
+grep -q "Host koi spare" "$LIVE" || fail "block with a new alias dropped"
+grep -q "Host newone" "$LIVE" || fail "newone not merged"
+[[ "$(ssh -F "$LIVE" -G koi </dev/null 2>/dev/null | awk '/^hostname /{print $2}')" == 192.168.1.156 ]] || fail "repo's koi doesn't win"
+pass "Repo aliases dropped (any case); new ones kept; repo entry wins"
 
-# Test 7: A config that already matches the repo isn't moved
+# Test 7: A config that already matches the repo is left as it is
 info "Test 7: Matching config stays put"
 reset_env
 mkdir -m 700 "$HOME/.ssh"
 cp files/config "$HOME/.ssh/config"
 ./configure.sh install --no-backup &>/dev/null
-if [[ ! -e "$HOME/.ssh/config.local" ]] && diff -q "$HOME/.ssh/config" files/config &>/dev/null; then
-    pass "No config.local made from an identical file"
+if diff -q "$HOME/.ssh/config" files/config &>/dev/null; then
+    pass "Nothing appended to an identical file"
 else
-    fail "Identical config was moved"
+    fail "Identical config changed"
 fi
 
 # Test 8: Dry run changes nothing
@@ -124,15 +157,25 @@ reset_env
 mkdir -m 700 "$HOME/.ssh"
 printf 'Host oldbox\n' > "$HOME/.ssh/config"
 ./configure.sh install --dry-run &>/dev/null
-if [[ ! -e "$HOME/.ssh/config.local" ]] && grep -q "Host oldbox" "$HOME/.ssh/config"; then
+if [[ "$(cat "$HOME/.ssh/config")" == "Host oldbox" && ! -e "$HOME/.ssh/config.local" ]]; then
     pass "Dry run left ~/.ssh alone"
 else
     fail "Dry run changed ~/.ssh"
 fi
 
+# Test 9: An upgrade never merges again
+info "Test 9: Only the first install merges"
+reset_env
+mkdir -m 700 "$HOME/.ssh"
+printf 'Host oldbox\n    HostName 10.9.9.9\n' > "$HOME/.ssh/config"
+./configure.sh install --no-backup &>/dev/null
+./configure.sh upgrade &>/dev/null
+[[ "$(grep -c 'Host oldbox' "$HOME/.ssh/config" || true)" == 1 ]] || fail "upgrade merged again, or dropped the merged entries"
+pass "No second merge on upgrade"
+
 rm -rf "$TEST_STATE" "$TEST_HOME"
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 8 ssh module tests passed!${NC}"
+echo -e "${GREEN}All 9 ssh module tests passed!${NC}"
 echo "======================================"

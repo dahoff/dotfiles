@@ -294,7 +294,7 @@ git -C <hosts repo> commit -m "ssh: add newhost" && git -C <hosts repo> push
 Other machines get the host on their next `pull`, as an alias for `ssh newhost`, `scp file newhost:` and lazyssh.
 
 - **Settings for one machine** go in `~/.ssh/config.local`, which is never copied into a repo. It's read first, so it wins.
-- **An existing `~/.ssh/config`** is renamed to `~/.ssh/config.local` on the first install, so its hosts keep working. lazyssh doesn't list hosts from an included file, so to share them, move them into `~/.ssh/config` and run `dotfiles add`.
+- **An existing `~/.ssh/config`** is merged in on the first install: its entries are appended to the managed file, except `Host` blocks whose aliases are all in the repo already. Options above its first `Host` line go under `Host *`, so they still apply to every host. The original is kept in `~/.bak/ssh/original/`. The merged entries then show as a local edit, so run `dotfiles add` to save them to a repo, after moving any that are for this machine only into `~/.ssh/config.local`. Until you do, pulls hold back changes to `~/.ssh/config` on that machine.
 - Keys and `known_hosts` are never managed.
 
 ### Undoing a change
