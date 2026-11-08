@@ -1,0 +1,22 @@
+app:
+  name: ssh
+  description: SSH client config (~/.ssh/config), shared host aliases
+
+# The public file is only a stub: the real host list belongs in a private hosts repo, at
+# profiles/<name>/apps/ssh/files/config (or hosts/<hostname>/...). Keep its first line,
+# `Include config.local`.
+files:
+  - src: config
+    dest: ~/.ssh/config
+    mode: '0600'
+
+backup:
+  dir: ~/.bak/ssh
+  max_backups: 3
+
+requirements:
+  - ssh
+
+install:
+  apt: openssh-client
+  dnf: openssh-clients

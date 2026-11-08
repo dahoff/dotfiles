@@ -56,7 +56,7 @@ pass "dry run left HOME untouched"
 info "Test 1: no hosts dir keeps today's resolution"
 run pull --dry-run --hostname testhost
 [[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
-[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
+[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit ssh lazyssh scripts claude" ]] \
     || fail "package list changed: $(packages_line)"
 [[ "$OUT" != *"Host directory"* ]] || fail "no host directory without hosts dir"
 pass "unchanged without hosts dir"
@@ -65,14 +65,14 @@ pass "unchanged without hosts dir"
 info "Test 2: hosts-dir profile extending its own name continues in dotfiles"
 run pull --dry-run --hosts-dir "$HR" --hostname nohost --profile minimal
 [[ $RC -eq 0 ]] || fail "dry-run failed: $OUT"
-[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq scripts" ]] \
+[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq ssh scripts" ]] \
     || fail "expected dotfiles minimal minus tree: $(packages_line)"
 pass "lookup order and self-extend"
 
 # Test 3
 info "Test 3: profile only in dotfiles is found"
 run pull --dry-run --hosts-dir "$HR" --hostname nohost --profile complete
-[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
+[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit ssh lazyssh scripts claude" ]] \
     || fail "fallback: $(packages_line)"
 pass "dotfiles fallback"
 
@@ -264,7 +264,7 @@ mkdir -p "$HR/profiles/oncomplete/apps/claude/files"
 echo 'extends: complete' > "$HR/profiles/oncomplete.yaml"
 run pull --dry-run --no-fetch --hosts-dir "$HR" --hostname nohost --profile oncomplete
 [[ $RC -eq 0 ]] || fail "extends complete failed: $OUT"
-[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit lazyssh scripts claude" ]] \
+[[ "$(packages_line)" == "Packages: git bash tmux vim curl fzf jq tree lazygit ssh lazyssh scripts claude" ]] \
     || fail "extends complete changed the list: $(packages_line)"
 echo '# wrong name' > "$HR/profiles/oncomplete/apps/claude/files/statusbar.sh"
 run pull --dry-run --no-fetch --hosts-dir "$HR" --hostname nohost --profile oncomplete

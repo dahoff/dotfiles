@@ -12,6 +12,7 @@ packages:
   - jq
   - tree
   - lazygit
+  - ssh
   - lazyssh
   - scripts
   - claude

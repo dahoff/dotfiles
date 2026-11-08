@@ -1,0 +1,11 @@
+# ~/.ssh/config - managed by dotfiles (apps/ssh)
+#
+# This public default has no hosts. Shared host aliases live in the private hosts repo,
+# at profiles/<name>/apps/ssh/files/config, which replaces this file entirely.
+#
+# Hosts added with lazyssh (or by hand) land here as a local edit: run 'dotfiles add' to
+# save them to a layer, then commit and push the repo it names.
+#
+# Settings for this machine only go in ~/.ssh/config.local, which is never copied into a
+# repo. It's read first, so it wins over anything below. (lazyssh doesn't list its hosts.)
+Include config.local

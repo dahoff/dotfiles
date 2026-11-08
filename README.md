@@ -102,7 +102,7 @@ Answers are saved in `~/.config/dotfiles/config.yaml`. Run `dotfiles init` again
 
 | Profile | Tools |
 |---|---|
-| `complete` | git, bash, tmux, vim, curl, fzf, jq, tree, lazygit, lazyssh, scripts, claude |
+| `complete` | git, bash, tmux, vim, curl, fzf, jq, tree, lazygit, ssh, lazyssh, scripts, claude |
 | `minimal` | `complete` without claude, lazygit and lazyssh |
 
 ## Command details
@@ -279,6 +279,23 @@ dotfiles add
 Until you save them, edits are safe: `pull` leaves an edited file alone, even when the repo changes the same file, and warns you. See [Resolving conflicts](#resolving-conflicts).
 
 Your own `~/.bashrc.d/*.sh` drop-ins and `~/.gitconfig.local` are never copied into a repo, which makes them the right place for secrets and one-off settings.
+
+### SSH hosts
+
+The `ssh` app deploys `~/.ssh/config` (mode 0600). The public copy is a stub with no hosts, because host names and addresses don't belong in a public repo. Keep the shared host list in the hosts repo at `profiles/<name>/apps/ssh/files/config`, or `hosts/<hostname>/...` for one machine. That copy replaces the stub whole, so keep its first line, `Include config.local`.
+
+To add a host, use lazyssh (or edit `~/.ssh/config`), then save it back and publish it:
+
+```bash
+dotfiles add                       # offers the profile layer; stages it
+git -C <hosts repo> commit -m "ssh: add newhost" && git -C <hosts repo> push
+```
+
+Other machines get the host on their next `pull`, as an alias for `ssh newhost`, `scp file newhost:` and lazyssh.
+
+- **Settings for one machine** go in `~/.ssh/config.local`, which is never copied into a repo. It's read first, so it wins.
+- **An existing `~/.ssh/config`** is renamed to `~/.ssh/config.local` on the first install, so its hosts keep working. lazyssh doesn't list hosts from an included file, so to share them, move them into `~/.ssh/config` and run `dotfiles add`.
+- Keys and `known_hosts` are never managed.
 
 ### Undoing a change
 
