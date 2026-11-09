@@ -356,16 +356,16 @@ OUT=$(bash "$GIT_CONF" upgrade --skip-git-setup --no-backup 2>&1) || fail "git u
 has_line "Keeping local edit"
 pass "git edit kept"
 
-info "Case 25: .bashrc: the original is kept, then edits are found and can be saved"
-echo '# my own bashrc' > "$HOME/.bashrc"
+info "Case 25: .bashrc: the original is kept, its own lines move to 00-local.sh, then edits are found and can be saved"
+echo 'export MY_OWN_BASHRC=1' > "$HOME/.bashrc"
 sed -i 's/^packages:/packages:\n  - name: bash\n    config:\n      dir: bash/' "$H/profiles/base.yaml"
 git -C "$H" add -A
 git -C "$H" commit -q -m "add bash"
 do_pull
-has_line "no longer loaded"
+has_line "still loaded"
 cmp -s "$R/apps/bash/files/.bashrc" "$HOME/.bashrc" || fail ".bashrc is not the repo's file"
-[[ ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "00-local.sh was created"
-grep -qF "# my own bashrc" "$HOME/.bak/bash/original/.bashrc" || fail "original lost"
+grep -qxF 'export MY_OWN_BASHRC=1' "$HOME/.bashrc.d/00-local.sh" || fail "own lines not moved to 00-local.sh"
+grep -qF "MY_OWN_BASHRC" "$HOME/.bak/bash/original/.bashrc" || fail "original lost"
 cut -f2 "$STATE_DIR/records/bash/manifest.tsv" | grep -qxF "$HOME/.bashrc" || fail ".bashrc not recorded"
 run status
 has_line "unreviewed changes: none"
