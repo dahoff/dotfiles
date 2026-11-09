@@ -156,21 +156,25 @@ rm -rf "$HOME/.bashrc.d"
 rm -rf "$TEST_STATE/apps"
 mkdir -p "$TEST_STATE/apps"
 
-# Test 14: a custom .bashrc is replaced, kept as the original, and reported
-info "Test 14: Custom .bashrc is replaced with a warning, nothing moves"
+# Test 14: a custom .bashrc is replaced; the lines added to the stock file move to 00-local.sh
+info "Test 14: Custom .bashrc: added lines move to 00-local.sh, with a notice"
 WARNINGS="$TEST_HOME/warnings"
 SKEL="$TEST_HOME/skel-bashrc"
 printf '# stock\nPS1="stock> "\n' > "$SKEL"
-echo '# MY EXISTING CONFIG' > "$HOME/.bashrc"
-echo 'export MY_VAR=hello' >> "$HOME/.bashrc"
+printf '# stock\nPS1="stock> "\n# MY EXISTING CONFIG\nexport MY_VAR=hello\n' > "$HOME/.bashrc"
 OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup 2>&1) || fail "14: install failed: $OUT"
 ORIG="$HOME/.bak/bash/original/.bashrc"
+LOCAL="$HOME/.bashrc.d/00-local.sh"
 cmp -s files/.bashrc "$HOME/.bashrc" || fail "14: .bashrc is not the repo's file"
-[[ ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "14: 00-local.sh was created"
+grep -qxF 'export MY_VAR=hello' "$LOCAL" && grep -qxF '# MY EXISTING CONFIG' "$LOCAL" || fail "14: added lines not in 00-local.sh"
+grep -qF 'stock> ' "$LOCAL" && fail "14: stock lines carried over"
+[[ "$(stat -c %a "$LOCAL" 2>/dev/null || stat -f %Lp "$LOCAL")" == 644 ]] || fail "14: mode"
 grep -qF 'export MY_VAR=hello' "$ORIG" || fail "14: original not kept"
-grep -qF "$ORIG" "$WARNINGS" && grep -qF 'no longer loaded' "$WARNINGS" || fail "14: warning missing: $(cat "$WARNINGS" 2>/dev/null)"
-[[ "$(grep -c 'no longer loaded' <<< "$OUT")" -ge 1 ]] || fail "14: not shown: $OUT"
-pass "Replaced, original kept, warned"
+grep -qF '00-local.sh, which is still loaded' "$WARNINGS" && grep -qF 'rm ~/.bashrc.d/00-local.sh' "$WARNINGS" \
+    || fail "14: notice missing: $(cat "$WARNINGS" 2>/dev/null)"
+grep -qF 'still loaded' <<< "$OUT" || fail "14: not shown: $OUT"
+[[ "$(bash -ic 'echo "${MY_VAR:-}"' 2>/dev/null </dev/null | tail -1)" == hello ]] || fail "14: carried lines not loaded"
+pass "Added lines moved to 00-local.sh and loaded; stock lines left out; notice shown"
 
 # Clean up for next test
 ./configure.sh uninstall &>/dev/null 2>&1 || true
@@ -342,35 +346,80 @@ OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configur
 pass "Dry run quiet"
 
 # Test 28: the warning names a copy that holds what was replaced
-info "Test 28: Reinstall names the snapshot, not the stale original"
+info "Test 28: Reinstall with 00-local.sh already there: warns, names the snapshot"
 reset_bash
-echo '# first custom' > "$HOME/.bashrc"
+echo 'export FIRST=1' > "$HOME/.bashrc"
 DOTFILES_SKEL_BASHRC="$SKEL" ./configure.sh install --no-backup &>/dev/null || fail "28: install failed"
 ./configure.sh uninstall --no-backup &>/dev/null || fail "28: uninstall failed"
-echo '# second custom EDIT' > "$HOME/.bashrc"
+echo 'export SECOND_EDIT=1' > "$HOME/.bashrc"
 rm -f "$WARNINGS"
 DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "28: reinstall failed"
 grep -qF 'no longer loaded' "$WARNINGS" || fail "28: no warning: $(cat "$WARNINGS" 2>/dev/null)"
 NAMED=$(grep -o "$HOME/.bak/bash/[^ ]*/.bashrc" "$WARNINGS" | head -1)
 [[ -n "$NAMED" && -f "$NAMED" ]] || fail "28: named path missing: $(cat "$WARNINGS")"
-grep -qF 'second custom EDIT' "$NAMED" || fail "28: $NAMED lacks the edit"
+grep -qF 'SECOND_EDIT' "$NAMED" || fail "28: $NAMED lacks the edit"
+grep -qF 'already exists' "$WARNINGS" || fail "28: should say 00-local.sh already exists"
+grep -qF 'SECOND_EDIT' "$HOME/.bashrc.d/00-local.sh" && fail "28: existing 00-local.sh changed"
 [[ "$NAMED" != "$HOME/.bak/bash/original/.bashrc" ]] || fail "28: named the stale original"
 pass "Warning points at the replaced content"
 
-# Test 29: a first install names the original, and it holds the replaced content
+# Test 29: a first install's notice names the original, which holds the replaced content
 info "Test 29: First install names the original"
 reset_bash
-echo '# replaced content' > "$HOME/.bashrc"
+echo 'alias replaced_content=true' > "$HOME/.bashrc"
 DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "29: install failed"
-grep -qF "$HOME/.bak/bash/original/.bashrc" "$WARNINGS" || fail "29: original not named: $(cat "$WARNINGS")"
-grep -qF 'replaced content' "$HOME/.bak/bash/original/.bashrc" || fail "29: original lacks the content"
-grep -qF 'no longer loaded' "$WARNINGS" || fail "29: wording"
+grep -qF "~/.bak/bash/original/.bashrc" "$WARNINGS" || fail "29: original not named: $(cat "$WARNINGS")"
+grep -qF 'replaced_content' "$HOME/.bak/bash/original/.bashrc" || fail "29: original lacks the content"
+grep -qF '~/.bak/bash/original/.bashrc' "$HOME/.bashrc.d/00-local.sh" || fail "29: drop-in doesn't name the original"
 pass "Original named"
+
+# Test 30: a block added around stock lines stays whole, and stays valid
+info "Test 30: Added blocks stay whole"
+reset_bash
+printf 'if true; then\n    :\nfi\nPS1="stock> "\n' > "$SKEL"
+printf 'if true; then\n    :\nfi\nPS1="stock> "\nif [ -d /opt/x ]; then\n    export X=1\nfi\nmyfn() {\n    echo hi\n}\n' > "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "30: install failed"
+LOCAL="$HOME/.bashrc.d/00-local.sh"
+bash -n "$LOCAL" || fail "30: 00-local.sh isn't valid"
+grep -qxF '    export X=1' "$LOCAL" && grep -qxF 'myfn() {' "$LOCAL" || fail "30: block missing: $(cat "$LOCAL")"
+[[ "$(grep -c '^fi$' "$LOCAL")" == 1 ]] || fail "30: stock block carried, or added block broken: $(cat "$LOCAL")"
+pass "Blocks kept whole; stock block left out"
+
+# Test 31: lines that aren't valid on their own: nothing moved, the old warning
+info "Test 31: Invalid carried lines fall back to a warning"
+reset_bash
+printf 'if true; then\n    :\nfi\n' > "$SKEL"
+printf 'if [ -n "$EDITED_COND" ]; then\n    :\nfi\n' > "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "31: install failed"
+[[ ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "31: invalid drop-in written: $(cat "$HOME/.bashrc.d/00-local.sh")"
+grep -qF 'no longer loaded' "$WARNINGS" && grep -qF "valid script" "$WARNINGS" || fail "31: warning: $(cat "$WARNINGS" 2>/dev/null)"
+grep -qF "$HOME/.bak/bash/original/.bashrc" "$WARNINGS" || fail "31: original not named"
+pass "Fell back to the warning"
+
+# Test 32: an old .bashrc that's already the repo's file, or only adds comments: no notice
+info "Test 32: Nothing to carry, no notice"
+reset_bash
+cp files/.bashrc "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "32: install failed"
+[[ ! -s "$WARNINGS" && ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "32: warned for the repo's own file: $(cat "$WARNINGS" 2>/dev/null)"
+reset_bash
+{ cat "$SKEL"; printf '\n# just a note\n'; } > "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "32: install failed"
+[[ ! -s "$WARNINGS" && ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "32: warned for a comment: $(cat "$WARNINGS" 2>/dev/null)"
+pass "Quiet when nothing ran"
+
+# Test 33: no stock file to compare with: all of it is carried
+info "Test 33: Without a skel file, the whole old file moves"
+reset_bash
+printf 'export A=1\nexport B=2\n' > "$HOME/.bashrc"
+DOTFILES_SKEL_BASHRC="$TEST_HOME/no-such-skel" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "33: install failed"
+grep -qxF 'export A=1' "$HOME/.bashrc.d/00-local.sh" && grep -qxF 'export B=2' "$HOME/.bashrc.d/00-local.sh" || fail "33: not all carried"
+pass "Whole file carried"
 
 rm -rf "$SUPP_DIR"
 cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 29 bash-specific tests passed!${NC}"
+echo -e "${GREEN}All 33 bash-specific tests passed!${NC}"
 echo "======================================"

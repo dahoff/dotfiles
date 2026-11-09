@@ -377,9 +377,9 @@ Each managed file, or each key of a merged JSON file, has two saved copies in `$
 
 `~/.bashrc` is an ordinary managed file: edit protection and `add` apply to it. A host-specific change can be saved as a host copy with `add`, which then shadows later changes to the public `.bashrc` on that host.
 
-On first install, a custom `~/.bashrc` is replaced like any other file, and a warning says the old content is no longer loaded. The warning names the original in the app's `original/` backup when that is the file just replaced. If it isn't (on a reinstall after an uninstall, `original/` still holds the first one), it names the snapshot that holds it. A distro's unchanged `/etc/skel/.bashrc` and an empty file get no warning.
+On first install, a custom `~/.bashrc` is replaced like any other file. The lines it adds to `/etc/skel/.bashrc` (`DOTFILES_SKEL_BASHRC` in tests), found with `git diff --histogram` so an added block stays whole, are written to `~/.bashrc.d/00-local.sh` with a header naming the old file, and a notice says so and how to stop loading them (delete the file). Without a skel file, the whole old file moves. Nothing moves, and the warning says the old content is no longer loaded, when `00-local.sh` already exists or the lines fail `bash -n` on their own. The notice names the original in the app's `original/` backup when that is the file just replaced. If it isn't (on a reinstall after an uninstall, `original/` still holds the first one), it names the snapshot that holds it. A distro's unchanged `/etc/skel/.bashrc`, an empty file, the file about to be deployed, and one that only adds comments or blank lines get no notice.
 
-`~/.bashrc` still loads everything in `~/.bashrc.d/`, so an existing `00-local.sh` keeps working. Dotfiles leaves it alone and creates nothing there.
+`~/.bashrc` still loads everything in `~/.bashrc.d/`, so an existing `00-local.sh` keeps working. Dotfiles never changes one that exists, and only creates it on a first install, as above.
 
 ### Self-install
 

@@ -88,7 +88,7 @@ The first pull may ask for your sudo password to install packages, and for your 
 Your existing settings are kept:
 
 - `~/.gitconfig` moves to `~/.gitconfig.local`, which the managed config includes.
-- A custom `~/.bashrc` is replaced, and a warning says where the old copy is: its content is no longer loaded. Copy back what you want, and `dotfiles add` offers to save it to a layer.
+- A custom `~/.bashrc` is replaced, and the lines you'd added to the distro's stock file (`/etc/skel/.bashrc`) move to `~/.bashrc.d/00-local.sh`, so they're still loaded. A notice says so; to stop loading them, delete that file. If they don't make a valid script on their own, or `00-local.sh` already exists, nothing moves, and a warning names the old copy instead.
 - Every file that gets replaced is first copied to `~/.bak/<app>/original/`, and a snapshot of all managed files is always taken.
 - Files dotfiles doesn't manage are never touched, including any `~/.bashrc.d/*.sh` of your own.
 
