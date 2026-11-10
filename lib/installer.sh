@@ -314,6 +314,16 @@ installer_report_warning() {
     fi
 }
 
+# Something the user should know that isn't a problem: logged, and listed under Notes in
+# the pull's summary
+# Usage: installer_report_notice MESSAGE
+installer_report_notice() {
+    log_info "$1"
+    if [[ -n "${DOTFILES_NOTICES_FILE:-}" ]]; then
+        echo "$1" >> "$DOTFILES_NOTICES_FILE"
+    fi
+}
+
 # Save what a file is about to replace as its original, once. A file with a record came
 # from dotfiles, not from the machine.
 # Usage: installer_save_original dest

@@ -363,6 +363,7 @@ git -C "$H" add -A
 git -C "$H" commit -q -m "add bash"
 do_pull
 has_line "still loaded"
+has_line "Notes:"
 cmp -s "$R/apps/bash/files/.bashrc" "$HOME/.bashrc" || fail ".bashrc is not the repo's file"
 grep -qxF 'export MY_OWN_BASHRC=1' "$HOME/.bashrc.d/00-local.sh" || fail "own lines not moved to 00-local.sh"
 grep -qF "MY_OWN_BASHRC" "$HOME/.bak/bash/original/.bashrc" || fail "original lost"

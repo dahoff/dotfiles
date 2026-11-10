@@ -200,12 +200,13 @@ app_post_deploy() {
         msg="$dest_t was replaced. The lines you'd added to it were moved to $(_bashrc_tilde "$dropin"), which is still loaded."
         msg="$msg To stop loading them: rm $(_bashrc_tilde "$dropin")"
         [[ -z "$BASHRC_COPY" ]] || msg="$msg (the old file is at $(_bashrc_tilde "$BASHRC_COPY"))"
-    else
-        msg="$dest_t was replaced; the old content is no longer loaded"
-        [[ -z "$BASHRC_CARRY_WHY" ]] || msg="$msg ($BASHRC_CARRY_WHY, so nothing was moved)"
-        msg="$msg."
-        [[ -z "$BASHRC_COPY" ]] || msg="$msg The old file is at $BASHRC_COPY"
+        installer_report_notice "$msg"
+        return 0
     fi
+    msg="$dest_t was replaced; the old content is no longer loaded"
+    [[ -z "$BASHRC_CARRY_WHY" ]] || msg="$msg ($BASHRC_CARRY_WHY, so nothing was moved)"
+    msg="$msg."
+    [[ -z "$BASHRC_COPY" ]] || msg="$msg The old file is at $BASHRC_COPY"
     installer_report_warning "$msg"
 }
 

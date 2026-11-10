@@ -159,10 +159,11 @@ mkdir -p "$TEST_STATE/apps"
 # Test 14: a custom .bashrc is replaced; the lines added to the stock file move to 00-local.sh
 info "Test 14: Custom .bashrc: added lines move to 00-local.sh, with a notice"
 WARNINGS="$TEST_HOME/warnings"
+NOTICES="$TEST_HOME/notices"
 SKEL="$TEST_HOME/skel-bashrc"
 printf '# stock\nPS1="stock> "\n' > "$SKEL"
 printf '# stock\nPS1="stock> "\n# MY EXISTING CONFIG\nexport MY_VAR=hello\n' > "$HOME/.bashrc"
-OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup 2>&1) || fail "14: install failed: $OUT"
+OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup 2>&1) || fail "14: install failed: $OUT"
 ORIG="$HOME/.bak/bash/original/.bashrc"
 LOCAL="$HOME/.bashrc.d/00-local.sh"
 cmp -s files/.bashrc "$HOME/.bashrc" || fail "14: .bashrc is not the repo's file"
@@ -170,8 +171,9 @@ grep -qxF 'export MY_VAR=hello' "$LOCAL" && grep -qxF '# MY EXISTING CONFIG' "$L
 grep -qF 'stock> ' "$LOCAL" && fail "14: stock lines carried over"
 [[ "$(stat -c %a "$LOCAL" 2>/dev/null || stat -f %Lp "$LOCAL")" == 644 ]] || fail "14: mode"
 grep -qF 'export MY_VAR=hello' "$ORIG" || fail "14: original not kept"
-grep -qF '00-local.sh, which is still loaded' "$WARNINGS" && grep -qF 'rm ~/.bashrc.d/00-local.sh' "$WARNINGS" \
-    || fail "14: notice missing: $(cat "$WARNINGS" 2>/dev/null)"
+grep -qF '00-local.sh, which is still loaded' "$NOTICES" && grep -qF 'rm ~/.bashrc.d/00-local.sh' "$NOTICES" \
+    || fail "14: notice missing: $(cat "$NOTICES" 2>/dev/null)"
+[[ ! -s "$WARNINGS" ]] || fail "14: reported as a warning: $(cat "$WARNINGS")"
 grep -qF 'still loaded' <<< "$OUT" || fail "14: not shown: $OUT"
 [[ "$(bash -ic 'echo "${MY_VAR:-}"' 2>/dev/null </dev/null | tail -1)" == hello ]] || fail "14: carried lines not loaded"
 pass "Added lines moved to 00-local.sh and loaded; stock lines left out; notice shown"
@@ -267,7 +269,7 @@ fi
 
 reset_bash() {
     ./configure.sh uninstall --no-backup &>/dev/null || true
-    rm -rf "$HOME/.bashrc" "$HOME/.bashrc.d" "$HOME/.bak" "$TEST_STATE/apps" "$TEST_STATE/records" "$WARNINGS"
+    rm -rf "$HOME/.bashrc" "$HOME/.bashrc.d" "$HOME/.bak" "$TEST_STATE/apps" "$TEST_STATE/records" "$WARNINGS" "$NOTICES"
     mkdir -p "$TEST_STATE/apps"
 }
 
@@ -275,7 +277,7 @@ reset_bash() {
 info "Test 21: Stock .bashrc is replaced without a warning"
 reset_bash
 cp "$SKEL" "$HOME/.bashrc"
-OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup 2>&1) || fail "21: install failed: $OUT"
+OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup 2>&1) || fail "21: install failed: $OUT"
 cmp -s files/.bashrc "$HOME/.bashrc" || fail "21: not the repo's file"
 [[ ! -s "$WARNINGS" ]] || fail "21: warned: $(cat "$WARNINGS")"
 grep -qF 'no longer loaded' <<< "$OUT" && fail "21: warned on screen: $OUT"
@@ -285,11 +287,11 @@ pass "Stock file: no warning"
 # Test 22: no .bashrc at all, no warning; empty .bashrc, no warning
 info "Test 22: Missing or blank .bashrc gets no warning"
 reset_bash
-OUT=$(DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup 2>&1) || fail "22: install failed: $OUT"
+OUT=$(DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup 2>&1) || fail "22: install failed: $OUT"
 [[ ! -s "$WARNINGS" ]] || fail "22: warned for a missing file"
 reset_bash
 printf '\n  \n' > "$HOME/.bashrc"
-OUT=$(DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup 2>&1) || fail "22: install failed: $OUT"
+OUT=$(DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup 2>&1) || fail "22: install failed: $OUT"
 [[ ! -s "$WARNINGS" ]] || fail "22: warned for a blank file"
 pass "No warning"
 
@@ -332,7 +334,7 @@ reset_bash
 echo '# mine' > "$HOME/.bashrc"
 DOTFILES_SKEL_BASHRC="$SKEL" ./configure.sh install --no-backup &>/dev/null || fail "26: install failed"
 rm -f "$WARNINGS"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh upgrade --no-backup &>/dev/null || fail "26: upgrade failed"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh upgrade --no-backup &>/dev/null || fail "26: upgrade failed"
 [[ ! -s "$WARNINGS" ]] || fail "26: warned on upgrade"
 pass "Install only"
 
@@ -340,7 +342,7 @@ pass "Install only"
 info "Test 27: Dry run does not warn or change .bashrc"
 reset_bash
 echo '# mine' > "$HOME/.bashrc"
-OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup --dry-run 2>&1) || fail "27: dry run failed: $OUT"
+OUT=$(DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup --dry-run 2>&1) || fail "27: dry run failed: $OUT"
 [[ "$(cat "$HOME/.bashrc")" == '# mine' ]] || fail "27: .bashrc changed"
 [[ ! -s "$WARNINGS" ]] || fail "27: warned in a dry run"
 pass "Dry run quiet"
@@ -353,7 +355,7 @@ DOTFILES_SKEL_BASHRC="$SKEL" ./configure.sh install --no-backup &>/dev/null || f
 ./configure.sh uninstall --no-backup &>/dev/null || fail "28: uninstall failed"
 echo 'export SECOND_EDIT=1' > "$HOME/.bashrc"
 rm -f "$WARNINGS"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "28: reinstall failed"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "28: reinstall failed"
 grep -qF 'no longer loaded' "$WARNINGS" || fail "28: no warning: $(cat "$WARNINGS" 2>/dev/null)"
 NAMED=$(grep -o "$HOME/.bak/bash/[^ ]*/.bashrc" "$WARNINGS" | head -1)
 [[ -n "$NAMED" && -f "$NAMED" ]] || fail "28: named path missing: $(cat "$WARNINGS")"
@@ -367,8 +369,8 @@ pass "Warning points at the replaced content"
 info "Test 29: First install names the original"
 reset_bash
 echo 'alias replaced_content=true' > "$HOME/.bashrc"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "29: install failed"
-grep -qF "~/.bak/bash/original/.bashrc" "$WARNINGS" || fail "29: original not named: $(cat "$WARNINGS")"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "29: install failed"
+grep -qF "~/.bak/bash/original/.bashrc" "$NOTICES" || fail "29: original not named: $(cat "$NOTICES")"
 grep -qF 'replaced_content' "$HOME/.bak/bash/original/.bashrc" || fail "29: original lacks the content"
 grep -qF '~/.bak/bash/original/.bashrc' "$HOME/.bashrc.d/00-local.sh" || fail "29: drop-in doesn't name the original"
 pass "Original named"
@@ -378,7 +380,7 @@ info "Test 30: Added blocks stay whole"
 reset_bash
 printf 'if true; then\n    :\nfi\nPS1="stock> "\n' > "$SKEL"
 printf 'if true; then\n    :\nfi\nPS1="stock> "\nif [ -d /opt/x ]; then\n    export X=1\nfi\nmyfn() {\n    echo hi\n}\n' > "$HOME/.bashrc"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "30: install failed"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "30: install failed"
 LOCAL="$HOME/.bashrc.d/00-local.sh"
 bash -n "$LOCAL" || fail "30: 00-local.sh isn't valid"
 grep -qxF '    export X=1' "$LOCAL" && grep -qxF 'myfn() {' "$LOCAL" || fail "30: block missing: $(cat "$LOCAL")"
@@ -390,7 +392,7 @@ info "Test 31: Invalid carried lines fall back to a warning"
 reset_bash
 printf 'if true; then\n    :\nfi\n' > "$SKEL"
 printf 'if [ -n "$EDITED_COND" ]; then\n    :\nfi\n' > "$HOME/.bashrc"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "31: install failed"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "31: install failed"
 [[ ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "31: invalid drop-in written: $(cat "$HOME/.bashrc.d/00-local.sh")"
 grep -qF 'no longer loaded' "$WARNINGS" && grep -qF "valid script" "$WARNINGS" || fail "31: warning: $(cat "$WARNINGS" 2>/dev/null)"
 grep -qF "$HOME/.bak/bash/original/.bashrc" "$WARNINGS" || fail "31: original not named"
@@ -400,19 +402,19 @@ pass "Fell back to the warning"
 info "Test 32: Nothing to carry, no notice"
 reset_bash
 cp files/.bashrc "$HOME/.bashrc"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "32: install failed"
-[[ ! -s "$WARNINGS" && ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "32: warned for the repo's own file: $(cat "$WARNINGS" 2>/dev/null)"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "32: install failed"
+[[ ! -s "$WARNINGS" && ! -s "$NOTICES" && ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "32: warned for the repo's own file: $(cat "$WARNINGS" 2>/dev/null)"
 reset_bash
 { cat "$SKEL"; printf '\n# just a note\n'; } > "$HOME/.bashrc"
-DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "32: install failed"
-[[ ! -s "$WARNINGS" && ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "32: warned for a comment: $(cat "$WARNINGS" 2>/dev/null)"
+DOTFILES_SKEL_BASHRC="$SKEL" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "32: install failed"
+[[ ! -s "$WARNINGS" && ! -s "$NOTICES" && ! -e "$HOME/.bashrc.d/00-local.sh" ]] || fail "32: warned for a comment: $(cat "$WARNINGS" 2>/dev/null)"
 pass "Quiet when nothing ran"
 
 # Test 33: no stock file to compare with: all of it is carried
 info "Test 33: Without a skel file, the whole old file moves"
 reset_bash
 printf 'export A=1\nexport B=2\n' > "$HOME/.bashrc"
-DOTFILES_SKEL_BASHRC="$TEST_HOME/no-such-skel" DOTFILES_WARNINGS_FILE="$WARNINGS" ./configure.sh install --no-backup &>/dev/null || fail "33: install failed"
+DOTFILES_SKEL_BASHRC="$TEST_HOME/no-such-skel" DOTFILES_WARNINGS_FILE="$WARNINGS" DOTFILES_NOTICES_FILE="$NOTICES" ./configure.sh install --no-backup &>/dev/null || fail "33: install failed"
 grep -qxF 'export A=1' "$HOME/.bashrc.d/00-local.sh" && grep -qxF 'export B=2' "$HOME/.bashrc.d/00-local.sh" || fail "33: not all carried"
 pass "Whole file carried"
 

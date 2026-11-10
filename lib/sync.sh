@@ -6,6 +6,8 @@
 declare -a SYNC_CLEANUP=()
 # Warnings recorded during a pull, listed in its summary
 declare -a SYNC_WARNINGS=()
+# Notes recorded during a pull (not problems), listed in its summary
+declare -a SYNC_NOTICES=()
 # Set when a drop-in couldn't be reset: the reset isn't finished
 RESET_FAILED=false
 # BatchMode for ssh: the background update check must never prompt

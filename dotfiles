@@ -502,6 +502,8 @@ run_phase_configs() {
         : > "$DOTFILES_KEPT_FILE"
         export DOTFILES_WARNINGS_FILE="$STAGE_ROOT/warnings"
         : > "$DOTFILES_WARNINGS_FILE"
+        export DOTFILES_NOTICES_FILE="$STAGE_ROOT/notices"
+        : > "$DOTFILES_NOTICES_FILE"
 
         if bash "$installer" "${cmd_args[@]}" 9>&-; then
             RESULTS+=("$target|$name|ok")
@@ -526,6 +528,10 @@ run_phase_configs() {
         while IFS= read -r warning; do
             [[ -n "$warning" ]] && SYNC_WARNINGS+=("$warning")
         done < "$DOTFILES_WARNINGS_FILE"
+        local notice
+        while IFS= read -r notice; do
+            [[ -n "$notice" ]] && SYNC_NOTICES+=("$notice")
+        done < "$DOTFILES_NOTICES_FILE"
     done
     CONFIGS_DEPLOYED=true
 }
@@ -667,6 +673,15 @@ print_summary() {
 
     echo
     echo "Total: $total  Passed: $passed  Failed: $failed"
+
+    if [[ ${#SYNC_NOTICES[@]} -gt 0 ]]; then
+        echo
+        echo "Notes:"
+        local n
+        for n in "${SYNC_NOTICES[@]}"; do
+            log_info "$n"
+        done
+    fi
 
     if [[ ${#SYNC_WARNINGS[@]} -gt 0 ]]; then
         echo
