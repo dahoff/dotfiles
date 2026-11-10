@@ -735,8 +735,8 @@ Hosts dir options:
   --hostname NAME      Host directory hosts/NAME/ to apply (default: hostname -s)
 
 Init options:
-  --hosts-dir URL|PATH|none  Hosts repo: a git URL (cloned to
-                       ~/.local/share/dotfiles/dotfiles-hosts), a path, or none
+  --hosts-dir URL|PATH|none  Hosts repo: a git URL (cloned next to this checkout,
+                       as dotfiles-hosts), a path, or none
   --hostname NAME      Host directory hosts/NAME/ to apply
   --profile NAME       Profile, when no hosts/NAME/host.yaml selects one
   --update-check on|off  Check for updates from new terminals (default: on)

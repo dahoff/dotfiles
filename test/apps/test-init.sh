@@ -51,7 +51,7 @@ git -C "$T/hosts-src" add -A
 git -C "$T/hosts-src" commit -q -m fixture
 git clone -q --bare "$T/hosts-src" "$T/hosts.git"
 URL="file://$T/hosts.git"
-DEFAULT_HD="$HOME/.local/share/dotfiles/dotfiles-hosts"
+DEFAULT_HD="$T/dotfiles-hosts"  # next to the dotfiles copy, where init clones a URL
 
 # A sudo that always fails, so the sync in case 9 can never reach the real sudo
 mkdir -p "$T/nosudo"
@@ -275,18 +275,40 @@ run_interactive "$HD" "../bad" "testhost" "" ""
 has "hostname: testhost" || fail "re-prompted hostname not written"
 # Bad interval and hosts dir are re-prompted too
 rm -f "$CFG"
-run_interactive "/nonexistent" "$HD" "testhost" "maybe" "off" "10x" "2d"
+run_interactive "/nonexistent" "$HD" "testhost" "maybe" "on" "10x" "2d"
 [[ $RC -eq 0 ]] || fail "re-prompt run failed ($RC): $OUT"
-has "update_check: off" && has "update_check_interval: 2d" || fail "re-prompted values not written: $(cat "$CFG")"
+has "update_check: on" && has "update_check_interval: 2d" || fail "re-prompted values not written: $(cat "$CFG")"
+# With the update check off, the interval isn't asked; the saved one is kept
+run_interactive "$HD" "testhost" "off"
+[[ $RC -eq 0 ]] || fail "update check off run failed ($RC): $OUT"
+[[ "$OUT" != *"interval"* ]] || fail "interval asked with the check off: $OUT"
+has "update_check: off" && has "update_check_interval: 2d" || fail "saved interval not kept: $(cat "$CFG")"
 # Without a host.yaml the profile names (hosts repo first) are listed before the prompt
 rm -f "$CFG"
-run_interactive "$HD" "nohost" "" "" ""
+run_interactive "$HD" "nohost" "" "no" "" ""
 [[ $RC -eq 0 ]] || fail "profile prompt run failed ($RC): $OUT"
+[[ "$OUT" == *"No hosts/nohost/host.yaml in $HD yet"* && "$OUT" != *"available:"* ]] || fail "missing-host message wrong: $OUT"
+[[ ! -e "$HD/hosts/nohost" ]] || fail "host.yaml created after answering no"
 LIST=$(grep '^profiles: ' <<< "$OUT") || fail "profile names not listed: $OUT"
 [[ "$LIST" == "profiles: base, "* && "$LIST" == *", complete" ]] || fail "profile list order wrong: $LIST"
 [[ $(grep -o 'minimal' <<< "$LIST" | wc -l) -eq 1 ]] || fail "duplicate profile name: $LIST"
 [[ "${OUT%%Profile \[complete\]: *}" == *"$LIST"* ]] || fail "list not printed before the prompt: $OUT"
 has "profile: complete" || fail "default profile not written: $(cat "$CFG")"
+# Without a host.yaml, init offers to create one for the chosen profile, and commits it
+rm -f "$CFG"
+git clone -q "$T/hosts.git" "$T/hosts-create"
+run_interactive "$T/hosts-create" "newbox" "minimal" "" "" ""
+[[ $RC -eq 0 ]] || fail "create run failed ($RC): $OUT"
+[[ "$OUT" == *"Create hosts/newbox/host.yaml with profile: minimal (yes/no) [yes]: "* ]] || fail "create not offered: $OUT"
+[[ "$(git -C "$T/hosts-create" show HEAD:hosts/newbox/host.yaml)" == "profile: minimal" ]] || fail "host.yaml not committed"
+[[ -z "$(git -C "$T/hosts-create" status --porcelain)" ]] || fail "hosts repo left dirty"
+[[ "$(git -C "$T/hosts-create" rev-list --count origin/HEAD..HEAD)" == 1 ]] || fail "not exactly one local commit"
+[[ "$OUT" == *"git -C $T/hosts-create push"* ]] || fail "no push hint: $OUT"
+grep -qxF "# profile: minimal  # hosts/newbox/host.yaml selects the profile" "$CFG" || fail "profile not left to host.yaml: $(cat "$CFG")"
+# Under --yes nothing is created
+rm -f "$CFG"
+run_init --yes --no-sync --hosts-dir "$T/hosts-create" --hostname otherbox
+[[ $RC -eq 0 && ! -e "$T/hosts-create/hosts/otherbox" ]] || fail "--yes created a host.yaml ($RC): $OUT"
 # EOF before all answers
 rm -f "$CFG"
 run_interactive "$HD"
@@ -827,7 +849,7 @@ run_init --yes --no-sync --hosts-dir "$HG" --hostname newhost
 run_init --yes --no-sync --hosts-dir "$HG" --hostname testhost --profile unco
 [[ $RC -eq 1 && "$OUT" == *"profile 'unco' not found"* ]] || fail "F3: an uncommitted profile was accepted: rc=$RC $OUT"
 [[ ! -e "$CFG" ]] || fail "F3: the config was written for an uncommitted profile"
-run_interactive "$HG" "nohost" "" "" ""
+run_interactive "$HG" "nohost" "" "no" "" ""
 [[ $RC -eq 0 ]] || fail "F3: interactive init failed ($RC): $OUT"
 LIST=$(grep -a '^profiles: ' <<< "$OUT") || fail "F3: no profile list: $OUT"
 [[ "$LIST" != *unco* ]] || fail "F3: an uncommitted profile is listed: $LIST"

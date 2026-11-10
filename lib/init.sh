@@ -20,22 +20,41 @@ Usage: dotfiles init [--hosts-dir URL|PATH|none] [--hostname NAME] [--profile NA
 EOF
 }
 
+# Read a line from the terminal with readline: Tab completes paths, and editing keys
+# work. With PREFILL (bash 4+), the line starts out holding it, to edit or accept.
+# Its local has a name no caller uses, so printf -v reaches the caller's VAR.
+# Usage: init_tty_read VAR PROMPT [PREFILL]
+init_tty_read() {
+    local var="$1" prompt="$2" prefill="${3:-}" _tty_line="" rc=0
+    if [[ -n "$prefill" && "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+        IFS= read -e -r -p "$prompt" -i "$prefill" _tty_line </dev/tty >/dev/tty 2>/dev/tty || rc=$?
+    else
+        IFS= read -e -r -p "$prompt" _tty_line </dev/tty >/dev/tty 2>/dev/tty || rc=$?
+    fi
+    printf -v "$var" '%s' "$_tty_line"
+    return "$rc"
+}
+
 # Ask for a value. Under --yes, VAR is set to DEFAULT without asking.
-# Prompts go to stderr; the answer is read from /dev/tty (stdin when
-# DOTFILES_INIT_ASSUME_TTY=1). An empty answer means DEFAULT; EOF exits 1.
-# Usage: init_ask VAR PROMPT DEFAULT
+# Prompts go to the terminal; the answer is read from /dev/tty (stdin, with the prompt
+# on stderr, when DOTFILES_INIT_ASSUME_TTY=1). An empty answer means DEFAULT; EOF exits 1.
+# With PREFILL set, the default is put on the line to edit instead of shown in brackets
+# (a long path is easier to change than to retype).
+# Usage: init_ask VAR PROMPT DEFAULT [PREFILL]
 init_ask() {
-    local var="$1" prompt="$2" default="$3" answer=""
+    local var="$1" prompt="$2" default="$3" prefill="${4:-}" answer=""
     if [[ "$INIT_YES" == true ]]; then
         printf -v "$var" '%s' "$default"
         return 0
     fi
-    printf '%s [%s]: ' "$prompt" "$default" >&2
     local rc=0
     if [[ "${DOTFILES_INIT_ASSUME_TTY:-}" == 1 ]]; then
+        printf '%s [%s]: ' "$prompt" "$default" >&2
         IFS= read -r answer || rc=$?
+    elif [[ -n "$prefill" && "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+        init_tty_read answer "$prompt: " "$default" || rc=$?
     else
-        IFS= read -r answer </dev/tty || rc=$?
+        init_tty_read answer "$prompt [$default]: " || rc=$?
     fi
     if [[ $rc -ne 0 && -z "$answer" ]]; then
         echo >&2
@@ -117,8 +136,15 @@ init_show_ssh_key() {
     echo
 }
 
+# Where a hosts repo given as a URL is cloned: next to the dotfiles checkout, as
+# ~/git/dotfiles and ~/git/dotfiles-hosts. A bootstrap install's checkout is
+# ~/.local/share/dotfiles/dotfiles, so there it is DEFAULT_HOSTS_DIR.
+init_sibling_hosts_dir() {
+    echo "$(dirname "$SCRIPT_DIR")/dotfiles-hosts"
+}
+
 # Turn a hosts repo answer into INIT_HOSTS_DIR: none -> empty, a URL -> clone
-# (or pull) at DEFAULT_HOSTS_DIR, a path -> absolute directory.
+# (or pull) next to the dotfiles checkout, a path -> absolute directory.
 # Returns 1 for an invalid value; a failed clone exits 1.
 # Usage: init_set_hosts_dir VALUE
 init_set_hosts_dir() {
@@ -129,7 +155,8 @@ init_set_hosts_dir() {
     fi
 
     if init_is_url "$value"; then
-        local target="$DEFAULT_HOSTS_DIR"
+        local target
+        target=$(init_sibling_hosts_dir)
         if [[ -e "$target" || -L "$target" ]]; then
             local top="" origin=""
             top=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null || true)
@@ -230,6 +257,33 @@ init_list_profiles() {
     echo "${list:-none}"
 }
 
+# Check a yes/no answer
+init_validate_yes_no() {
+    case "$1" in
+        y|Y|yes|Yes|YES|n|N|no|No|NO) return 0 ;;
+        *) log_error "answer yes or no: $1"; return 1 ;;
+    esac
+}
+
+# Create hosts/INIT_HOSTNAME/host.yaml selecting INIT_PROFILE, and commit it (only
+# committed content deploys). Nothing is pushed. A hosts dir without git just gets
+# the file.
+init_create_host_yaml() {
+    local rel="hosts/$INIT_HOSTNAME/host.yaml"
+    mkdir -p "$INIT_HOSTS_DIR/hosts/$INIT_HOSTNAME" || return 1
+    printf 'profile: %s\n' "$(init_yaml_value "$INIT_PROFILE")" > "$INIT_HOSTS_DIR/$rel" || return 1
+    if ! git -C "$INIT_HOSTS_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "Created $rel in $INIT_HOSTS_DIR"
+        return 0
+    fi
+    if ! git -C "$INIT_HOSTS_DIR" add -- "$rel" ||
+       ! git -C "$INIT_HOSTS_DIR" commit -q -m "hosts: add $INIT_HOSTNAME (profile: $INIT_PROFILE)" -- "$rel"; then
+        log_error "could not commit $rel in $INIT_HOSTS_DIR"
+        return 1
+    fi
+    echo "Created and committed $rel in $INIT_HOSTS_DIR. Push it so it isn't lost: git -C $INIT_HOSTS_DIR push"
+}
+
 # Check an update check value: on or off
 init_validate_update_check() {
     case "$1" in
@@ -250,13 +304,15 @@ init_validate_interval() {
 # flag or --yes value exits 1.
 # Usage: init_choose VAR FLAG_VALUE FLAG_GIVEN PROMPT DEFAULT CHECK
 init_choose() {
-    local var="$1" flag_value="$2" flag_given="$3" prompt="$4" default="$5" check="$6"
+    local var="$1" flag_value="$2" flag_given="$3" prompt="$4" default="$5" check="$6" prefill="${7:-}"
     local value
     while true; do
         if [[ "$flag_given" == true ]]; then
             value="$flag_value"
         else
-            init_ask value "$prompt" "$default"
+            init_ask value "$prompt" "$default" "$prefill"
+            # A wrong answer is asked again with what was typed, to fix it
+            [[ -z "$prefill" ]] || default="$value"
         fi
         if "$check" "$value"; then
             printf -v "$var" '%s' "$value"
@@ -316,11 +372,11 @@ init_write_config() {
 # Usage: init_read_line VAR PROMPT
 init_read_line() {
     local var="$1" line_in="" rc=0
-    printf '%s' "$2" >&2
     if [[ "${DOTFILES_INIT_ASSUME_TTY:-}" == 1 ]]; then
+        printf '%s' "$2" >&2
         IFS= read -r line_in || rc=$?
     else
-        IFS= read -r line_in </dev/tty 2>/dev/null || rc=$?
+        init_tty_read line_in "$2" 2>/dev/null || rc=$?
     fi
     if [[ $rc -ne 0 && -z "$line_in" ]]; then
         echo >&2
@@ -663,9 +719,12 @@ init_main() {
     if ! config_load "$config_file"; then
         log_warn "$config_file has invalid values; using defaults for them"
     fi
+    # A hosts repo next to this checkout, or where an older init cloned one
     local d_hosts="none"
     if [[ -n "$CFG_HOSTS_DIR" ]]; then
         d_hosts="$CFG_HOSTS_DIR"
+    elif [[ -d "$(init_sibling_hosts_dir)" ]]; then
+        d_hosts="$(init_sibling_hosts_dir)"
     elif [[ -d "$DEFAULT_HOSTS_DIR" ]]; then
         d_hosts="$DEFAULT_HOSTS_DIR"
     fi
@@ -675,10 +734,10 @@ init_main() {
     # Hosts repo
     local hosts_answer
     init_choose hosts_answer "$f_hosts" "$g_hosts" \
-        "Hosts repo (none, a git URL or a path)" "$d_hosts" init_set_hosts_dir
+        "Hosts repo (none, a git URL or a path)" "$d_hosts" init_set_hosts_dir prefill
 
     # Hostname
-    init_choose INIT_HOSTNAME "$f_hostname" "$g_hostname" "Hostname" "$d_hostname" init_validate_hostname
+    init_choose INIT_HOSTNAME "$f_hostname" "$g_hostname" "Hostname" "$d_hostname" init_validate_hostname prefill
     local host_yaml=""
     if [[ -n "$INIT_HOSTS_DIR" ]]; then
         # Only committed content deploys, so that is what selects the profile
@@ -692,13 +751,7 @@ init_main() {
             echo "Commit it, then run init again." >&2
             exit 1
         else
-            local available="" d
-            for d in "$htree"/hosts/*/; do
-                [[ -d "$d" ]] || continue
-                d="${d%/}"
-                available+="${available:+, }${d##*/}"
-            done
-            echo "no hosts/$INIT_HOSTNAME/ in $INIT_HOSTS_DIR; available: ${available:-none}"
+            echo "No hosts/$INIT_HOSTNAME/host.yaml in $INIT_HOSTS_DIR yet"
         fi
     fi
 
@@ -719,13 +772,29 @@ init_main() {
         INIT_PROFILE_COMMENTED=false
         [[ "$g_profile" == true || "$INIT_YES" == true ]] || echo "profiles: $(init_list_profiles)"
         init_choose INIT_PROFILE "$f_profile" "$g_profile" "Profile" "$d_profile" init_validate_profile
+        # Offer this host its own entry, which then selects the profile. Not under
+        # --yes: that never writes to the hosts repo.
+        if [[ -n "$INIT_HOSTS_DIR" && "$INIT_YES" != true ]]; then
+            local create
+            init_choose create "" false \
+                "Create hosts/$INIT_HOSTNAME/host.yaml with profile: $INIT_PROFILE (yes/no)" yes init_validate_yes_no
+            if [[ "$create" == [yY]* ]]; then
+                init_create_host_yaml || exit 1
+                INIT_PROFILE_COMMENTED=true
+            fi
+        fi
     fi
 
     # Update check
     init_choose INIT_UPDATE_CHECK "$f_update" "$g_update" "Update check (on/off)" \
         "$CFG_UPDATE_CHECK" init_validate_update_check
-    init_choose INIT_INTERVAL "$f_interval" "$g_interval" "Update check interval (<n>m|h|d)" \
-        "$CFG_UPDATE_CHECK_INTERVAL" init_validate_interval
+    # The interval is only asked when the check is on; off keeps the saved one
+    if [[ "$INIT_UPDATE_CHECK" == on || "$g_interval" == true ]]; then
+        init_choose INIT_INTERVAL "$f_interval" "$g_interval" "Update check interval (<n>m|h|d)" \
+            "$CFG_UPDATE_CHECK_INTERVAL" init_validate_interval
+    else
+        INIT_INTERVAL="$CFG_UPDATE_CHECK_INTERVAL"
+    fi
 
     init_write_config "$config_file"
     echo "Wrote $config_file"

@@ -77,11 +77,14 @@ curl -fsSL https://raw.githubusercontent.com/dahoff/dotfiles/main/bootstrap.sh |
 
 | Question | Default | Notes |
 |---|---|---|
-| Hosts repo | `none` | A git URL, a local path, or `none`. If an ssh clone fails, it shows you a public key to add, then retries. |
+| Hosts repo | `../dotfiles-hosts` next to this checkout, if it's there; else `none` | A git URL, a local path, or `none`. A URL is cloned next to this checkout. If an ssh clone fails, it shows you a public key to add, then retries. |
 | Hostname | `hostname -s` | Selects `hosts/<hostname>/` in the hosts repo. |
 | Profile | `complete` | Not asked if `hosts/<hostname>/host.yaml` already selects one. |
+| Create `host.yaml` | `yes` | Asked when the hosts repo has no `hosts/<hostname>/host.yaml`: creates one selecting the profile and commits it (push it yourself). |
 | Update check | `on` | Whether new terminals check for updates and tell you. They never deploy anything. |
-| Check interval | `4h` | Format is `<n>m`, `<n>h` or `<n>d`. |
+| Check interval | `4h` | Only asked when the update check is on. Format is `<n>m`, `<n>h` or `<n>d`. |
+
+The hosts repo and hostname answers start out filled in with the default, to edit or accept with Enter, and Tab completes paths.
 
 The first pull may ask for your sudo password to install packages, and for your git name and email if none are set. When it finishes, **open a new terminal** to load the new shell setup.
 
