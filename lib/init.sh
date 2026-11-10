@@ -660,7 +660,7 @@ init_update_repos() {
 # anything but 'reset' at the confirmation cancels.
 init_confirm_reset() {
     local answer=""
-    init_read_line answer "Reset every managed file to the repo layers? [no]: " || return 1
+    init_read_line answer "Discard local changes and reset every managed file to what the repos deploy? [no]: " || return 1
     case "$answer" in
         y|Y|yes|YES|Yes) ;;
         *) return 1 ;;

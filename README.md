@@ -46,7 +46,7 @@ For a host that can't reach the repos. This machine sends its committed repos ov
 
 | Command | What it does |
 |---|---|
-| [`dotfiles init`](#init) | First setup of this machine. Run again to change settings, or to reset every managed file to the repo layers. |
+| [`dotfiles init`](#init) | First setup of this machine. Run again to change settings, or to discard local changes and reset every managed file to what the repos deploy. |
 | [`dotfiles uninstall`](#uninstall) | Removes deployed config and restores your original files. |
 
 ### Check

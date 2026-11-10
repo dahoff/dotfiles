@@ -535,8 +535,8 @@ SUM_BEFORE=$(tree_sum)
 rerun ""
 [[ $RC -eq 0 ]] || fail "R1: init failed ($RC): $OUT"
 [[ "$OUT" == *"Wrote $CFG"* ]] || fail "R1: answers not saved: $OUT"
-[[ "$OUT" == *"Reset every managed file to the repo layers? [no]: "* ]] || fail "R1: no reset question with a default of no: $OUT"
-[[ "${OUT%%Reset every managed*}" == *"Wrote $CFG"* ]] || fail "R1: the question came before the answers were saved: $OUT"
+[[ "$OUT" == *"Discard local changes and reset every managed file to what the repos deploy? [no]: "* ]] || fail "R1: no reset question with a default of no: $OUT"
+[[ "${OUT%%Discard local changes and reset*}" == *"Wrote $CFG"* ]] || fail "R1: the question came before the answers were saved: $OUT"
 [[ "$OUT" == *"Not resetting"* ]] || fail "R1: no note that nothing was reset: $OUT"
 live_local_state_held || fail "R1: an empty answer lost local edits: $OUT"
 [[ -f "$HOME/.bashrc.d/00-local.sh" && -f "$HOME/.gitconfig.local" ]] || fail "R1: untouched files lost"
@@ -770,7 +770,7 @@ RC=0
 [[ $RC -eq 0 ]] || fail "O1: pull after the move failed"
 # The next re-run is a normal one, with the question
 rerun
-[[ "$OUT" == *"Reset every managed file"* ]] || fail "O1: the next init does not ask about a reset: $OUT"
+[[ "$OUT" == *"Discard local changes and reset every managed file"* ]] || fail "O1: the next init does not ask about a reset: $OUT"
 pass "old records: snapshot, removed, deployed fresh, local-only keys kept"
 
 # Case O2
@@ -793,7 +793,7 @@ rerun
 [[ $RC -eq 0 && ! -e "$STATE_DIR/deployed" ]] || fail "O2: the retry did not move: rc=$RC $OUT"
 grep -rqF "my own line" "$HOME/.bak/claude" || fail "O2: no snapshot after the retry"
 rerun
-[[ "$OUT" == *"Reset every managed file"* ]] || fail "O2: the next init does not ask about a reset: $OUT"
+[[ "$OUT" == *"Discard local changes and reset every managed file"* ]] || fail "O2: the next init does not ask about a reset: $OUT"
 pass "failed snapshot in the move: nothing changed, then a normal re-run with the question"
 
 # Case F1
@@ -806,7 +806,7 @@ echo stray > "$HD/hosts/testhost/apps/claude/files/bogus.txt"
 rerun yes reset
 rm -f "$HD/hosts/testhost/apps/claude/files/bogus.txt"
 [[ "$OUT" != *"no local changes would be lost"* ]] || fail "F1: said nothing would be lost: $OUT"
-[[ "$OUT" != *"Reset every managed file"* && "$OUT" != *"Type 'reset'"* ]] || fail "F1: a reset was offered: $OUT"
+[[ "$OUT" != *"Discard local changes and reset every managed file"* && "$OUT" != *"Type 'reset'"* ]] || fail "F1: a reset was offered: $OUT"
 [[ "$OUT" == *"Can't tell what a reset would lose"* ]] || fail "F1: no reason given: $OUT"
 grep -qx "# local login edit" "$HOME/.bashrc.d/90-dotfiles.sh" || fail "F1: the login drop-in was reset anyway"
 pass "an unreadable status means no reset is offered"
@@ -983,7 +983,7 @@ SUM_BEFORE=$(tree_sum)
 rerun_as ffhost yes reset
 [[ $RC -eq 1 ]] || fail "F12: expected exit 1, got $RC: $OUT"
 [[ "$OUT" == *"pull blocked"* && "$OUT" == *"git pull --rebase"* ]] || fail "F12: no explanation: $OUT"
-[[ "$OUT" != *"Reset every managed file"* ]] || fail "F12: the question was asked: $OUT"
+[[ "$OUT" != *"Discard local changes and reset every managed file"* ]] || fail "F12: the question was asked: $OUT"
 [[ "$(tree_sum)" == "$SUM_BEFORE" ]] || fail "F12: something changed"
 pass "a blocked update stops with the rebase instructions"
 

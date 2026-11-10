@@ -429,7 +429,7 @@ Init writes `${DOTFILES_CONFIG:-~/.config/dotfiles/config.yaml}` in the format d
 
 Re-running init is safe. The defaults offered are the values already in the config, so accepting every answer (or `--yes`) changes nothing. When the new content differs from an existing file, the old one is kept as `<config>.bak`; when nothing changed, no `.bak` is made.
 
-**On a host that already has records, init can reset.** After saving the answers it asks whether to reset every managed file to the repo layers, defaulting to no. No runs a normal `pull`, so changing the hostname or profile wipes nothing. A reset:
+**On a host that already has records, init can reset.** After saving the answers it asks whether to discard local changes and reset every managed file to what the repo layers deploy, defaulting to no. No runs a normal `pull`, so changing the hostname or profile wipes nothing. A reset:
 
 - Updates the repos first (fast-forward only), then lists what would be lost: unreviewed, conflicting and dismissed changes, local-only keys in merged files, files no longer managed, and files dotfiles has no record of writing that differ from the repo's.
 - Doesn't offer the question when it can't tell what would be lost (the profile or overlays don't load): it says why and runs a normal `pull`.

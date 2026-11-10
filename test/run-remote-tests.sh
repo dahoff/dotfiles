@@ -258,7 +258,7 @@ init_tty() {
 }
 init_tty ""
 [[ $RC -eq 0 ]] || fail "PI5: init --remote exited $RC: $OUT"
-grep -qF "Reset every managed file to the repo layers? [no]:" <<< "$OUT" || fail "PI5: no reset question over ssh -t: $OUT"
+grep -qF "Discard local changes and reset every managed file to what the repos deploy? [no]:" <<< "$OUT" || fail "PI5: no reset question over ssh -t: $OUT"
 test_ssh 'grep -qx "remote local edit" ~/.claude/CLAUDE.md' || fail "PI5: an empty answer lost the remote edit"
 init_tty yes reset
 [[ $RC -eq 0 ]] || fail "PI5: reset exited $RC: $OUT"
