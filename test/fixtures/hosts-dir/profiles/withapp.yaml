@@ -1,0 +1,3 @@
+# Only an app that the hosts repo defines (apps/hostapp/), so a pull installs no OS packages
+packages:
+  - hostapp

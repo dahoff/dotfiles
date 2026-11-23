@@ -271,6 +271,57 @@ run pull --dry-run --no-fetch --hosts-dir "$HR" --hostname nohost --profile onco
 [[ $RC -ne 0 && "$OUT" == *"statusbar.sh"* ]] || fail "overlay layer of a profile extending complete not used: $OUT"
 pass "extends complete keeps the profile's layer"
 
+# Test 24
+info "Test 24: an app defined only in the hosts repo installs and deploys, with overlays"
+mkdir -p "$TEST_HOME-apphost" "$TEST_STATE-apphost/apps"
+apphost() {
+    RC=0
+    OUT=$(HOME="$TEST_HOME-apphost" STATE_DIR="$TEST_STATE-apphost" XDG_STATE_HOME="$TEST_HOME-apphost/.xdg-state" \
+        ./dotfiles "$@" --hosts-dir "$HR" --hostname apphost 2>&1) || RC=$?
+}
+apphost pull --dry-run --no-fetch
+[[ $RC -eq 0 ]] || fail "dry run failed: $OUT"
+[[ "$(packages_line)" == "Packages: hostapp" ]] || fail "packages: $(packages_line)"
+apphost pull --no-fetch --no-backup
+[[ $RC -eq 0 ]] || fail "deploy failed: $(echo "$OUT" | tail -20)"
+AH="$TEST_HOME-apphost"
+[[ -f "$AH/.hostapp-installed" ]] || fail "install.sh from the hosts repo did not run"
+[[ "$(cat "$AH/.config/hostapp/hostapp.conf")" == "host = apphost" ]] || fail "host overlay should win"
+[[ -x "$AH/.local/bin/hostapp-hello" ]] || fail "script not deployed executable"
+[[ "$("$AH/.local/bin/hostapp-hello")" == "hello from the hosts repo" ]] || fail "script content wrong"
+apphost pull --no-fetch --no-backup
+[[ "$OUT" == *"hostapp is already up to date"* ]] || fail "second pull should skip: $OUT"
+pass "hosts-repo app deployed"
+
+# Test 25
+info "Test 25: uninstall covers a hosts-repo app"
+apphost uninstall --no-backup
+[[ $RC -eq 0 ]] || fail "uninstall failed: $(echo "$OUT" | tail -20)"
+[[ ! -e "$AH/.local/bin/hostapp-hello" && ! -e "$AH/.config/hostapp/hostapp.conf" ]] \
+    || fail "uninstall left files: $(cd "$AH" && find . -type f)"
+rm -rf "$TEST_HOME-apphost" "$TEST_STATE-apphost"
+pass "hosts-repo app uninstalled"
+
+# Test 26
+info "Test 26: a hosts-repo app named like a public app aborts before changes"
+mkdir -p "$HR/apps/tmux/files"
+printf 'app:\n  name: tmux\n' > "$HR/apps/tmux/config.yaml"
+run pull --no-backup --no-fetch --hosts-dir "$HR" --hostname testhost
+[[ $RC -ne 0 && "$OUT" == *"'tmux' is defined in both repos"* ]] || fail "collision not rejected: $OUT"
+[[ ! -d "$CL" || -z "$(find "$CL" -newer "$HR/apps/tmux/config.yaml" -type f)" ]] || fail "changes were made"
+rm -rf "$HR/apps/tmux"
+pass "name collision aborts"
+
+# Test 27
+info "Test 27: a folder in the hosts repo's apps/ without config.yaml is ignored with a warning"
+mkdir -p "$HR/apps/zz-notes"
+echo notes > "$HR/apps/zz-notes/README"
+run pull --dry-run --no-fetch --hosts-dir "$HR" --hostname testhost
+[[ $RC -eq 0 ]] || fail "a stray folder stopped the run: $OUT"
+[[ "$OUT" == *"Ignoring hosts repo apps/zz-notes/: no config.yaml"* ]] || fail "no warning: $OUT"
+rm -rf "$HR/apps/zz-notes"
+pass "stray folder ignored"
+
 rm -rf "$TEST_STATE" "$TEST_HOME" "$HR"
 echo
 echo "======================================"

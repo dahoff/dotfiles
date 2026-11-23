@@ -20,7 +20,10 @@ declare -a ADD_LABELS=()
 declare -a ADD_ROOTS=()
 declare -a ADD_EFFECTIVE_ROOTS=()
 declare -a ADD_NOT_OFFERED=()
+# The base layer: the repo holding the app's own folder. The public repo, or the hosts repo
+# for an app defined there (ADD_BASE_PUBLIC=false). The name is from when it was always public.
 ADD_PUBLIC_ROOT=""
+ADD_BASE_PUBLIC=true
 # Set for a file with no layer to save to: the reason, as a sentence
 ADD_NO_LAYER_REASON=""
 # Repo root -> 1, for each repo something was staged in
@@ -85,16 +88,22 @@ add__hash() {
 # replace a save there; so is a pinned public repo or a detached hosts repo, where a commit
 # would not land on a branch. The host layer needs a host.yaml in the working copy, committed
 # or not: without one, deploys ignore the host directory, so a save there would never take
-# effect. Its apps/ directory can be missing: a save creates it.
+# effect. Its apps/ directory can be missing: a save creates it. For an app defined in the
+# hosts repo's own apps/, the default is that folder in the hosts repo instead.
 # Usage: add_build_layers DIR
 add_build_layers() {
-    local i p host_root offer_hosts=false has_host=false
+    local i p host_root offer_hosts=false has_host=false dir="${1:-}"
     ADD_LABELS=()
     ADD_ROOTS=()
     ADD_EFFECTIVE_ROOTS=()
     ADD_NOT_OFFERED=()
     ADD_NO_LAYER_REASON=""
     ADD_PUBLIC_ROOT="$DOTFILES_REPO"
+    ADD_BASE_PUBLIC=true
+    if [[ -n "$dir" && -n "$HOSTS_DIR" && -n "${HOSTS_APPS[$dir]+x}" ]]; then
+        ADD_PUBLIC_ROOT="$HOSTS_DIR"
+        ADD_BASE_PUBLIC=false
+    fi
     if [[ -n "$HOSTS_DIR" ]]; then
         host_root="$HOSTS_DIR/hosts/$OVERLAY_HOST"
         [[ ! -f "$host_root/host.yaml" ]] || has_host=true
@@ -123,7 +132,12 @@ add_build_layers() {
         done
     fi
     ADD_EFFECTIVE_ROOTS+=("$ADD_PUBLIC_ROOT")
-    if versions_is_pinned "$DOTFILES_REPO"; then
+    if [[ "$ADD_BASE_PUBLIC" != true ]]; then
+        if [[ "$offer_hosts" == true ]]; then
+            ADD_LABELS+=("app default (hosts repo, every machine that uses $dir)")
+            ADD_ROOTS+=("$ADD_PUBLIC_ROOT")
+        fi
+    elif versions_is_pinned "$DOTFILES_REPO"; then
         ADD_NOT_OFFERED+=("Not offering the public repo: this machine is pinned, so a commit there wouldn't land on a branch.")
     elif versions_is_checkout "$DOTFILES_REPO"; then
         ADD_LABELS+=("dotfiles default (PUBLIC repo, all machines)")
@@ -145,7 +159,8 @@ add_build_dropin_layers() {
     done
     for i in "${!ADD_NOT_OFFERED[@]}"; do
         case "${ADD_NOT_OFFERED[$i]}" in
-            *"the public repo"*) reasons+=("${ADD_NOT_OFFERED[$i]}") ;;
+            *"the public repo"*) [[ "$ADD_BASE_PUBLIC" != true ]] || reasons+=("${ADD_NOT_OFFERED[$i]}") ;;
+            *"the hosts repo's layers"*) [[ "$ADD_BASE_PUBLIC" == true ]] || reasons+=("${ADD_NOT_OFFERED[$i]}") ;;
         esac
     done
     ADD_LABELS=(${labels[@]+"${labels[@]}"})
@@ -459,7 +474,7 @@ add__save_item() {
 
     current=$(add_current_layer "$dir" "$src" "$path")
     # Back where it came from, unless that is the public repo
-    if [[ "$current" -ge 0 && "${ADD_ROOTS[$current]}" != "$ADD_PUBLIC_ROOT" ]]; then
+    if [[ "$current" -ge 0 && ( "${ADD_ROOTS[$current]}" != "$ADD_PUBLIC_ROOT" || "$ADD_BASE_PUBLIC" != true ) ]]; then
         default="$current"
     fi
     add__say_not_offered
@@ -490,7 +505,7 @@ add__save_item() {
         fi
     fi
 
-    if [[ "${ADD_ROOTS[$i]}" == "$ADD_PUBLIC_ROOT" ]]; then
+    if [[ "${ADD_ROOTS[$i]}" == "$ADD_PUBLIC_ROOT" && "$ADD_BASE_PUBLIC" == true ]]; then
         echo "This goes to the PUBLIC repo:"
         if [[ "$path" == "[]" ]]; then
             cat "$dest"
@@ -628,7 +643,11 @@ add_dropin_units() {
         src=$(basename "$dropin")
         dir="${dropin%%/*}"
         stage="-"
-        [[ -z "$tree" ]] || stage="$tree/apps/$dropin"
+        if [[ -n "${HOSTS_APPS[$dir]+x}" ]]; then
+            stage="$APPS_DIR/$dropin"
+        elif [[ -n "$tree" ]]; then
+            stage="$tree/apps/$dropin"
+        fi
         reason="-"
         if [[ "$dropin" != "$dir/files/$src" ]]; then
             reason="This drop-in is at apps/$dropin, outside the tool's files/ folder where layers hold files, so there is nowhere to save it."

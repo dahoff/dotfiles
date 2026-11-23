@@ -71,7 +71,7 @@ resolve_tool() {
     fi
 
     if [[ "$in_folder" == true && "$in_os" == true ]]; then
-        log_error "Tool '$name' in $source is defined twice: apps/$name/ and apps/os-packages.yaml"
+        log_error "Tool '$name' in $source is defined twice: $(app_where "$name")/ and apps/os-packages.yaml"
         return 1
     fi
     if [[ "$in_os" == true ]]; then
@@ -79,7 +79,7 @@ resolve_tool() {
         return 0
     fi
     if [[ "$in_folder" != true ]]; then
-        log_error "Unknown tool '$name' in $source: no apps/$name/config.yaml, and not in apps/os-packages.yaml"
+        log_error "Unknown tool '$name' in $source: no apps/$name/config.yaml in dotfiles${HOSTS_TREE:+ or the hosts repo}, and not in apps/os-packages.yaml"
         return 1
     fi
 
@@ -107,26 +107,27 @@ resolve_tool() {
         fi
     done < "$dir/config.yaml"
 
-    local script="" config_dir=""
+    local script="" config_dir="" where
+    where=$(app_where "$name")
     if [[ -f "$dir/install.sh" ]]; then
         if [[ -z "$check" ]]; then
-            log_error "Tool '$name' in $source: apps/$name/install.sh needs install.check in its config.yaml"
+            log_error "Tool '$name' in $source: $where/install.sh needs install.check in its config.yaml"
             return 1
         fi
         script="$name/install.sh"
     fi
     [[ -f "$dir/configure.sh" ]] && config_dir="$name"
     if [[ -z "$apt$dnf$brew$script$config_dir" ]]; then
-        log_error "Tool '$name' in $source: apps/$name/ defines nothing to install or configure"
+        log_error "Tool '$name' in $source: $where/ defines nothing to install or configure"
         return 1
     fi
     if [[ -n "$dropin" ]]; then
         if [[ -z "$script" ]]; then
-            log_error "Tool '$name' in $source: install.dropin needs apps/$name/install.sh"
+            log_error "Tool '$name' in $source: install.dropin needs $where/install.sh"
             return 1
         fi
         if [[ ! -f "$dir/$dropin" ]]; then
-            log_error "Tool '$name' in $source: drop-in not found: apps/$name/$dropin"
+            log_error "Tool '$name' in $source: drop-in not found: $where/$dropin"
             return 1
         fi
         dropin="$name/$dropin"
@@ -566,15 +567,107 @@ load_profile() {
 # dotfiles repo (PROFILES_DIR, APPS_DIR) and the hosts repo (HOSTS_TREE), so only
 # committed content deploys. HOSTS_DIR and DOTFILES_REPO stay the real paths, which
 # add writes to. A repo with no git is read as it stands. Returns 1 for a repo with
-# no commits. Safe to call again: the exports are made once.
+# no commits. Safe to call again: the exports are made once. When the hosts repo has
+# its own apps/, APPS_DIR is a folder combining both repos' apps (see merge_hosts_apps)
+# and HOSTS_APPS names the hosts repo's.
 use_committed_trees() {
     local dotfiles_tree
     dotfiles_tree=$(repo_committed_tree "$DOTFILES_REPO") || return 1
     PROFILES_DIR="$dotfiles_tree/profiles"
     APPS_DIR="$dotfiles_tree/apps"
     HOSTS_TREE=""
+    HOSTS_APPS=()
     if [[ -n "$HOSTS_DIR" ]]; then
         HOSTS_TREE=$(repo_committed_tree "$HOSTS_DIR") || return 1
+        if [[ -d "$HOSTS_TREE/apps" ]]; then
+            APPS_DIR=$(merge_hosts_apps "$dotfiles_tree" "$HOSTS_TREE") || return 1
+            local app_path
+            for app_path in "$HOSTS_TREE"/apps/*/; do
+                if [[ -f "$app_path/config.yaml" ]]; then
+                    HOSTS_APPS["$(basename "$app_path")"]=1
+                fi
+            done
+        fi
+    fi
+}
+
+# Build one apps folder holding the public repo's apps and the hosts repo's own apps
+# (HOSTS_TREE/apps/<name>/), beside links to the rest of the dotfiles tree, so each app's
+# configure.sh finds ../../lib/installer.sh. The apps are copied, not linked, so that
+# relative path resolves the same way for both repos' apps. Prints the apps folder. A hosts-repo app with the name
+# of a public app is an error: one name, one definition. Made once per pair of trees.
+# Usage: merge_hosts_apps DOTFILES_TREE HOSTS_TREE
+merge_hosts_apps() {
+    local dotfiles_tree="$1" hosts_tree="$2" key out app_path name ok=0
+    key=$(printf '%s\n%s' "$dotfiles_tree" "$hosts_tree" | cksum | cut -d' ' -f1)
+    out="$WORK_DIR/apps-merged/$key"
+    if [[ -f "$out/.merged" ]]; then
+        printf '%s\n' "$out/apps"
+        return 0
+    fi
+
+    for app_path in "$hosts_tree"/apps/*; do
+        [[ -e "$app_path" ]] || continue
+        name=$(basename "$app_path")
+        if [[ ! -d "$app_path" ]]; then
+            log_warn "Ignoring hosts repo apps/$name: only app folders go in the hosts repo's apps/ (list a plain package inline under extra:)"
+        elif [[ ! -f "$app_path/config.yaml" ]]; then
+            log_warn "Ignoring hosts repo apps/$name/: no config.yaml"
+        elif [[ -e "$dotfiles_tree/apps/$name" ]]; then
+            log_error "App '$name' is defined in both repos: apps/$name/ in dotfiles and in the hosts repo. Rename the hosts repo's copy (and its uses in profiles and host.yaml files)"
+            ok=1
+        fi
+    done
+    [[ $ok -eq 0 ]] || return 1
+
+    rm -rf "$out"
+    mkdir -p "$out/apps" || return 1
+    # The rest of the dotfiles tree is linked: an inline custom.script or custom.dropin is
+    # a path relative to apps/ that may climb out of it
+    local entry
+    for entry in "$dotfiles_tree"/* "$dotfiles_tree"/.[!.]*; do
+        [[ -e "$entry" ]] || continue
+        case "$(basename "$entry")" in
+            apps|.git|.worktrees) continue ;;
+        esac
+        if ! ln -s "$entry" "$out/$(basename "$entry")"; then
+            log_error "Could not prepare the apps folder in $out"
+            return 1
+        fi
+    done
+    if ! cp -Rp "$dotfiles_tree/apps/." "$out/apps/"; then
+        log_error "Could not prepare the apps folder in $out"
+        return 1
+    fi
+    for app_path in "$hosts_tree"/apps/*/; do
+        [[ -f "$app_path/config.yaml" ]] || continue
+        if ! cp -Rp "${app_path%/}" "$out/apps/"; then
+            log_error "Could not copy the hosts repo's app $(basename "$app_path")"
+            return 1
+        fi
+    done
+    : > "$out/.merged"
+    printf '%s\n' "$out/apps"
+}
+
+# Where an app's folder lives, as a path to name in messages: "apps/NAME" in the dotfiles
+# repo, or "apps/NAME in the hosts repo"
+# Usage: app_where NAME
+app_where() {
+    if [[ -n "${HOSTS_APPS[$1]+x}" ]]; then
+        printf 'apps/%s in the hosts repo' "$1"
+    else
+        printf 'apps/%s' "$1"
+    fi
+}
+
+# The repo (real path, for writes) an app's folder belongs to
+# Usage: app_repo NAME
+app_repo() {
+    if [[ -n "${HOSTS_APPS[$1]+x}" ]]; then
+        printf '%s' "$HOSTS_DIR"
+    else
+        printf '%s' "$DOTFILES_REPO"
     fi
 }
 

@@ -183,12 +183,23 @@ post_install:
 Optional data-only repo, given with `--hosts-dir PATH` or env `DOTFILES_HOSTS_DIR`.
 
     dotfiles-hosts/
+      apps/<name>/                            # an app only the hosts repo defines (same layout as apps/<name>/ in dotfiles)
       profiles/<name>.yaml                    # profile, same schema as profiles/*.yaml + files:
       profiles/<name>/apps/<app>/files/<src>  # file overlays for this profile
       hosts/<hostname>/host.yaml              # host settings (required for the directory to apply)
       hosts/<hostname>/apps/<app>/files/<src> # file overlays for this host
 
-`<app>` is the directory under `apps/` in dotfiles (e.g. `claude`); `<src>` is a `src` from that app's `config.yaml`.
+`<app>` is the directory under `apps/` in dotfiles or in the hosts repo (e.g. `claude`); `<src>` is a `src` from that app's `config.yaml`.
+
+### Apps in the hosts repo
+
+`dotfiles-hosts/apps/<name>/` defines a tool exactly like `apps/<name>/` in dotfiles: `config.yaml`, `files/`, and optionally `configure.sh`, `install.sh` and `install.check`, with the same rules (see Tools). It reaches a machine only when a profile or `host.yaml` lists `<name>`, so a work or personal profile can carry tools the other never sees.
+
+- Only committed content counts, as for the rest of the hosts repo. `chmod +x` and commit `configure.sh` and `install.sh`.
+- A name defined in both repos aborts the run before any change. A folder without `config.yaml`, or a file directly under `apps/`, is ignored with a warning; plain packages go inline under `extra:`.
+- At each run, dotfiles copies both repos' apps and its `lib/` into one folder in its work directory and runs them from there, so a hosts-repo app's `configure.sh` finds `../../lib/installer.sh` like any other. To run one by hand, use `source "${DOTFILES_LIB:-$APP_DIR/../../lib}/installer.sh"` in it and set `DOTFILES_LIB` to the `lib/` of the dotfiles checkout.
+- Profile and host overlays (`profiles/<p>/apps/<name>/files/`, `hosts/<h>/apps/<name>/files/`) and `files:` strategies apply to it like any other app. Its own `files/` is its lowest layer.
+- `dotfiles add` offers the app's own folder in the hosts repo as its lowest layer, labelled `app default (hosts repo, ...)`, instead of the public repo.
 
 ### Resolution
 
@@ -210,7 +221,7 @@ Hosts-repo profiles accept the same `files:` map.
 
 ### File layers and strategy
 
-Layers, lowest to highest: `dotfiles/apps/<app>/files/<src>`, each hosts-dir profile in the chain (base-most first), the host directory.
+Layers, lowest to highest: `dotfiles/apps/<app>/files/<src>` (or `dotfiles-hosts/apps/<app>/files/<src>` for an app defined there), each hosts-dir profile in the chain (base-most first), the host directory.
 `replace`: the highest layer that has the file wins. `merge`: live ⊕ all layers in order.
 In practice the repo layers are pre-merged and then merged onto the live file: live ⊕ (dotfiles ⊕ profiles ⊕ host). This differs from strict left-to-right only when a lower layer sets a scalar or null and a higher layer sets an object at the same path; the result then keeps more live data.
 
@@ -219,7 +230,7 @@ Strategy: last declaration among the app `config.yaml`, the hosts-dir profile `f
 
 ### Errors
 
-The run aborts before any change if the hosts repo is missing, `host.yaml` lacks `profile:`, a profile isn't found, the `extends` chain cycles, an overlay file or `files:` key names an unknown `src`, `merge` is set on a non-`.json` file, or a strategy other than `replace`/`merge` is used. Overlays for apps not in the package list are ignored with a warning. Invalid JSON during a merge fails only that file, leaves the live file untouched, and is reported in the summary. The app's version is then recorded as `incomplete`, so the next run retries.
+The run aborts before any change if the hosts repo is missing, `host.yaml` lacks `profile:`, a profile isn't found, the `extends` chain cycles, an overlay file or `files:` key names an unknown `src`, an app is defined in both repos, `merge` is set on a non-`.json` file, or a strategy other than `replace`/`merge` is used. Overlays for apps not in the package list are ignored with a warning. Invalid JSON during a merge fails only that file, leaves the live file untouched, and is reported in the summary. The app's version is then recorded as `incomplete`, so the next run retries.
 
 ### Removing managed keys
 
@@ -365,7 +376,7 @@ Each managed file, or each key of a merged JSON file, has two saved copies in `$
 `add --all` also asks again about dismissed edits and those held in a lower layer. When the review ends, `add` lists the staged files in each repo and tells you to commit and push them.
 
 - It only offers files dotfiles manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in. A tool's drop-in is offered the public default only, and `90-dotfiles.sh` only dismiss and skip.
-- Layers offered: the host layer only when the host directory in the hosts repo has a `host.yaml` in its working copy; each profile in the chain; the public default. A repo with no git, a detached hosts repo and a pinned public repo offer no layers, and `add` says why.
+- Layers offered: the host layer only when the host directory in the hosts repo has a `host.yaml` in its working copy; each profile in the chain; the public default, or for an app defined in the hosts repo, that app's own folder there. A repo with no git, a detached hosts repo and a pinned public repo offer no layers, and `add` says why.
 - Saving to the public default shows the value and needs typing `public`.
 - A save to a layer file with uncommitted changes is allowed only if `add` made them; otherwise that target is skipped.
 - Saving a replaced file to a layer that has no copy of it creates one, which masks lower layers from then on. Saving below a layer that already has the file or key is allowed, with a message that the higher layer still wins.

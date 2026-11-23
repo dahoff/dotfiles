@@ -1,0 +1,14 @@
+app:
+  name: hostapp
+  description: An app defined only in the hosts repo
+
+files:
+  - src: hostapp.conf
+    dest: ~/.config/hostapp/hostapp.conf
+    mode: '0644'
+  - src: hostapp-hello
+    dest: ~/.local/bin/hostapp-hello
+    mode: '0755'
+
+install:
+  check: test -f "$HOME/.hostapp-installed"

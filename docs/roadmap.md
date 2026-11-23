@@ -24,6 +24,7 @@ Ideas and loose ends. Nothing here is scheduled.
 
 ## App config
 
+- **Extra files for an existing app from a hosts-repo layer.** For example, `profiles/work/apps/scripts/config.yaml` adding entries to `scripts`' `files:` list. Today a layer can only replace files the app already lists; a new tool or script set goes in the hosts repo's own `apps/` under its own name instead (`work-scripts`). Worth doing if small per-profile additions to `bash`, `git` and the like become common.
 - **Trailing comments in `files:`.** `load_config` in `lib/installer.sh` doesn't strip them, so `dest: ~/x   # note` deploys to a file with the comment in its name. The README warns about it; remove that warning once this is fixed.
 
 ## Releases

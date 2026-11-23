@@ -451,12 +451,18 @@ Most machines can share one setup. When one needs to differ, put the difference 
 | A change for a group of machines (work, personal) | Hosts repo: `profiles/<name>/apps/<app>/files/` |
 | A change for one machine | Hosts repo: `hosts/<hostname>/apps/<app>/files/` |
 | Different tools on some machines | Hosts repo: a profile, or `host.yaml` |
+| A tool, or a set of scripts, that only some machines get and that stays private | Hosts repo: `apps/<name>/`, listed in a profile or `host.yaml` |
 | Secrets, or anything that shouldn't be in git | An unmanaged file such as `~/.bashrc.d/90-secrets.sh` |
 
 ### The hosts repo
 
 ```
 dotfiles-hosts/
+  apps/
+    work-scripts/                          # an app only this repo defines
+      config.yaml
+      configure.sh
+      files/
   profiles/
     personal.yaml                          # which tools this group gets
     personal/apps/claude/files/settings.json
@@ -502,9 +508,62 @@ extra:
 - `include` keeps only the tools you name, and can't be combined with `exclude`.
 - A profile is either a full `packages:` list or `extends:` plus changes. If it has `packages:`, then `extends`, `exclude` and `extra` are ignored.
 - A hosts-repo profile takes priority over a built-in one with the same name. A hosts-repo `complete.yaml` can use `extends: complete` to build on the built-in one.
-- A hosts repo can only ship packages as new tools. An app with its own config or `install.sh` must have a folder in this repo's `apps/`.
+- A hosts repo can define its own apps too. See [Apps in the hosts repo](#apps-in-the-hosts-repo).
 
 Profile selection, most specific first: `--profile`, then `profile:` in the saved config, then `profile:` in `host.yaml`, then `complete`. In the first two cases dotfiles warns if they override `host.yaml`. The `exclude`, `include` and `extra` in `host.yaml` always apply last.
+
+### Apps in the hosts repo
+
+An app that only some machines need, or whose files shouldn't be public, can live in the hosts repo's `apps/`. It's laid out exactly like an app here (see [Add an app](#add-an-app)), and like any app it reaches a machine only when a profile or `host.yaml` lists it. For example, scripts for work machines only:
+
+```
+dotfiles-hosts/
+  apps/work-scripts/
+    config.yaml
+    configure.sh
+    files/
+      vpn-up
+  profiles/
+    work.yaml
+```
+
+```yaml
+# apps/work-scripts/config.yaml
+app:
+  name: work-scripts
+  description: Scripts for work machines
+
+files:
+  - src: vpn-up
+    dest: ~/.local/bin/vpn-up
+    mode: '0755'
+```
+
+```bash
+#!/usr/bin/env bash
+# apps/work-scripts/configure.sh
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# dotfiles' own lib/ when run by dotfiles; set DOTFILES_LIB to run this by hand
+source "${DOTFILES_LIB:-$APP_DIR/../../lib}/installer.sh"
+
+installer_main "$@"
+```
+
+```yaml
+# profiles/work.yaml
+extends: complete
+extra:
+  - work-scripts
+```
+
+Then `chmod +x apps/work-scripts/configure.sh`, commit, and `dotfiles pull`. An `install.sh` with `install.check` works the same way as here.
+
+- The name can't also be an app in this repo: the pull stops before changing anything. Pick a distinct name like `work-scripts` rather than reusing `scripts`.
+- Profile and host overlays work on it like on any app: `hosts/<hostname>/apps/work-scripts/files/vpn-up` replaces the file on one machine.
+- `dotfiles add` saves edits to its files back to the hosts repo, never to this public repo.
+- To remove it from a machine by hand, run `DOTFILES_LIB=<this repo>/lib <hosts repo>/apps/work-scripts/configure.sh uninstall`.
 
 ### Overriding a file
 
@@ -518,7 +577,7 @@ The file has to be one the app already lists in its `config.yaml`. An overlay wi
 
 Layers apply in this order, with the last one winning:
 
-1. `apps/<app>/files/<src>` in this repo
+1. `apps/<app>/files/<src>` in this repo, or in the hosts repo for an app defined there
 2. Each hosts-repo profile, starting from the base of the `extends` chain
 3. `hosts/<hostname>/apps/<app>/files/<src>`
 

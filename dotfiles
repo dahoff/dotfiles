@@ -54,6 +54,8 @@ PROFILE_ARG=""
 HOSTS_DIR=""
 # Export of the hosts repo's HEAD that profiles and layers are read from (see use_committed_trees)
 HOSTS_TREE=""
+# Apps defined by the hosts repo's own apps/ folder: name -> 1 (see use_committed_trees)
+declare -A HOSTS_APPS=()
 HOSTNAME_ARG=""
 DOTFILES_REPO=""
 UPDATE_CHECK="on"
@@ -243,13 +245,14 @@ run_phase_custom_installs() {
         else
             log_info "[$target] Running custom install: $name"
 
-            local script_path="$APPS_DIR/$script"
+            local script_path="$APPS_DIR/$script" script_repo
+            script_repo=$(app_repo "${script%%/*}")
             # What runs is the committed file, so a chmod alone changes nothing
             if [[ ! -x "$script_path" ]]; then
-                if sync_is_rooted_repo "$DOTFILES_REPO"; then
-                    log_error "Custom install script not found or not executable: apps/$script (run chmod +x apps/$script in $DOTFILES_REPO and commit it: only committed files deploy)"
+                if sync_is_rooted_repo "$script_repo"; then
+                    log_error "Custom install script not found or not executable: apps/$script (run chmod +x apps/$script in $script_repo and commit it: only committed files deploy)"
                 else
-                    log_error "Custom install script not found or not executable: apps/$script (run chmod +x apps/$script in $DOTFILES_REPO)"
+                    log_error "Custom install script not found or not executable: apps/$script (run chmod +x apps/$script in $script_repo)"
                 fi
                 PENDING+=("$name")
                 RESULTS+=("$target|$name|FAIL")

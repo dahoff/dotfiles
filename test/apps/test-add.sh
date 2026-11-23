@@ -1576,6 +1576,28 @@ has_line "~/ad/settings.json"
 no_line "the repo changed it too"
 pass "status note"
 
+info "Review: an app defined in the hosts repo saves to its own folder there, not the public repo"
+fresh
+printf '  - hostapp\n' >> "$H/profiles/adp.yaml"
+git -C "$H" add -A
+git -C "$H" commit -q -m "hostapp"
+do_pull
+HC="$HOME/.config/hostapp/hostapp.conf"
+[[ -f "$HC" ]] || fail "hostapp not deployed: $OUT"
+echo mine >> "$HC"
+add s 3
+[[ $RC -eq 0 ]] || fail "add failed: $OUT"
+has_line "3) app default (hosts repo, every machine that uses hostapp)"
+no_line "PUBLIC repo"
+cmp -s "$HC" "$H/apps/hostapp/files/hostapp.conf" || fail "not saved to the hosts repo's app"
+[[ "$(staged_in "$H")" == "apps/hostapp/files/hostapp.conf" ]] || fail "not staged: $(staged_in "$H")"
+public_clean "hosts app save"
+git -C "$H" commit -q -m "my hostapp.conf"
+do_pull
+run status
+no_line "hostapp.conf"
+pass "hosts-repo app save"
+
 # ---------------------------------------------------------------------------
 # sync
 # ---------------------------------------------------------------------------
