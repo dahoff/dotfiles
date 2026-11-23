@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# proxy-browser - Browse a remote host's localhost through an ssh SOCKS proxy.
+# See 'proxy-browser --help' for usage.
+set -euo pipefail
+
+usage() {
+    cat <<'EOF_USAGE'
+Usage: proxy-browser [options] HOST [URL]
+
+Open a browser window whose traffic all goes through an ssh SOCKS proxy to HOST, so
+http://localhost:PORT URLs printed on HOST open unchanged: localhost is HOST's localhost.
+No tunnel per port is needed.
+
+Arguments:
+  HOST             ssh host to browse from, as you'd pass to ssh (an alias from
+                   ~/.ssh/config works). Required.
+  URL              page to open. Default: none, the window opens on a new tab and you
+                   paste URLs into it.
+
+Options:
+  -p, --port PORT  local port for the SOCKS proxy. Default: HOST's DynamicForward in
+                   ssh config, else 1080. Give each host its own port when you use
+                   more than one host at a time, e.g. 1081 for a second one.
+  --stop           stop the background proxy that proxy-browser started for HOST (on
+                   the same port), instead of opening a browser.
+  -n, --dry-run    print the commands it would run, and change nothing.
+  -h, --help       show this help.
+
+What it changes:
+  - If nothing is listening on the port, it starts a background ssh to HOST
+    (ssh -fN -D 127.0.0.1:PORT HOST). It keeps running after the browser closes,
+    until --stop, or until the connection drops (it checks every 30s, e.g. after
+    the laptop sleeps); run proxy-browser again to start a new one.
+  - It opens Chrome, Edge or Chromium with a profile of its own for HOST, created on
+    first use, so your normal browser and your own localhost are untouched:
+      Linux:    ${XDG_DATA_HOME:-~/.local/share}/proxy-browser/HOST
+      macOS:    ~/Library/Application Support/proxy-browser/HOST
+      WSL:      %LOCALAPPDATA%\proxy-browser\HOST, with Windows Chrome or Edge
+    Delete that folder to reset the profile.
+
+Environment:
+  PROXY_BROWSER    path to the browser to run, when it isn't found or you want a
+                   different one. Chrome-family browsers only.
+
+Examples:
+  proxy-browser koi http://localhost:4779/   open claude-review running on koi
+  proxy-browser koi                          open the koi window, then paste URLs
+  proxy-browser -p 1081 otherhost            a second host, on its own port
+  proxy-browser --stop koi                   stop koi's background proxy
+EOF_USAGE
+}
+die() { echo "proxy-browser: $*" >&2; exit 1; }
+bad_usage() { die "$* Run 'proxy-browser --help' for usage."; }
+
+port="" stop=0 dry=0 host="" url=""
+while (($#)); do
+    case "$1" in
+        -p|--port) [[ $# -ge 2 ]] || bad_usage "$1 needs a port number."; port="$2"; shift 2 ;;
+        --stop) stop=1; shift ;;
+        -n|--dry-run) dry=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) bad_usage "unknown option: $1." ;;
+        *) if [[ -z "$host" ]]; then host="$1"; elif [[ -z "$url" ]]; then url="$1"
+           else bad_usage "too many arguments: expected HOST and at most one URL."; fi; shift ;;
+    esac
+done
+[[ -n "$host" ]] || { usage >&2; exit 2; }
+
+# Port: --port, else the host's DynamicForward ("1080" or "[addr]:1080"), else 1080
+config_port=$(ssh -G "$host" 2>/dev/null </dev/null | awk '$1 == "dynamicforward" { n = split($2, a, ":"); print a[n]; exit }')
+port="${port:-${config_port:-1080}}"
+[[ "$port" =~ ^[0-9]+$ ]] || bad_usage "not a port number: $port."
+
+run() {
+    if ((dry)); then printf '%q ' "$@"; echo; else "$@"; fi
+}
+
+listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# The exact command line of the proxy, so --stop only kills the one this script started.
+# The host's own forwards in ssh config come along too: if an open session already holds
+# them they fail with a warning, which is why there's no ExitOnForwardFailure.
+proxy_cmd=(ssh -fN -o ServerAliveInterval=30 -o ServerAliveCountMax=3)
+[[ "$port" == "$config_port" ]] || proxy_cmd+=(-D "127.0.0.1:$port")
+proxy_cmd+=("$host")
+
+if ((stop)); then
+    if ((dry)); then run pkill -f -x "${proxy_cmd[*]}"; exit 0; fi
+    if pkill -f -x "${proxy_cmd[*]}"; then echo "Stopped the proxy to $host on port $port."
+    else echo "No proxy to $host on port $port was started by proxy-browser."; fi
+    exit 0
+fi
+
+if listening "$port"; then
+    echo "Using the SOCKS proxy already on localhost:$port."
+else
+    echo "Starting a SOCKS proxy to $host on localhost:$port..."
+    run "${proxy_cmd[@]}" || die "could not start ssh to $host. Check that 'ssh $host' logs in."
+    if ((!dry)); then
+        for _ in 1 2 3 4 5 6 7 8 9 10; do listening "$port" && break; sleep 0.3; done
+        if ! listening "$port"; then
+            pkill -f -x "${proxy_cmd[*]}" || true
+            die "the proxy didn't come up on port $port. Check that 'ssh $host' works, or try another port with --port."
+        fi
+    fi
+fi
+
+# Pick a browser and a profile directory for this host
+is_wsl() { [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qsi microsoft /proc/version; }
+profile="" exe="${PROXY_BROWSER:-}"
+# On WSL, prefer Windows Chrome or Edge; a Linux browser (e.g. under WSLg) is the fallback
+if is_wsl && [[ -z "$exe" ]]; then
+    for c in "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe" \
+             "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe" \
+             "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" \
+             "/mnt/c/Program Files/Microsoft/Edge/Application/msedge.exe"; do
+        [[ -x "$c" ]] && { exe="$c"; break; }
+    done
+fi
+if [[ "$exe" == *.exe ]]; then
+    # A Windows browser needs a Windows path for its profile
+    appdata=$(cd /mnt/c 2>/dev/null && cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r') || true
+    [[ -n "$appdata" ]] || die "could not read %LOCALAPPDATA% from Windows, needed for the browser profile. Set PROXY_BROWSER to a Linux browser instead (see --help)."
+    profile="$appdata\\proxy-browser\\$host"
+elif [[ "$(uname -s)" == Darwin ]]; then
+    if [[ -z "$exe" ]]; then
+        for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
+                 "/Applications/Chromium.app/Contents/MacOS/Chromium"; do
+            [[ -x "$c" ]] && { exe="$c"; break; }
+        done
+    fi
+    profile="$HOME/Library/Application Support/proxy-browser/$host"
+else
+    if [[ -z "$exe" ]]; then
+        for c in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge; do
+            command -v "$c" >/dev/null && { exe=$(command -v "$c"); break; }
+        done
+    fi
+    profile="${XDG_DATA_HOME:-$HOME/.local/share}/proxy-browser/$host"
+fi
+[[ -n "$exe" ]] || die "no Chrome, Edge or Chromium found. Set PROXY_BROWSER to a browser's path (see --help)."
+
+# <-loopback> makes the browser proxy localhost too, which it never does by default.
+# socks5:// has the proxy resolve names, so localhost means HOST's localhost.
+args=(--user-data-dir="$profile" --proxy-server="socks5://127.0.0.1:$port"
+      --proxy-bypass-list="<-loopback>" --no-first-run --no-default-browser-check)
+[[ -n "$url" ]] && args+=("$url")
+
+echo "Opening the $host browser: localhost URLs reach $host."
+if ((dry)); then
+    run "$exe" "${args[@]}"
+else
+    nohup "$exe" "${args[@]}" >/dev/null 2>&1 &
+    disown
+fi

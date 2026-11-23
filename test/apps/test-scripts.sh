@@ -156,9 +156,47 @@ else
     fail "File list options changed"
 fi
 
+# proxy-browser runs against a stub ssh and browser, in dry-run mode
+stub_bin="$TEST_STATE/stub-bin"
+mkdir -p "$stub_bin"
+printf '#!/usr/bin/env bash\n[[ "$1" == -G ]] && [[ -n "${FAKE_DF:-}" ]] && echo "dynamicforward $FAKE_DF"\nexit 0\n' \
+    > "$stub_bin/ssh"
+chmod +x "$stub_bin/ssh"
+pb() { PATH="$stub_bin:$PATH" PROXY_BROWSER=/bin/true files/proxy-browser -n "$@" 2>&1; }
+
+# Test 14: proxy-browser starts a proxy and proxies localhost through it
+info "Test 14: proxy-browser starts a SOCKS proxy and routes localhost through it"
+out=$(pb -p 47811 koi http://localhost:4779/)
+if grep -q -- '^ssh -fN .*-D 127.0.0.1:47811 koi' <<< "$out" \
+    && grep -q -- '--proxy-server=socks5://127.0.0.1:47811' <<< "$out" \
+    && grep -q -- '--proxy-bypass-list=\\<-loopback\\>' <<< "$out" \
+    && grep -q -- 'proxy-browser/koi .*http://localhost:4779/' <<< "$out"; then
+    pass "Proxy started on the port, localhost not bypassed, per-host profile"
+else
+    fail "Unexpected proxy-browser output: $out"
+fi
+
+# Test 15: a DynamicForward in ssh config sets the port, and isn't requested twice
+info "Test 15: proxy-browser uses the host's DynamicForward"
+out=$(FAKE_DF='[127.0.0.1]:47812' pb koi)
+if grep -q -- '^ssh -fN ' <<< "$out" && ! grep -q -- ' -D ' <<< "$out" \
+    && grep -q -- 'socks5://127.0.0.1:47812' <<< "$out"; then
+    pass "Port comes from ssh config"
+else
+    fail "DynamicForward not used: $out"
+fi
+
+# Test 16: proxy-browser rejects bad input
+info "Test 16: proxy-browser rejects a missing host and a bad port"
+if ! pb >/dev/null && ! pb -p abc koi >/dev/null && bash -n files/proxy-browser; then
+    pass "Missing host and bad port are errors"
+else
+    fail "proxy-browser accepted bad input"
+fi
+
 cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 13 scripts module tests passed!${NC}"
+echo -e "${GREEN}All 16 scripts module tests passed!${NC}"
 echo "======================================"

@@ -16,6 +16,9 @@ files:
   - src: fuzzy-grep
     dest: ~/.local/bin/fuzzy-grep
     mode: '0755'
+  - src: proxy-browser
+    dest: ~/.local/bin/proxy-browser
+    mode: '0755'
 
 # Backup settings
 backup:
