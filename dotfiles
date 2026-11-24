@@ -722,9 +722,10 @@ Commands:
   versions             List tagged versions
   checkout REF         Switch to a tag, commit or branch and deploy it; a tag or commit pins
                        this machine until you run 'dotfiles checkout main'
-  add                  Review local edits and conflicts one by one: save one to a repo layer
-                       (staged; never commits or pushes), dismiss it or skip it
-  add --all            Also ask again about anything you dismissed
+  add                  Review local edits and conflicts one by one, each beside the repo's
+                       version: keep yours and save it to a repo layer, keep it locally only,
+                       take the repo's, or skip. Then offers to commit and push what it saved
+  add --all            Also ask again about anything you kept locally
   verify               Verify all installations
   help                 Show this help message
 
@@ -785,7 +786,7 @@ Examples:
   dotfiles versions                  # List tagged versions
   dotfiles checkout v1.2             # Pin this machine to v1.2 (a tag or commit)
   dotfiles checkout main             # Follow main again
-  dotfiles add                       # Save, dismiss or skip local edits; you commit what's saved
+  dotfiles add                       # Review local edits; commit and push what you save
   dotfiles uninstall                 # Remove all configs and restore your originals
 
 EOF

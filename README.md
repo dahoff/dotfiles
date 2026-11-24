@@ -21,15 +21,15 @@ Find what you want to do, then follow the link for details. For flags, see [Flag
 
 | Command | What it does |
 |---|---|
-| [`dotfiles add`](#add) | Walks through your edits: save one to a repo layer (staged, not committed), dismiss it or skip it. |
-| [`dotfiles add --all`](#add) | Also asks again about edits you dismissed. |
+| [`dotfiles add`](#add) | Walks through your edits, each beside the repo's version: save yours to a repo layer, keep it locally only, take the repo's, or skip. Then offers to commit and push what you saved. |
+| [`dotfiles add --all`](#add) | Also asks again about edits you kept locally. |
 | [`dotfiles sync`](#sync) | Runs `add`, then `pull`. |
 
 ### Resolve conflicts
 
 | Command | What it does |
 |---|---|
-| [`dotfiles add`](#resolving-conflicts) | Save your version to a layer, or dismiss it to accept the repo's version as the new starting point. |
+| [`dotfiles add`](#resolving-conflicts) | Save your version to a layer, keep it locally only (the repo's version becomes the new starting point), or take the repo's. |
 | [`dotfiles pull --force PATH`](#resolving-conflicts) | Takes the repo's version of that one file. |
 | [`dotfiles pull --force`](#pull) | Takes the repo's version of every file. |
 
@@ -147,7 +147,7 @@ Read-only. It shows the repos, version, host, profile, last check, missing packa
 | `conflicts:` | You and the repo both changed them; yours is kept. |
 | `dismissed:` | Edits you kept local on purpose. `add --all` asks again. |
 | `saved, not committed:` | Edits a repo layer holds with uncommitted changes. Commit them, then run `pull`. |
-| `held in a lower layer:` | Edits a committed layer holds, below a layer that wins, so they stay local on this host. `add` leaves them out; `add --all` offers them, and dismissing one moves it to `dismissed:`. |
+| `held in a lower layer:` | Edits a committed layer holds, below a layer that wins, so they stay local on this host. `add` leaves them out; `add --all` offers them, and keeping one locally moves it to `dismissed:`. |
 | `uncommitted files:` | Repo files that aren't committed, so aren't deployed. |
 
 ### versions and checkout
@@ -156,30 +156,31 @@ Read-only. It shows the repos, version, host, profile, last check, missing packa
 
 ### add
 
-`dotfiles add` shows each local edit and asks what to do. It needs a terminal, and never commits or pushes. It only offers files dotfiles manages.
+`dotfiles add` shows each local edit side by side, the repo's version on the left and yours on the right, and asks what to do. It needs a terminal. It only offers files dotfiles manages.
 
 | Answer | Effect |
 |---|---|
-| **Save** | Asks which layer: this host, a profile or the public default. Copies the change there and stages it. Merged files save only that key, other files the whole file. |
-| **Dismiss** | Keeps the change local, and `add` doesn't ask again unless the value changes. |
-| **Skip** | Asks again next time. Quitting partway skips everything unanswered. |
+| `s` **keep mine, and save it to the repo** | Asks which layer: this host, a profile or the public default. Copies the change there and stages it. Merged files save only that key, other files the whole file. |
+| `l` **keep changes locally only** | Keeps the change on this host, and `add` doesn't ask again unless the value changes. (`d`, for the old "dismiss", still works.) |
+| `t` **take the repo's version** | Writes the repo's version over yours: the whole file, or just that key. Your version is copied to `~/.config/dotfiles/add-replaced/` first. |
+| `k` **skip** | Asks again next time. Quitting partway skips everything unanswered. |
 
-When the review ends, `add` lists what it staged in each repo. Commit and push those yourself; other machines don't get them until you do. If you later discard a staged save, `add` asks again.
+When the review ends, `add` lists what it staged in each repo and asks whether to commit it, then whether to push. The commit holds only the files `add` staged, so anything else you had staged stays out. Answer no and it stays staged (or committed) for you to finish; other machines don't get it until it's pushed. Then run `pull` (`sync` does that for you). If you later discard a staged save, `add` asks again.
 
-- `dotfiles add --all` also asks again about dismissed edits.
+- `dotfiles add --all` also asks again about edits you kept locally.
 - The host layer is offered only when the host's directory in the hosts repo has a `host.yaml`. A detached hosts repo, or a public repo pinned by `checkout`, offers no layers, and `add` says why.
 - Saving to the public repo shows the value and needs you to type `public`.
 - Saving a replaced file to a layer that has no copy creates one, which then hides later changes to the public file on that host. `add` says so before it saves.
 - Arrays are saved as one value, so a save hides later repo changes to that list.
-- A host with no git (a [remote host](#remote-hosts)) can only dismiss, because the next `pull --remote` would wipe a save.
+- A host with no git (a [remote host](#remote-hosts)) can't save, because the next `pull --remote` would wipe a save.
 - Your own `~/.bashrc.d/*.sh` and `~/.gitconfig.local` are never offered.
-- `add` has no dry run: answer `k` (or press Enter) to skip each edit and look without saving. The prompt's options are `s` save, `d` dismiss, `k` skip (the default) and `q` quit.
+- `add` has no dry run: answer `k` (or press Enter) to skip each edit and look without saving. The options are `s`, `l`, `t`, `k` (the default) and `q` quit.
 
 ### Resolving conflicts
 
 A conflict means you and the repo changed the same file, or the same key in a merged file, to different things. Your version is kept and `pull` warns each time. Resolve it one of these ways:
 
-- **`dotfiles add`:** save your version to a layer, or dismiss it. Dismissing accepts the repo's current version as the new starting point and stops the warning. For a replaced file, `add` shows your change and the repo's separately and warns before saving, because saving the whole file undoes the repo's change.
+- **`dotfiles add`:** save your version to a layer, keep it locally only, or take the repo's. Keeping it locally accepts the repo's current version as the new starting point and stops the warning. For a replaced file, `add` shows the repo's new version beside yours and warns before saving, because saving the whole file undoes the repo's change.
 - **`dotfiles pull --force PATH`:** takes the repo's version of that file only, and touches nothing else. `PATH` can be a deployed config file or a drop-in. It refuses a path dotfiles doesn't manage. It keeps local-only keys in merged files and takes a snapshot first.
 
 ### init

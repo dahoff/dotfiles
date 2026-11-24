@@ -188,6 +188,9 @@ do_pull() {
 has_line() {
     printf '%s\n' "$OUT" | grep -qF -- "$1" || fail "missing '$1' in: $OUT"
 }
+has_re() {
+    printf '%s\n' "$OUT" | grep -qE -- "$1" || fail "missing /$1/ in: $OUT"
+}
 no_line() {
     if printf '%s\n' "$OUT" | grep -qF -- "$1"; then fail "unexpected '$1' in: $OUT"; fi
 }
@@ -453,20 +456,20 @@ RS=$(recs)
 add k
 [[ $RC -eq 0 ]] || fail "add failed: $OUT"
 has_line "=== ~/ad/a.conf ==="
-has_line "+mine"
-has_line "--- repo copy"
-has_line "s(ave)"
-has_line "d(ismiss)"
-has_line "k(skip)"
-has_line "q(uit)"
+has_re '[0-9] mine$'
+has_line "yours: ~/ad/a.conf"
+has_line "s) keep mine, and save it to the repo"
+has_line "l) keep changes locally only"
+has_line "k) skip for now"
+has_line "q) quit"
 [[ "$(recs)" == "$RS" ]] || fail "skip changed the records"
 hosts_clean "skip"
 public_clean "skip"
 add ""
-has_line "+mine"
+has_re '[0-9] mine$'
 [[ "$(recs)" == "$RS" ]] || fail "an empty answer changed the records"
 add k
-has_line "+mine"
+has_re '[0-9] mine$'
 pass "skip keeps the item pending; empty means skip"
 
 info "Review: a wrong answer asks again, and the end of the input stops it"
@@ -478,6 +481,39 @@ add what
 [[ $RC -eq 0 ]] || fail "add failed: $OUT"
 [[ "$(recs)" == "$RS" ]] || fail "records changed"
 pass "re-asked"
+
+info "Review: the two versions are side by side, and t takes the repo's, keeping yours aside"
+fresh
+echo mine >> "$A"
+REPO_A=$(cat "$REC/repo/a.conf")
+add t
+[[ $RC -eq 0 ]] || fail "add failed: $OUT"
+has_line "yours: ~/ad/a.conf"
+has_re '[0-9] mine$'
+has_line "t) take the repo's version"
+has_line "Took the repo's version"
+[[ "$(cat "$A")" == "$REPO_A" ]] || fail "live file is not the repo's: $(cat "$A")"
+KEPT=$(find "$STATE_DIR/add-replaced" -type f -path '*/ad/a.conf')
+[[ -n "$KEPT" ]] && grep -qx mine "$KEPT" || fail "your version was not kept aside"
+hosts_clean "take"
+public_clean "take"
+add
+has_line "No local edits"
+fresh
+edit_s '.model = "mine" | .theme = "mine too"'
+add t k
+has_line 'key ["model"]'
+has_line '"mine"'
+[[ "$(jq -r .model "$S")" == m1 ]] || fail "model not taken from the repo: $(cat "$S")"
+[[ "$(jq -r .theme "$S")" == "mine too" ]] || fail "another key changed"
+add k
+no_line 'key ["model"]'
+has_line 'key ["theme"]'
+fresh
+edit_s 'del(.model)'
+add t
+[[ "$(jq -r .model "$S")" == m1 ]] || fail "a deleted key was not restored: $(cat "$S")"
+pass "take the repo's version"
 
 info "Review: q stops the review, and what's unanswered is asked next time"
 fresh
@@ -549,7 +585,7 @@ RS=$(recs)
 add_all k
 [[ $RC -eq 0 ]] || fail "add --all failed: $OUT"
 has_line "=== ~/ad/a.conf ==="
-has_line "You dismissed this earlier"
+has_line "You chose to keep this locally earlier"
 [[ "$(recs)" == "$RS" ]] || fail "skipping a dismissed item changed the records"
 add_all d
 [[ "$(recs)" == "$RS" ]] || fail "dismissing it again changed the records"
@@ -570,9 +606,9 @@ run pull --no-backup --no-fetch
 has_line "kept your edit to $A"
 LIVE_BEFORE=$(cat "$A")
 add d
-has_line "The repo's change"
-has_line "+a2"
-has_line "+mine"
+has_line "You and the repo both changed this."
+has_re '[0-9] a2( |$)'
+has_re '[0-9] mine$'
 cmp -s "$REC/review/a.conf" "$A" || fail "review copy not updated"
 cmp -s "$REC/repo/a.conf" "$LR/a.conf" || fail "repo copy not taken from the stage"
 add
@@ -598,7 +634,7 @@ add
 [[ "$(jq -r .model "$REC/review/settings.json")" == m1 ]] || fail "EOF changed the review copy"
 add d k
 has_line 'key ["model"]'
-has_line 'repo now'
+has_line 'before either change:'
 has_line '"m2"'
 [[ "$(jq -r .model "$REC/review/settings.json")" == mine ]] || fail "review copy lacks the key"
 [[ "$(jq -r .model "$REC/repo/settings.json")" == m2 ]] || fail "repo copy lacks the stage's key"
@@ -845,8 +881,8 @@ edit_s 'del(.model)'
 add s k
 has_line "You deleted this repo-managed key"
 has_line "Saving isn't possible"
-has_line "d(ismiss)"
-no_line "s(ave)"
+has_line "l) keep changes locally only"
+no_line "s) keep mine, and save it to the repo"
 has_line "Not an option: s"
 hosts_clean "deleted key"
 public_clean "deleted key"
@@ -913,10 +949,10 @@ echo mine >> "$A"
 repo_set a.conf 'a2'
 RS=$(recs)
 add s n
-has_line "Your change"
-has_line "+mine"
-has_line "The repo's change"
-has_line "+a2"
+has_line "You and the repo both changed this."
+has_re '[0-9] mine$'
+has_line "You and the repo both changed this."
+has_re '[0-9] a2( |$)'
 has_line "undoes the repo's change"
 [[ ! -e "$HOST_A" ]] || fail "saved without confirmation"
 [[ "$(recs)" == "$RS" ]] || fail "records changed"
@@ -976,7 +1012,7 @@ mv "$H/.git" "$T/h.git"
 RC=0
 add s d
 has_line "Saving isn't possible here"
-no_line "s(ave)"
+no_line "s) keep mine, and save it to the repo"
 has_line "Not an option: s"
 cmp -s "$REC/review/a.conf" "$A" || fail "dismiss failed"
 [[ ! -e "$HOST_A" ]] || fail "saved"
@@ -1082,7 +1118,7 @@ git -C "$H" commit -q -am "host v2"
 cp "$PUB_A" "$A"
 add k
 has_line "=== ~/ad/a.conf ==="
-has_line "The repo's change"
+has_line "You and the repo both changed this."
 pass "held below, file"
 
 info "Review: the same with the winning layer not offered, in a detached hosts repo"
@@ -1335,7 +1371,7 @@ chmod 700 "$REC/repo"
 [[ "$(cat "$REC/repo/a.conf")" == "$REPO_A" ]] || fail "repo copy changed"
 [[ "$(cat "$REC/repo/b.conf")" == "$REPO_B" && "$(cat "$REC/review/b.conf")" == "$REVIEW_B" ]] || fail "another item's record changed"
 add k k
-has_line "The repo's change"
+has_line "You and the repo both changed this."
 pass "conflict dismiss failure"
 
 info "Review: a merged dismiss that fails leaves both copies; another key still works"
@@ -1427,7 +1463,7 @@ if command -v script >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
     RC=0
     OUT=$(printf 'd\n' | timeout 60 script -qec "$R/dotfiles add" /dev/null 2>&1) || RC=$?
     [[ $RC -eq 0 ]] || fail "add failed on a terminal: $OUT"
-    has_line "s(ave)"
+    has_line "s) keep mine, and save it to the repo"
     cmp -s "$REC/review/a.conf" "$A" || fail "the answer didn't arrive: $OUT"
     pass "terminal"
 else
@@ -1464,7 +1500,7 @@ add k
 has_line "not a valid JSON object"
 has_line "can't be seen"
 no_line "no longer provides"
-no_line "s(ave)"
+no_line "s) keep mine, and save it to the repo"
 printf '[1]\n' > "$LH/settings.json"
 git -C "$H" commit -q -am "not an object"
 add k
@@ -1644,8 +1680,8 @@ echo mine >> "$A"
 author_set 'upstream'
 sync_ans d
 [[ $RC -eq 0 ]] || fail "sync failed: $OUT"
-has_line "The repo's change"
-has_line "+upstream"
+has_line "You and the repo both changed this."
+has_re '[0-9] upstream( |$)'
 grep -qx mine "$A" || fail "the edit was lost"
 cmp -s "$REC/repo/a.conf" "$LR/a.conf" || fail "repo copy not the fetched version"
 no_line "kept your edit"
@@ -1712,6 +1748,40 @@ has_line "dotfiles init"
 [[ "$(git -C "$R" rev-parse HEAD)" == "$HEAD_R" ]] || fail "sync moved the repo before refusing"
 rm -rf "$STATE_DIR/deployed"
 pass "old records"
+drop_remotes
+
+info "Review: what add saved is committed only on a yes, alone, then pushed on a yes"
+set_up_remotes
+echo mine >> "$A"
+printf 'other\n' > "$H/other.txt"
+git -C "$H" add other.txt
+HEAD_H=$(git -C "$H" rev-parse HEAD)
+add s 1 n
+has_line "Commit them?"
+[[ "$(git -C "$H" rev-parse HEAD)" == "$HEAD_H" ]] || fail "committed on a no"
+has_line "Staged, not committed"
+git -C "$H" reset -q -- hosts/addhost/apps/ad/files/a.conf
+rm -f "$HOST_A"
+add s 1 y n
+[[ $RC -eq 0 ]] || fail "add failed: $OUT"
+has_line "Committed in $H"
+[[ "$(git -C "$H" show --name-only --format= HEAD)" == "hosts/addhost/apps/ad/files/a.conf" ]] \
+    || fail "the commit has more than the save: $(git -C "$H" show --name-only --format= HEAD)"
+[[ "$(staged_in "$H")" == "other.txt" ]] || fail "other staged work was touched: $(staged_in "$H")"
+no_line "Staged, not committed"
+has_line "Not pushed"
+[[ "$(git -C "$H" rev-parse origin/main)" == "$HEAD_H" ]] || fail "pushed on a no"
+git -C "$H" reset -q --hard "$HEAD_H"
+add s 1 y y
+has_line "Pushed to origin/main"
+[[ "$(git --git-dir="$UP_H" rev-parse main)" == "$(git -C "$H" rev-parse HEAD)" ]] || fail "not pushed"
+has_line "dotfiles pull"
+git -C "$H" reset -q --hard "$HEAD_H"
+rm -f "$H/other.txt"
+git --git-dir="$UP_H" update-ref refs/heads/main "$HEAD_H"
+add s 1
+[[ "$(git -C "$H" rev-parse HEAD)" == "$HEAD_H" ]] || fail "the end of the input committed"
+pass "commit and push offered"
 drop_remotes
 
 echo

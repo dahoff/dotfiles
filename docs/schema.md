@@ -365,24 +365,25 @@ Each managed file, or each key of a merged JSON file, has two saved copies in `$
 
 - `updates available:` names the apps whose files changed, and each repo's commits fetched but not merged (`HEAD..@{u}`). No git, no upstream and a pinned checkout add nothing.
 - `saved, not committed:` is for a value a layer file holds while that file is dirty in git. A commit settles it, and a discard brings the item back.
-- `held in a lower layer:` is for a value only committed layer files hold, below a layer that wins, so it stays local on this host. Plain `add` leaves it out. `add --all` offers it; dismissing moves it to `dismissed:`.
+- `held in a lower layer:` is for a value only committed layer files hold, below a layer that wins, so it stays local on this host. Plain `add` leaves it out. `add --all` offers it; keeping it locally moves it to `dismissed:`.
 
-`dotfiles add` shows each unreviewed edit and each conflict and asks for one of three answers:
+`dotfiles add` shows each unreviewed edit and each conflict side by side, the repo's version (for a conflict, its new one) on the left and the live file on the right, and asks for one of four answers:
 
-- **Save** asks which layer to use (this host, any profile or the public default), copies the change there and stages it. It never commits or pushes. Merged files save only that key; other files save the whole file. A saved edit isn't asked about again while that layer holds the value: at the end `add` lists what's waiting for a commit, and discarding the staged change brings it back.
-- **Dismiss** keeps the change local; `add` asks again only if the value changes. On a conflict it also accepts the repo's current version as the new starting point.
-- **Skip** asks again next time. Quitting partway does the same for anything unanswered.
+- **`s` keep mine, and save it to the repo** asks which layer to use (this host, any profile or the public default), copies the change there and stages it. Merged files save only that key; other files save the whole file. A saved edit isn't asked about again while that layer holds the value: at the end `add` lists what's waiting for a commit, and discarding the staged change brings it back.
+- **`l` keep changes locally only** (the code and `status` call it dismissed; `d` still works) keeps the change local; `add` asks again only if the value changes. On a conflict it also accepts the repo's current version as the new starting point.
+- **`t` take the repo's version** writes the repo's version over the live file, or just that key of a merged file, after copying the live file to `$STATE_DIR/add-replaced/<time>/`. The item is then settled: it matches the repo. Not offered when the repo no longer provides the file or a layer's copy is invalid.
+- **`k` skip** asks again next time. Quitting partway does the same for anything unanswered.
 
-`add --all` also asks again about dismissed edits and those held in a lower layer. When the review ends, `add` lists the staged files in each repo and tells you to commit and push them.
+`add --all` also asks again about dismissed edits and those held in a lower layer. When the review ends (or on quit), `add` lists, for each repo, the files it staged in this run and asks whether to commit them, then, if the branch has an upstream, whether to push. The commit is `git commit -- PATHS`, so other staged work in that repo stays out of it. The end of the input counts as no. Whatever isn't committed is listed as staged, not committed, as before.
 
-- It only offers files dotfiles manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in. A tool's drop-in is offered the public default only, and `90-dotfiles.sh` only dismiss and skip.
+- It only offers files dotfiles manages, so `~/.ssh`, `~/.gitconfig.local` and your own drop-ins can't be swept in. A tool's drop-in is offered the public default only, and `90-dotfiles.sh` can't be saved.
 - Layers offered: the host layer only when the host directory in the hosts repo has a `host.yaml` in its working copy; each profile in the chain; the public default, or for an app defined in the hosts repo, that app's own folder there. A repo with no git, a detached hosts repo and a pinned public repo offer no layers, and `add` says why.
 - Saving to the public default shows the value and needs typing `public`.
 - A save to a layer file with uncommitted changes is allowed only if `add` made them; otherwise that target is skipped.
 - Saving a replaced file to a layer that has no copy of it creates one, which masks lower layers from then on. Saving below a layer that already has the file or key is allowed, with a message that the higher layer still wins.
-- A conflict in a replaced file shows your change and the repo's separately; saving the whole file would undo the repo's change, so `add` warns and asks you to confirm. A key you deleted can be dismissed but not saved. An array save hides later repo changes to the list.
-- `add` needs a terminal and has no dry run: answer `k` (or press Enter) to look without saving. The options are `s` save, `d` dismiss, `k` skip (the default) and `q` quit.
-- To resolve a conflict without `add`, take the repo's version with `pull --force PATH`.
+- A conflict in a replaced file shows the repo's new version beside yours; saving the whole file would undo the repo's change, so `add` warns and asks you to confirm. A key you deleted can be kept deleted locally or restored with `t`, but not saved. An array save hides later repo changes to the list.
+- `add` needs a terminal and has no dry run: answer `k` (or press Enter) to look without saving. The options are `s`, `l`, `t`, `k` (the default) and `q` quit.
+- To take the repo's version of a whole file without `add`, use `pull --force PATH`.
 
 ### `~/.bashrc`
 

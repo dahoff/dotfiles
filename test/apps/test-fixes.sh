@@ -401,7 +401,7 @@ section_4() {
 
     # Status's instruction was false here; so nothing in plain add
     add q
-    no_line "s(ave)"
+    no_line "s) keep mine, and save it to the repo"
     no_line "a.conf ==="
     has_line "held in a lower layer"
     has_line "add --all"
@@ -412,7 +412,7 @@ section_4() {
 
     # add --all offers them, with dismiss
     add_all k k
-    has_line "d(ismiss)"
+    has_line "l) keep changes locally only"
     has_line "=== ~/ad/a.conf ==="
     has_line 'key ["model"]'
     has_line "A lower layer holds this"
@@ -533,7 +533,7 @@ section_5() {
     section_has "saved, not committed" "~/ad/a.conf"
     add q
     no_line "No local edits"
-    no_line "s(ave)"
+    no_line "s) keep mine, and save it to the repo"
     has_line "waiting for a commit"
     has_line "~/ad/a.conf"
     do_pull

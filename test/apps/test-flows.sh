@@ -258,7 +258,7 @@ agree ""
 ADD_ARGS=(--all)
 add s 2
 ADD_ARGS=()
-has_line "You dismissed this earlier"
+has_line "You chose to keep this locally earlier"
 has_line "Staged profiles/flows/apps/claude/files/settings.json"
 [[ "$(jq -r .model "$PROFILE_CLAUDE/settings.json")" == mine ]] || fail "not saved to the profile layer"
 [[ "$(jq -c keys "$PROFILE_CLAUDE/settings.json")" == '["model"]' ]] || fail "saved more than the key"
@@ -473,7 +473,8 @@ section_has conflicts "~/.claude/CLAUDE.md"
 RC=0
 OUT=$(printf 's\nd\n' | env -i HOME="$RH" PATH="$RBIN:/usr/local/bin:/usr/bin:/bin" TERM=dumb DOTFILES_ADD_ASSUME_TTY=1 "$RDF" add 2>&1) || RC=$?
 [[ $RC -eq 0 ]] || fail "remote add failed: $OUT"
-has_line "Dismiss or skip?"
+has_line "l) keep changes locally only"
+no_line "s) keep mine"
 has_line "Not an option: s"
 no_line "Staged"
 host_status

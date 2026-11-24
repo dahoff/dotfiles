@@ -300,7 +300,8 @@ has_line "kept your edit to $LG"
 run2 status
 section_has "conflicts" "~/.bashrc.d/90-dotfiles.sh  (the repo changed it too)"
 add2 s k
-has_line "Dismiss or skip?"
+has_line "l) keep changes locally only"
+no_line "s) keep mine"
 no_line "Save, dismiss or skip?"
 has_line "program code (lib/login.sh)"
 has_line "Not an option: s"
@@ -320,7 +321,7 @@ pull2
 ADD2_ARGS=(--all)
 add2 k
 ADD2_ARGS=()
-has_line "You dismissed this earlier"
+has_line "You chose to keep this locally earlier"
 pass "dismissed"
 
 info "Case 17: pull --force PATH takes the repo's drop-in, and status is clean"

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# add.sh - dotfiles add: review local edits one by one. Save copies a change into a repo
-# layer and stages it; dismiss keeps it local and stops asking until it changes; skip asks
-# again next time. It stops at staging: it never commits or pushes, so what you saved still
-# goes through your own review in git or lazygit.
+# add.sh - dotfiles add: review local edits one by one, each shown side by side with the
+# repo's version. Save copies a change into a repo layer and stages it; keep locally (the
+# code calls it dismiss) keeps it on this host and stops asking until it changes; take the
+# repo's writes the repo's version over yours, copying yours aside; skip asks again next
+# time. At the end it offers to commit what it staged, and then to push: each is a question,
+# and a no leaves it staged or committed for you to finish in git or lazygit.
 #
 # Items come from the records (records_items): whole files for a replaced file, single keys
 # for a merged one. It only ever looks at files dotfiles manages for this profile, so
@@ -26,7 +28,7 @@ ADD_PUBLIC_ROOT=""
 ADD_BASE_PUBLIC=true
 # Set for a file with no layer to save to: the reason, as a sentence
 ADD_NO_LAYER_REASON=""
-# Repo root -> 1, for each repo something was staged in
+# Repo root -> the paths add staged there, one per line, for each repo something was staged in
 declare -A ADD_STAGED=()
 # --all: also ask about what was dismissed
 ADD_ALL=false
@@ -179,7 +181,7 @@ add_build_no_layers() {
     ADD_ROOTS=()
     ADD_NOT_OFFERED=()
     ADD_EFFECTIVE_ROOTS=()
-    ADD_NO_LAYER_REASON="$1 Dismiss keeps your version."
+    ADD_NO_LAYER_REASON="$1 Keeping it locally keeps your version."
 }
 
 # Why layers are missing from the list, if any are
@@ -336,7 +338,9 @@ add__install() {
     ) 2>/dev/null; then
         log_warn "Could not note this save, so a further save to $rel will be skipped until you commit"
     fi
-    ADD_STAGED["$top"]=1
+    if ! grep -qxF -- "$rel" <<< "${ADD_STAGED[$top]:-}"; then
+        ADD_STAGED["$top"]+="$rel"$'\n'
+    fi
     log_success "Staged $rel in $top"
 }
 
@@ -424,11 +428,93 @@ add__show_key() {
         $f[0] | at($p) | if length == 1 then .[0] | tojson else "(absent)" end'
 }
 
-# Show an item: your change, and for a conflict the repo's change too
+# Write the value at PATH_JSON of a JSON file to OUT, pretty-printed, or (absent)
+# Usage: add__key_to_file FILE PATH_JSON OUT
+add__key_to_file() {
+    jq -n --argjson p "$2" --slurpfile f "$1" "$ADD_JQ_DEFS"'
+        $f[0] | at($p) | if length == 1 then .[0] else error("absent") end' > "$3" 2>/dev/null \
+        || echo "(absent)" > "$3"
+}
+
+# The terminal's width, for the side-by-side view: COLUMNS, then the terminal, then 80
+add__width() {
+    local cols="${COLUMNS:-}"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=$(tput cols 2>/dev/null </dev/tty) || cols=""
+    [[ "$cols" =~ ^[0-9]+$ && "$cols" -ge 40 ]] || cols=80
+    echo "$cols"
+}
+
+# Show two files side by side, the repo's on the left and yours on the right: the changed
+# lines and CONTEXT lines around them (all of it with a large CONTEXT). The gutter marks a
+# changed line |, one only on the left <, one only on the right >. Colored on a terminal.
+# Usage: add__side_by_side LEFT_LABEL LEFT_FILE RIGHT_LABEL RIGHT_FILE [CONTEXT]
+add__side_by_side() {
+    local llabel="$1" left="$2" rlabel="$3" right="$4" context="${5:-3}" color=0
+    if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then color=1; fi
+    if cmp -s "$left" "$right"; then
+        echo "  (no difference)"
+        return 0
+    fi
+    # diff exits 1 when the files differ, which is the point here
+    diff -U"$context" "$left" "$right" | awk -v W="$(add__width)" -v ll="$llabel" -v rl="$rlabel" -v color="$color" '
+        function clean(s) { gsub(/\t/, "    ", s); gsub(/\r/, "", s); return s }
+        function fit(s, w) {
+            s = clean(s)
+            if (length(s) > w) s = substr(s, 1, w - 1) "~"
+            return sprintf("%-" w "s", s)
+        }
+        function side(n, s) {
+            if (n == "") return sprintf("%" (half) "s", "")
+            return sprintf("%4d ", n) fit(s, half - 5)
+        }
+        function row(ln, ls, mark, rn, rs,   l, r) {
+            l = side(ln, ls); r = side(rn, rs)
+            if (color && (mark == "|" || mark == "<") && ln != "") l = "\033[31m" l "\033[0m"
+            if (color && (mark == "|" || mark == ">") && rn != "") r = "\033[32m" r "\033[0m"
+            sub(/ +$/, "", r)
+            print l " " mark " " r
+        }
+        function flush(   i, n) {
+            n = (nl > nr) ? nl : nr
+            for (i = 1; i <= n; i++) {
+                if (i <= nl && i <= nr) row(lno[i], ltx[i], "|", rno[i], rtx[i])
+                else if (i <= nl) row(lno[i], ltx[i], "<", "", "")
+                else row("", "", ">", rno[i], rtx[i])
+            }
+            nl = 0; nr = 0
+        }
+        BEGIN {
+            half = int((W - 3) / 2)
+            print fit(ll, half) "   " rl
+            rule = ""; for (i = 0; i < half; i++) rule = rule "-"
+            print rule "   " rule
+            hunks = 0
+        }
+        NR <= 2 && /^(---|\+\+\+) / { next }
+        /^@@/ {
+            flush()
+            if (hunks++ > 0) print sprintf("%" half "s", "...")
+            split($2, a, ","); lnum = -a[1]
+            split($3, b, ","); rnum = b[1] + 0
+            next
+        }
+        /^\\/ { next }
+        /^-/ { lno[++nl] = lnum++; ltx[nl] = substr($0, 2); next }
+        /^\+/ { rno[++nr] = rnum++; rtx[nr] = substr($0, 2); next }
+        { flush(); row(lnum++, substr($0, 2), " ", rnum++, substr($0, 2)) }
+        END { flush() }
+    ' || true
+}
+
+# Show an item side by side: the repo's version on the left and yours on the right. For a
+# conflict that is the repo's new version; a key also shows what it was before you both
+# changed it.
 # Usage: add__show_item APP SRC DEST STAGE_FILE KIND PATH_JSON
 add__show_item() {
-    local app="$1" src="$2" dest="$3" stage_file="$4" kind="$5" path="$6" repo_copy
+    local app="$1" src="$2" dest="$3" stage_file="$4" kind="$5" path="$6" repo_copy theirs l r
     repo_copy=$(records_repo_path "$app" "$src") || return 1
+    theirs="$stage_file"
+    [[ -n "$theirs" && -e "$theirs" ]] || theirs="$repo_copy"
     echo
     if [[ "$path" == "[]" ]]; then
         echo "=== $(add_tilde "$dest") ==="
@@ -437,23 +523,49 @@ add__show_item() {
     fi
     case "$kind" in
         conflict) echo "You and the repo both changed this." ;;
-        dismissed) echo "You dismissed this earlier; it stays local unless you save it." ;;
-        held) echo "A lower layer holds this value, committed, but a higher one wins, so it stays local on this host. Dismiss stops listing it that way." ;;
+        dismissed) echo "You chose to keep this locally earlier; it stays local unless you save it." ;;
+        held) echo "A lower layer holds this value, committed, but a higher one wins, so it stays local on this host. Keeping it locally stops listing it that way." ;;
     esac
     if [[ "$path" == "[]" ]]; then
-        [[ "$kind" != conflict ]] || echo "Your change:"
-        diff -u --label "repo copy" --label "live: $(add_tilde "$dest")" "$repo_copy" "$dest" || true
-        if [[ "$kind" == conflict ]]; then
-            echo "The repo's change:"
-            diff -u --label "repo copy" --label "repo now" "$repo_copy" "$stage_file" || true
-        fi
+        add__side_by_side "repo" "$theirs" "yours: $(add_tilde "$dest")" "$dest"
     else
-        echo "  repo copy: $(add__show_key "$repo_copy" "$path")"
-        echo "  live:      $(add__show_key "$dest" "$path")"
+        l=$(mktemp "$WORK_DIR/add-left.XXXXXX") || return 1
+        r=$(mktemp "$WORK_DIR/add-right.XXXXXX") || return 1
+        add__key_to_file "$theirs" "$path" "$l"
+        add__key_to_file "$dest" "$path" "$r"
+        add__side_by_side "repo" "$l" "yours" "$r" 100000
         if [[ "$kind" == conflict ]]; then
-            echo "  repo now:  $(add__show_key "$stage_file" "$path")"
+            echo "  before either change: $(add__show_key "$repo_copy" "$path")"
+        fi
+        rm -f "$l" "$r"
+    fi
+}
+
+# Take the repo's version of an item: the whole file, or one key, written over yours.
+# Your version is copied aside first, and the path printed, in case you want it back.
+# Usage: add_take_repo DEST STAGE_FILE PATH_JSON
+add_take_repo() {
+    local dest="$1" stage_file="$2" path="$3" mode new aside
+    mode=$(stat -c %a "$dest" 2>/dev/null || stat -f %Lp "$dest" 2>/dev/null) || mode=0644
+    aside="$STATE_DIR/add-replaced/$(date +%Y%m%d-%H%M%S)/$(add_tilde "$dest" | sed 's|^~/||; s|^/||')"
+    if ! (umask 077 && mkdir -p "$(dirname "$aside")" && cp -p "$dest" "$aside") 2>/dev/null; then
+        log_warn "Could not keep a copy of your version of $(add_tilde "$dest"); left it as it was"
+        return 1
+    fi
+    if [[ "$path" == "[]" ]]; then
+        new="$stage_file"
+    else
+        new=$(mktemp "$WORK_DIR/add-take.XXXXXX") || return 1
+        if ! add__take "$dest" "$path" "$stage_file" "$new"; then
+            log_warn "Could not read the repo's value for $(add_tilde "$dest"); left it as it was"
+            return 1
         fi
     fi
+    records__write_live "$new" "$dest" "$mode" 2>/dev/null || {
+        log_warn "Could not write $(add_tilde "$dest"); it was left as it was"
+        return 1
+    }
+    log_success "Took the repo's version; yours is saved at $(add_tilde "$aside")"
 }
 
 # Choose a layer and save the item there. A failure leaves it pending for next time.
@@ -543,17 +655,23 @@ add__save_item() {
 # Usage: add_review_item APP DIR SRC DEST STAGE_FILE KIND PATH_JSON
 add_review_item() {
     local app="$1" dir="$2" src="$3" dest="$4" stage_file="$5" kind="$6" path="$7"
-    local answer no_save="" options
+    local answer no_save="" no_take="" bad_layer=false
 
     add__show_item "$app" "$src" "$dest" "$stage_file" "$kind" "$path" || return 0
 
+    if grep -qxF -- "$src" "${stage_file%/files/"$src"}/skip" 2>/dev/null; then
+        bad_layer=true
+    fi
+    if [[ -z "$stage_file" || ! -e "$stage_file" || "$bad_layer" == true ]]; then
+        no_take=true
+    fi
     if [[ "$path" != "[]" && "$(add__show_key "$dest" "$path")" == "(absent)" ]]; then
-        no_save="You deleted this repo-managed key. Saving isn't possible; dismiss keeps it deleted."
+        no_save="You deleted this repo-managed key. Saving isn't possible; keeping it locally keeps it deleted."
     elif [[ -n "$ADD_NO_LAYER_REASON" ]]; then
         no_save="$ADD_NO_LAYER_REASON"
     elif [[ ${#ADD_ROOTS[@]} -eq 0 ]]; then
         no_save="Saving isn't possible here: no repo on this host can take it. To keep this edit elsewhere, copy it by hand."
-    elif grep -qxF -- "$src" "${stage_file%/files/"$src"}/skip" 2>/dev/null; then
+    elif [[ "$bad_layer" == true ]]; then
         no_save="A layer's committed copy of this file is not a valid JSON object, so there is no repo version to compare with: saving isn't possible, and a conflict with the repo can't be seen. Fix that layer and commit it."
     elif [[ ! -e "$stage_file" ]]; then
         no_save="The repo no longer provides this file, so there's nowhere to save it."
@@ -561,13 +679,15 @@ add_review_item() {
     if [[ -n "$no_save" ]]; then
         echo "$no_save"
         [[ ${#ADD_ROOTS[@]} -ne 0 ]] || add__say_not_offered
-        options="Dismiss or skip? d(ismiss) k(skip) q(uit)"
-    else
-        options="Save, dismiss or skip? s(ave) d(ismiss) k(skip) q(uit)"
     fi
+    [[ -n "$no_save" ]] || echo "  s) keep mine, and save it to the repo"
+    echo "  l) keep changes locally only"
+    [[ -n "$no_take" ]] || echo "  t) take the repo's version (yours is copied aside)"
+    echo "  k) skip for now (asked again next time)"
+    echo "  q) quit"
 
     while true; do
-        add_ask answer "$options" "k" || return 2
+        add_ask answer "Choice" "k" || return 2
         case "$answer" in
             s|S|save)
                 if [[ -z "$no_save" ]]; then
@@ -575,10 +695,17 @@ add_review_item() {
                     return
                 fi
                 ;;
-            d|D|dismiss)
+            # d and dismiss: the old names
+            l|L|local|d|D|dismiss)
                 add_dismiss "$app" "$src" "$dest" "$stage_file" "$kind" "$path" \
                     || log_warn "Could not update the records of $(add_tilde "$dest"); it stays pending"
                 return 0
+                ;;
+            t|T|take|theirs)
+                if [[ -z "$no_take" ]]; then
+                    add_take_repo "$dest" "$stage_file" "$path" || log_warn "It stays pending"
+                    return 0
+                fi
                 ;;
             k|K|skip) return 0 ;;
             q|Q|quit) return 2 ;;
@@ -705,7 +832,7 @@ add_closing_message() {
     [[ ${#ADD_STAGED[@]} -gt 0 ]] || return 0
     local top file
     echo
-    echo "Staged, not committed. Commit and push these yourself; other hosts won't get them until you do:"
+    echo "Staged, not committed. Commit and push these yourself ('dotfiles add' offers to next time); other hosts won't get them until you do:"
     for top in "${!ADD_STAGED[@]}"; do
         echo "$top"
         while IFS= read -r -d '' file; do
@@ -713,6 +840,72 @@ add_closing_message() {
         done < <(git -C "$top" diff --cached --name-only -z 2>/dev/null)
         echo "  git -C $top diff --cached   (or: lazygit -p $top)"
     done
+}
+
+# Offer to commit, then push, what this run saved, one repo at a time. Only the paths add
+# staged go in the commit: anything else staged in that repo is left as it was. The end of
+# the input is a no. A repo that is committed drops out of ADD_STAGED, so the closing
+# message lists only what's still staged.
+add_offer_commit() {
+    [[ ${#ADD_STAGED[@]} -gt 0 ]] || return 0
+    local top rel answer subject names="" upstream out committed=false
+    local -a paths=()
+    for top in "${!ADD_STAGED[@]}"; do
+        paths=()
+        while IFS= read -r rel; do
+            [[ -n "$rel" ]] || continue
+            # Left out: a path whose staged content is what's committed already
+            if [[ -n "$(git --literal-pathspecs -C "$top" diff --cached --name-only -- "$rel" 2>/dev/null)" ]]; then
+                paths+=("$rel")
+            fi
+        done <<< "${ADD_STAGED[$top]}"
+        if [[ ${#paths[@]} -eq 0 ]]; then
+            unset 'ADD_STAGED[$top]'
+            continue
+        fi
+        echo
+        echo "Saved to $top:"
+        names=""
+        for rel in "${paths[@]}"; do
+            printf '  %s\n' "$rel"
+            names+="${names:+, }$(basename "$rel")"
+        done
+        add_ask answer "Commit them? y(es) n(o)" "y" || answer=n
+        case "$answer" in
+            y|Y|yes) ;;
+            *) continue ;;
+        esac
+        subject="dotfiles add on ${OVERLAY_HOST:-$(hosts_local_name)}: save $names"
+        (( ${#subject} <= 72 )) || subject="dotfiles add on ${OVERLAY_HOST:-$(hosts_local_name)}: save ${#paths[@]} files"
+        if ! out=$(git --literal-pathspecs -C "$top" commit -q -m "$subject" -m "$(printf '%s\n' "${paths[@]}")" -- "${paths[@]}" 2>&1); then
+            log_warn "The commit in $top failed, so they stay staged:"
+            [[ -z "$out" ]] || printf '%s\n' "$out" | sed 's/^/  /' >&2
+            continue
+        fi
+        unset 'ADD_STAGED[$top]'
+        committed=true
+        log_success "Committed in $top: $subject"
+
+        if ! upstream=$(git -C "$top" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null); then
+            log_info "This branch has no upstream to push to; push it yourself: git -C $top push -u origin HEAD"
+            continue
+        fi
+        add_ask answer "Push to $upstream? y(es) n(o)" "y" || answer=n
+        case "$answer" in
+            y|Y|yes) ;;
+            *) log_info "Not pushed; other hosts get it once you run: git -C $top push"; continue ;;
+        esac
+        if out=$(git -C "$top" push -q 2>&1); then
+            log_success "Pushed to $upstream"
+        else
+            log_warn "The push from $top failed; it's committed, so push it yourself (git -C $top push):"
+            [[ -z "$out" ]] || printf '%s\n' "$out" | sed 's/^/  /' >&2
+        fi
+    done
+    if [[ "$committed" == true ]]; then
+        echo
+        echo "Run 'dotfiles pull' so this host's records catch up with the commit ('dotfiles sync' does that next)."
+    fi
 }
 
 # True once add had something to show or say
@@ -779,6 +972,7 @@ add__review_app() {
             if [[ $rc -eq 2 ]]; then
                 echo
                 echo "Stopped: anything unanswered is asked again next time"
+                add_offer_commit
                 exit 0
             fi
         done
@@ -842,5 +1036,6 @@ cmd_add() {
     if [[ "$ADD_FOUND" != true && ${#ADD_WAITING[@]} -eq 0 && ${#ADD_LOWER[@]} -eq 0 ]]; then
         log_success "No local edits"
     fi
+    add_offer_commit
     exit 0
 }
