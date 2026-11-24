@@ -2,6 +2,7 @@
 # .tmux-lazydocker.sh - Persistent lazydocker popup that toggles on/off
 # Opens lazydocker in the current pane's directory (passed via display-popup -d),
 # so a docker-compose project there is picked up.
+# ` d inside the popup hides it (handled by the binding in .tmux.conf).
 # Quitting lazydocker (q) destroys the session; next ` d opens fresh.
 
 if ! command -v lazydocker &>/dev/null; then
@@ -21,12 +22,10 @@ fi
 
 if ! tmux has-session -t "$session" 2>/dev/null; then
     session_id="$(tmux new-session -dP -s "$session" -c "$PWD" -F '#{session_id}' "lazydocker")"
-    tmux set-option -t "$session_id" key-table lazydocker
     tmux set-option -t "$session_id" status off
     session="$session_id"
 else
     # Re-apply settings lost when tmux-resurrect restores the session
-    tmux set-option -t "$session" key-table lazydocker
     tmux set-option -t "$session" status off
 fi
 
