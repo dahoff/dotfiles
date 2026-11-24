@@ -22,6 +22,9 @@ files:
   - src: .tmux-lazygit.sh
     dest: ~/.tmux/.tmux-lazygit.sh
     mode: '0755'
+  - src: .tmux-lazydocker.sh
+    dest: ~/.tmux/.tmux-lazydocker.sh
+    mode: '0755'
   - src: .tmux-top.sh
     dest: ~/.tmux/.tmux-top.sh
     mode: '0755'
