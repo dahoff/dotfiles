@@ -479,6 +479,7 @@ curl|curl|curl|curl|||||
 fzf|fzf|fzf|fzf|||||
 jq|jq|jq|jq|||||
 tree|tree|tree|tree|||||
+htop|htop|htop|htop|||||
 lazygit||||command -v lazygit|lazygit/install.sh|lazygit/files/50-lazygit.sh||
 ssh|openssh-client|openssh-clients|||||ssh|
 lazyssh||||command -v lazyssh|lazyssh/install.sh|lazyssh/files/50-lazyssh.sh||
@@ -487,7 +488,7 @@ claude||||command -v claude|claude/install.sh||claude|'
 GOT=$(resolved complete) || fail "14: complete did not resolve: $GOT"
 [[ "$GOT" == "$WANT_COMPLETE" ]] || fail "14: complete changed: $(diff <(echo "$WANT_COMPLETE") <(echo "$GOT"))"
 GOT=$(resolved minimal | cut -d'|' -f1 | tr '\n' ' ') || fail "14: minimal did not resolve"
-[[ "$GOT" == "git bash tmux vim curl fzf jq tree ssh scripts " ]] || fail "14: minimal changed: $GOT"
+[[ "$GOT" == "git bash tmux vim curl fzf jq tree htop ssh scripts " ]] || fail "14: minimal changed: $GOT"
 pass "complete and minimal unchanged"
 
 echo

@@ -105,7 +105,7 @@ Answers are saved in `~/.config/dotfiles/config.yaml`. Run `dotfiles init` again
 
 | Profile | Tools |
 |---|---|
-| `complete` | git, bash, tmux, vim, curl, fzf, jq, tree, lazygit, ssh, lazyssh, scripts, claude |
+| `complete` | git, bash, tmux, vim, curl, fzf, jq, tree, htop, lazygit, ssh, lazyssh, scripts, claude |
 | `minimal` | `complete` without claude, lazygit and lazyssh |
 
 ## Command details
