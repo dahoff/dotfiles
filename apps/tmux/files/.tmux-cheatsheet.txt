@@ -9,7 +9,7 @@
 
 \033[1;33m► SESSIONS & WINDOWS\033[0m
   \033[1;34mnew session\033[0m      tmux new -s name       \033[1;34mattach\033[0m           tmux a -t name
-  \033[1;34mdetach\033[0m           tmux detach            \033[1;34mlist sessions\033[0m    tmux ls
+  \033[1;34mdetach\033[0m           ` d                    \033[1;34mlist sessions\033[0m    tmux ls
   \033[1;34mswitch session\033[0m   ` s                    \033[1;90m(interactive list)\033[0m
   \033[1;34msave session\033[0m     ` S                    \033[1;34mrestore session\033[0m  ` R
   \033[1;34mnew window\033[0m       ` c                    \033[1;34mnext/prev\033[0m        ` n / ` p
@@ -49,7 +49,7 @@
   \033[1;35mCtrl+g\033[0m           Fuzzy content grep     \033[1;90m(grep filter form, then current/new window)\033[0m
   \033[1;35mCtrl+p\033[0m           Persistent popup shell \033[1;90m(toggle: Ctrl+p, destroy: exit)\033[0m
   \033[1;35mCtrl+l\033[0m           Lazygit popup          \033[1;90m(toggle: Ctrl+l, destroy: q)\033[0m
-  \033[1;35m` d\033[0m              Lazydocker popup       \033[1;90m(toggle: ` d, destroy: q)\033[0m
+  \033[1;35m` D\033[0m              Lazydocker popup       \033[1;90m(toggle: ` D, destroy: q)\033[0m
   \033[1;35mCtrl+t\033[0m           System monitor popup   \033[1;90m(htop, or top without it; toggle: Ctrl+t, destroy: q)\033[0m
   \033[1;35mCtrl+k\033[0m           Kill process popup     \033[1;90m(Space=select, Enter=kill, Ctrl+x=kill -9, Ctrl+s=sort)\033[0m
   \033[1;35mCtrl+s\033[0m           Split pane shell       \033[1;90m(toggle: Ctrl+s, destroy: exit)\033[0m

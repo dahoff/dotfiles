@@ -2,8 +2,8 @@
 # .tmux-lazydocker.sh - Persistent lazydocker popup that toggles on/off
 # Opens lazydocker in the current pane's directory (passed via display-popup -d),
 # so a docker-compose project there is picked up.
-# ` d inside the popup hides it (handled by the binding in .tmux.conf).
-# Quitting lazydocker (q) destroys the session; next ` d opens fresh.
+# ` D inside the popup hides it (handled by the binding in .tmux.conf).
+# Quitting lazydocker (q) destroys the session; next ` D opens fresh.
 
 if ! command -v lazydocker &>/dev/null; then
     echo "Error: lazydocker is not installed."
