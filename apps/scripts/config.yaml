@@ -19,6 +19,9 @@ files:
   - src: proxy-browser
     dest: ~/.local/bin/proxy-browser
     mode: '0755'
+  - src: bootstrap-hosts
+    dest: ~/.local/bin/bootstrap-hosts
+    mode: '0755'
 
 # Backup settings
 backup:

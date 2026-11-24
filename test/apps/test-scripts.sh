@@ -194,9 +194,68 @@ else
     fail "proxy-browser accepted bad input"
 fi
 
+# bootstrap-hosts runs against a stub ssh and dotfiles, in dry-run mode. STUB_PROBE sets
+# each host's check result: 0 can reach the repos, 1 can't, 255 ssh fails.
+bh_bin="$TEST_STATE/bh-bin"
+mkdir -p "$bh_bin"
+cat > "$bh_bin/ssh" <<'EOF_STUB'
+#!/usr/bin/env bash
+host=""
+while (($#)); do
+    case "$1" in -o|-p|-F) shift 2 ;; -*) shift ;; *) host="$1"; shift; break ;; esac
+done
+if [[ "$*" == "sh -s -- "* ]]; then
+    cat >/dev/null
+    for kv in ${STUB_PROBE:-}; do
+        [[ "${kv%%=*}" == "$host" ]] && { [[ "${kv#*=}" == 1 ]] && echo "cannot fetch bootstrap.sh over https"; exit "${kv#*=}"; }
+    done
+fi
+exit 0
+EOF_STUB
+printf '#!/usr/bin/env bash\nexit 0\n' > "$bh_bin/dotfiles"
+chmod +x "$bh_bin/ssh" "$bh_bin/dotfiles"
+bh() { PATH="$bh_bin:$PATH" files/bootstrap-hosts -n "$@" 2>&1 </dev/null; }
+
+# Test 17: each host goes the way its check says
+info "Test 17: bootstrap-hosts bootstraps reachable hosts and pushes to the rest"
+rc=0
+out=$(STUB_PROBE="web1=0 lab2=1 gone=255" bh --hosts-repo git@github.com:me/hosts.git \
+    --profile minimal web1 lab2 gone) || rc=$?
+if [[ "$rc" -ne 0 ]] \
+    && grep -q "^ssh -A -t web1 .*bootstrap.sh.* | bash -s -- --hosts-dir 'git@github.com:me/hosts.git' '--yes' '--profile' 'minimal'" <<< "$out" \
+    && grep -q "dotfiles init --remote --yes --profile minimal lab2$" <<< "$out" \
+    && grep -q "lab2: init --remote (cannot fetch bootstrap.sh over https)" <<< "$out" \
+    && grep -q "gone: skipped" <<< "$out" && ! grep -q -- "-t gone\|remote.* gone$" <<< "$out"; then
+    pass "Bootstrap, init --remote and skip each go to the right host"
+else
+    fail "Unexpected bootstrap-hosts output (rc $rc): $out"
+fi
+
+# Test 18: --ask drops --yes, and none sends no hosts repo
+info "Test 18: bootstrap-hosts --ask and --hosts-repo none"
+out=$(STUB_PROBE="web1=0 lab2=1" bh --ask --hosts-repo none web1 lab2)
+if grep -q -- "--hosts-dir 'none'\"\$" <<< "$out" && grep -q "init --remote lab2$" <<< "$out" \
+    && ! grep -q -- '--yes' <<< "$out"; then
+    pass "Questions are asked on each host, and no hosts repo is cloned"
+else
+    fail "Unexpected bootstrap-hosts --ask output: $out"
+fi
+
+# Test 19: bootstrap-hosts explains itself and rejects bad input
+info "Test 19: bootstrap-hosts help and errors"
+printf 'Host *\n  User x\n' > "$TEST_STATE/ssh-config-empty"
+if [[ "$(PATH="$bh_bin:$PATH" files/bootstrap-hosts --help)" == *$'\nExamples:'* ]] \
+    && ! bad_opt=$(bh --bogus) && [[ "$bad_opt" == *--help* ]] \
+    && ! no_hosts=$(bh -F "$TEST_STATE/ssh-config-empty") && [[ "$no_hosts" == *"no hosts found"* ]] \
+    && bash -n files/bootstrap-hosts; then
+    pass "Help prints, a bad option and an empty host list are errors"
+else
+    fail "bootstrap-hosts help or errors changed"
+fi
+
 cleanup_test
 
 echo
 echo "======================================"
-echo -e "${GREEN}All 16 scripts module tests passed!${NC}"
+echo -e "${GREEN}All 19 scripts module tests passed!${NC}"
 echo "======================================"

@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# bootstrap-hosts - First dotfiles setup of several hosts: bootstrap.sh where a host can
+# reach the repos, dotfiles init --remote where it can't. See 'bootstrap-hosts --help'.
+set -euo pipefail
+
+BOOTSTRAP_URL="${BOOTSTRAP_HOSTS_URL:-https://raw.githubusercontent.com/dahoff/dotfiles/main/bootstrap.sh}"
+
+usage() {
+    cat <<'EOF_USAGE'
+Usage: bootstrap-hosts [options] [HOST...]
+
+Set up dotfiles for the first time on several hosts. Each host is checked first:
+  - A host that can fetch bootstrap.sh and read the hosts repo runs bootstrap.sh over
+    ssh, and gets git checkouts it updates by itself.
+  - A host that can't is set up with 'dotfiles init --remote' from this machine,
+    which sends this machine's committed repos (the host can't fetch updates itself;
+    update it later with 'dotfiles pull --remote HOST').
+  - A host you can't ssh to with a key is skipped.
+
+Arguments:
+  HOST             ssh hosts to set up, as you'd pass to ssh. Default: none, pick
+                   them from a list of the Host entries in your ssh config (and the
+                   files it Includes); fzf is used when installed: Tab marks hosts,
+                   Enter accepts. Wildcard entries like 'Host *' are left out.
+
+Options:
+  --hosts-repo URL|none
+                   hosts repo each bootstrapped host clones. Default: the origin URL
+                   of this machine's hosts repo (hosts_dir in
+                   ~/.config/dotfiles/config.yaml), else none. Use none for hosts
+                   that should only get the built-in profiles.
+  --profile NAME   profile for hosts with no hosts/<name>/host.yaml. Default: let
+                   init choose (host.yaml's profile, else complete).
+  --ask            answer init's questions on each host, instead of accepting the
+                   defaults (--yes). Use it to check hostnames, or to have init
+                   create hosts/<name>/host.yaml in the hosts repo.
+  -F, --ssh-config FILE
+                   ssh config to list hosts from. Default: ~/.ssh/config.
+  -n, --dry-run    check the hosts and print what would run on each, and change
+                   nothing on them (except that the check may add the git server's
+                   key to a host's ~/.ssh/known_hosts, as the real run would).
+  -h, --help       show this help.
+
+What it changes:
+  - On each host: the same as bootstrap.sh or 'dotfiles init --remote' (installs
+    packages with sudo, which asks for your password in this terminal, and replaces
+    managed config, taking backups first). Hosts are done one at a time.
+  - Nothing on this machine.
+  - ssh agent forwarding (-A) is used for the check and for bootstrap, so a host
+    clones the hosts repo with your key.
+
+Afterwards, open a new terminal on each host to load the new shell setup. A host
+that failed is listed at the end; fix it and run bootstrap-hosts again for it alone.
+
+Examples:
+  bootstrap-hosts                         pick hosts from ~/.ssh/config
+  bootstrap-hosts -n                      pick hosts, show what would happen
+  bootstrap-hosts --profile minimal web1 web2
+  bootstrap-hosts --hosts-repo none --ask lab3
+EOF_USAGE
+}
+die() { echo "bootstrap-hosts: $*" >&2; exit 1; }
+bad_usage() { die "$* Run 'bootstrap-hosts --help' for usage."; }
+
+hosts_repo="" hosts_repo_set=0 profile="" ask=0 dry=0 ssh_config="$HOME/.ssh/config"
+hosts=()
+while (($#)); do
+    case "$1" in
+        --hosts-repo) [[ $# -ge 2 ]] || bad_usage "$1 needs a URL, or none."
+                      hosts_repo="$2"; hosts_repo_set=1; shift 2 ;;
+        --profile) [[ $# -ge 2 && -n "$2" ]] || bad_usage "$1 needs a profile name."
+                   profile="$2"; shift 2 ;;
+        --ask) ask=1; shift ;;
+        -F|--ssh-config) [[ $# -ge 2 ]] || bad_usage "$1 needs a file."; ssh_config="$2"; shift 2 ;;
+        -n|--dry-run) dry=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; hosts+=("$@"); break ;;
+        -*) bad_usage "unknown option: $1." ;;
+        *) hosts+=("$1"); shift ;;
+    esac
+done
+[[ "$hosts_repo" == none ]] && hosts_repo=""
+
+# Quote a string for a POSIX shell on the far side of ssh
+q() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+# Print the Host names in an ssh config file and the files it Includes, skipping patterns
+ssh_config_hosts() {
+    local file="$1" depth="${2:-0}" key rest word inc
+    local -a words
+    [[ -r "$file" ]] && ((depth < 8)) || return 0
+    while read -r key rest; do
+        key="${key,,}"
+        read -r -a words <<< "$rest"    # split without expanding patterns like *
+        case "$key" in
+            host)
+                for word in ${words[@]+"${words[@]}"}; do
+                    [[ "$word" == *[\*\?\!]* ]] || echo "$word"
+                done ;;
+            include)
+                # Include patterns are globs, expanded here on purpose
+                for word in ${words[@]+"${words[@]}"}; do
+                    [[ "$word" == "~/"* ]] && word="$HOME/${word#\~/}"
+                    [[ "$word" == /* ]] || word="$HOME/.ssh/$word"
+                    for inc in $word; do ssh_config_hosts "$inc" $((depth + 1)); done
+                done ;;
+        esac
+    done < <(sed -e 's/#.*//' -e 's/=/ /' "$file")
+}
+
+pick_hosts() {
+    local -a all
+    mapfile -t all < <(ssh_config_hosts "$ssh_config" | awk '!seen[$0]++')
+    ((${#all[@]})) || die "no hosts found in $ssh_config. Name them on the command line (see --help)."
+    [[ -t 0 && -t 1 ]] || bad_usage "no HOST given, and no terminal to pick hosts on."
+    if command -v fzf >/dev/null; then
+        mapfile -t hosts < <(printf '%s\n' "${all[@]}" | fzf --multi --height=~50% --reverse \
+            --prompt='hosts> ' --header='Tab: mark hosts to set up   Enter: accept   Esc: cancel') || true
+    else
+        local i reply n
+        for i in "${!all[@]}"; do printf '%3d) %s\n' $((i + 1)) "${all[i]}"; done
+        read -r -p "Hosts to set up (numbers, separated by spaces): " reply
+        for n in $reply; do
+            [[ "$n" =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#all[@]})) || die "not a number in the list: $n"
+            hosts+=("${all[n - 1]}")
+        done
+    fi
+    ((${#hosts[@]})) || die "no hosts picked; nothing to do."
+}
+((${#hosts[@]})) || pick_hosts
+
+# Default hosts repo: the origin of this machine's configured hosts dir
+if ((!hosts_repo_set)); then
+    hosts_dir=$(sed -n 's/^hosts_dir:[[:space:]]*//p' "$HOME/.config/dotfiles/config.yaml" 2>/dev/null | head -1)
+    hosts_dir="${hosts_dir%%[[:space:]]#*}"
+    [[ "$hosts_dir" == "~/"* ]] && hosts_dir="$HOME/${hosts_dir#\~/}"
+    [[ -n "$hosts_dir" ]] && hosts_repo=$(git -C "$hosts_dir" remote get-url origin 2>/dev/null || true)
+fi
+
+# The ssh server holding the hosts repo, for hosts without git to test against
+repo_ssh_target="" repo_ssh_port=""
+case "$hosts_repo" in
+    ""|http://*|https://*|file://*|/*) ;;
+    ssh://*)
+        repo_ssh_target="${hosts_repo#ssh://}"; repo_ssh_target="${repo_ssh_target%%/*}"
+        if [[ "$repo_ssh_target" == *:* ]]; then
+            repo_ssh_port="${repo_ssh_target##*:}"; repo_ssh_target="${repo_ssh_target%:*}"
+        fi ;;
+    *:*) repo_ssh_target="${hosts_repo%%:*}" ;;
+esac
+
+# Runs on each host: exit 0 if it can fetch bootstrap.sh and read the hosts repo, else
+# print why and exit 1
+probe_script='
+boot=$1 repo=$2 target=$3 port=$4
+curl -fsS -o /dev/null --max-time 10 "$boot" 2>/dev/null \
+    || { echo "cannot fetch bootstrap.sh over https"; exit 1; }
+[ -n "$repo" ] || exit 0
+sshopts="-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+if command -v git >/dev/null 2>&1; then
+    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh $sshopts" git ls-remote "$repo" >/dev/null 2>&1 \
+        || { echo "cannot read $repo (no access, or your key is not forwarded)"; exit 1; }
+elif [ -n "$target" ]; then
+    ssh $sshopts ${port:+-p "$port"} -T "$target" </dev/null >/dev/null 2>&1
+    [ $? -ne 255 ] || { echo "cannot ssh to $target (your key is not forwarded, or not accepted)"; exit 1; }
+else
+    curl -sS -o /dev/null --max-time 10 "$repo" 2>/dev/null \
+        || { echo "cannot reach $repo"; exit 1; }
+fi
+exit 0
+'
+
+git_ok=() no_git=() unreachable=() failed=() done_hosts=()
+echo "Checking ${#hosts[@]} host(s)..."
+for h in "${hosts[@]}"; do
+    rc=0
+    reason=$(ssh -A -o BatchMode=yes -o ConnectTimeout=10 "$h" \
+        "sh -s -- $(q "$BOOTSTRAP_URL") $(q "$hosts_repo") $(q "$repo_ssh_target") $(q "$repo_ssh_port")" \
+        <<< "$probe_script" 2>/dev/null) || rc=$?
+    case "$rc" in
+        0) git_ok+=("$h"); echo "  $h: bootstrap (can reach the repos)" ;;
+        1) no_git+=("$h"); echo "  $h: init --remote (${reason:-cannot reach the repos})" ;;
+        *) unreachable+=("$h"); echo "  $h: skipped (cannot log in with an ssh key: try 'ssh $h')" ;;
+    esac
+done
+
+# Arguments for init on each host
+init_args=()
+((ask)) || init_args+=(--yes)
+[[ -n "$profile" ]] && init_args+=(--profile "$profile")
+
+# Run a command, or under --dry-run print it, with an argument holding spaces in "..."
+run() {
+    if ((dry)); then
+        local out="" a
+        for a in "$@"; do
+            [[ "$a" == *[[:space:]]* ]] && a="\"$a\""
+            out+="${out:+ }$a"
+        done
+        echo "$out"
+    else
+        "$@"
+    fi
+}
+
+for h in ${git_ok[@]+"${git_ok[@]}"}; do
+    echo
+    echo "=== $h: bootstrap.sh"
+    remote_args="--hosts-dir $(q "${hosts_repo:-none}")"
+    for a in ${init_args[@]+"${init_args[@]}"}; do remote_args+=" $(q "$a")"; done
+    if run ssh -A -t "$h" "curl -fsSL $(q "$BOOTSTRAP_URL") | bash -s -- $remote_args"; then
+        done_hosts+=("$h")
+    else
+        failed+=("$h")
+    fi
+done
+
+if ((${#no_git[@]})); then
+    echo
+    echo "=== ${no_git[*]}: dotfiles init --remote"
+    dotfiles_cmd=$(command -v dotfiles || true)
+    if [[ -z "$dotfiles_cmd" ]]; then
+        echo "bootstrap-hosts: 'dotfiles' is not on PATH here, so these hosts were not set up." >&2
+        failed+=("${no_git[@]}")
+    else
+        # One host at a time, so a failure is pinned to its host
+        for h in "${no_git[@]}"; do
+            if run "$dotfiles_cmd" init --remote ${init_args[@]+"${init_args[@]}"} "$h"; then
+                done_hosts+=("$h")
+            else
+                failed+=("$h")
+            fi
+        done
+    fi
+fi
+
+echo
+if ((dry)); then
+    echo "Dry run: nothing was changed. Run again without -n to set the hosts up."
+else
+    ((${#done_hosts[@]})) && echo "Set up: ${done_hosts[*]}. Open a new terminal on each to load the shell setup."
+fi
+((${#failed[@]})) && echo "Failed: ${failed[*]}. Fix the error above, then run 'bootstrap-hosts ${failed[*]}'."
+((${#unreachable[@]})) && echo "Skipped: ${unreachable[*]}. Check that 'ssh HOST' logs in without a password, then run again for them."
+((${#failed[@]} == 0 && ${#unreachable[@]} == 0))

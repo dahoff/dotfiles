@@ -208,6 +208,8 @@ dotfiles init --remote user@host      # first setup; accepts init's flags
 dotfiles pull --remote user@host      # update; --force is passed through
 ```
 
+To set up several hosts at once, run `bootstrap-hosts` (from the `scripts` app). You pick hosts from your ssh config, it checks which ones can reach the repos, and it runs `bootstrap.sh` on those and `init --remote` on the rest. `bootstrap-hosts --help` has the details, and `-n` shows the plan without changing anything.
+
 `pull --remote` warns if the repos here are behind their remotes, since the host gets what's committed here. Only committed changes are sent, and conflicts show in your terminal. An edit made on such a host has to be copied back by hand. `init --remote` resets a host the way [`init`](#init) does.
 
 ### uninstall
